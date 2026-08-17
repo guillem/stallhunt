@@ -31,38 +31,62 @@ fn version_uses_the_binary_and_package_version() {
 }
 
 #[test]
-fn hunt_reports_an_explicit_placeholder_without_waiting_or_diagnosing() {
-    let output = bottleneck(&["hunt", "--duration", "1s"]);
+fn hunt_handles_every_cpu_psi_capability_state_without_claiming_a_diagnosis() {
+    let output = bottleneck(&["hunt", "--duration", "100ms"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
-    assert!(stdout.contains("Hunt unavailable"));
-    assert!(stdout.contains("Requested observation duration: 1s"));
-    assert!(stdout.contains("No observation was performed"));
-    assert!(!stdout.contains("healthy"));
+    if stdout.contains("CPU PSI observation complete") {
+        assert!(stdout.contains("Requested observation duration: 100ms"));
+        assert!(stdout.contains("CPU PSI some during interval:"));
+        assert!(stdout.contains("not implemented yet"));
+    } else {
+        assert!(stdout.contains("CPU PSI observation unavailable"));
+        assert!(stdout.contains("No complete CPU PSI interval was observed"));
+    }
 }
 
 #[test]
-fn hunt_json_keeps_unavailability_machine_readable() {
-    let output = bottleneck(&["hunt", "--duration=500ms", "--json"]);
+fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
+    let output = bottleneck(&["hunt", "--duration=100ms", "--json"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("hunt JSON should parse");
 
     assert!(output.status.success());
-    assert!(stdout.contains("\"schema_version\": 1"));
-    assert!(stdout.contains("\"status\": \"unavailable\""));
-    assert!(stdout.contains("\"duration_ms\": 500"));
-    assert!(stdout.contains("\"observation\": null"));
-    assert!(stdout.contains("\"findings\": []"));
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["requested_observation"]["duration_ms"], 100);
+    assert_eq!(json["findings"], serde_json::json!([]));
+
+    let capability = json["capabilities"]["cpu_psi"]["state"]
+        .as_str()
+        .expect("CPU PSI state should be a string");
+    assert!(matches!(
+        capability,
+        "available" | "unsupported" | "permission_denied" | "failed"
+    ));
+    match json["status"].as_str() {
+        Some("observed") => {
+            assert_eq!(capability, "available");
+            assert!(json["observation"]["cpu_psi"]["some_fraction"].is_number());
+        }
+        Some("incomplete") => assert!(json["observation"].is_null()),
+        status => panic!("unexpected hunt status: {status:?}"),
+    }
 }
 
 #[test]
-fn capabilities_does_not_claim_to_have_probed_the_host() {
-    let output = bottleneck(&["capabilities"]);
+fn capabilities_json_reports_the_actual_cpu_psi_probe_state() {
+    let output = bottleneck(&["capabilities", "--json"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("capabilities JSON should parse");
 
     assert!(output.status.success());
-    assert!(stdout.contains("Capability discovery is not implemented"));
-    assert!(stdout.contains("No system capabilities were checked"));
+    assert!(matches!(
+        json["capabilities"]["cpu_psi"]["state"].as_str(),
+        Some("available" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(json["capabilities"]["cpu_psi"]["message"].is_string());
 }
 
 #[test]

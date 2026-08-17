@@ -40,6 +40,13 @@ some avg10=... avg60=... avg300=... total=...
 full avg10=... avg60=... avg300=... total=...
 ```
 
+Host-level CPU PSI has a special case: Linux defines CPU `some`, but CPU
+`full` is undefined and may be exposed as a compatibility-only zero line. The
+CPU collector recognizes at most one optional `full` line but deliberately
+ignores its fields, so compatibility data cannot invalidate usable `some`
+evidence. It does not include `full` in observations, interval calculations, or
+conclusions.
+
 Important design point:
 
 For a bounded `hunt`, prefer calculating pressure over the **actual observation interval** using changes in `total`, rather than relying only on rolling `avg10`/`avg60`/`avg300`.
@@ -49,7 +56,7 @@ The rolling averages are still useful context.
 ### Interpretation
 
 - `some`: at least one task is stalled on the resource.
-- `full`: all non-idle tasks are stalled simultaneously, where defined by PSI semantics.
+- `full`: all non-idle tasks are stalled simultaneously, where defined by PSI semantics; this must not be interpreted for host-level CPU PSI.
 
 Do not make raw PSI thresholds universal truths.
 

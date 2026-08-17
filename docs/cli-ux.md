@@ -57,7 +57,7 @@ Standard version information.
 
 Delay `watch`, `record`, `replay`, `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
 
-## Bootstrap behavior
+## Current CPU PSI behavior
 
 Milestone 1.1 implements:
 
@@ -67,14 +67,21 @@ bottleneck capabilities [--json]
 bottleneck version
 ```
 
-Until the CPU PSI collector exists, `hunt` does not sleep or claim to have
-observed the host. Text output says that the hunt is unavailable. JSON uses
-`status: "unavailable"`, `observation: null`, an empty `findings` array, and an
-`implementation_limit` qualifier. This prevents missing implementation from
-being confused with a healthy negative finding.
+`hunt` takes two `/proc/pressure/cpu` snapshots around the requested sleep.
+It reports `some.total` delta divided by the actual monotonic elapsed interval,
+with `avg10`, `avg60`, and `avg300` from the end snapshot as context. A
+successful observation uses JSON `status: "observed"`; unavailable or invalid
+CPU PSI produces `status: "incomplete"`, `observation: null`, an explicit
+capability state, and no findings.
 
-`capabilities` similarly reports `not_checked`; it does not infer system
-support merely from the command existing.
+This is evidence collection, not a CPU bottleneck finding: the output must not
+claim severity, healthy/no-contention status, victims, suspects, or causality.
+`capabilities` probes CPU PSI and reports `available`, `unsupported`,
+`permission_denied`, or `failed`.
+
+The top-level `status: "observed"` in capability JSON means the probe completed;
+the nested capability state is authoritative and may still be `unsupported`,
+`permission_denied`, or `failed`.
 
 ## Human output structure
 

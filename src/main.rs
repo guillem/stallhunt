@@ -1,4 +1,5 @@
 mod cli;
+mod psi;
 mod render;
 
 use std::env;
@@ -10,8 +11,10 @@ fn main() -> ExitCode {
     match parse(env::args().skip(1)) {
         Ok(command) => {
             let output = match command {
-                Command::Hunt(options) => render::hunt(&options),
-                Command::Capabilities(options) => render::capabilities(&options),
+                Command::Hunt(options) => render::hunt(&options, psi::observe_cpu_psi),
+                Command::Capabilities(options) => {
+                    render::capabilities(&options, psi::probe_cpu_psi())
+                }
                 Command::Help(topic) => render::help(topic).to_owned(),
                 Command::Version => render::version(),
             };

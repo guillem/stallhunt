@@ -19,7 +19,7 @@ A fresh coding agent can understand what to build without external chat history.
 
 ## Milestone 1 — CPU contention vertical slice
 
-Status: in progress. M1.1 is complete; M1.2 is next.
+Status: in progress. M1.1 and M1.2 are complete; M1.3 is next.
 
 Goal:
 
@@ -40,7 +40,7 @@ Deliver:
 
 ### M1.2 PSI collector
 
-Status: next.
+Status: complete.
 
 Deliver:
 

@@ -31,26 +31,24 @@ them.
 
 ## Starting from the current implementation
 
-Milestone 1.1 is complete. The current recommended Codex session is:
+Milestones 1.1 and 1.2 are complete. The current recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Implement Milestone 1.2: CPU PSI collection and parsing.
+Implement Milestone 1.3: CPU/process collection.
 
 Requirements:
-- parse /proc/pressure/cpu robustly,
-- model raw cumulative PSI observations,
-- calculate pressure over the tool's exact observation interval using the
-  cumulative total field,
-- retain avg10/avg60/avg300 as context rather than making them the primary
-  bounded-hunt metric,
-- add parser fixtures and unit tests,
-- gracefully report unsupported/unreadable PSI,
-- do not implement generic metric frameworks.
+- collect `/proc/stat` CPU counters and capacity context,
+- enumerate processes and robustly parse `/proc/<pid>/stat`,
+- model process identity with PID plus start time,
+- calculate process CPU deltas over the CPU PSI observation window,
+- handle process disappearance and partial permission failures explicitly,
+- do not add scheduler-delay attribution before M1.4.
 
-Integrate the smallest useful output into `hunt` and `capabilities`.
+Integrate only the smallest useful supporting data into the existing `hunt`
+observation and output.
 Update docs/status.md and any affected design docs.
 ```
 

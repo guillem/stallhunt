@@ -153,21 +153,23 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 ## Current implementation layout
 
-Milestone 1.1 intentionally implements only the boundaries needed by the CLI
-bootstrap:
+Milestone 1.2 adds only the CPU PSI boundary needed by the first telemetry
+slice:
 
 ```text
 src/
   main.rs       # process entry point and exit behavior
   cli.rs        # command/options model and duration parsing
+  psi.rs        # CPU PSI parsing, capabilities, and interval normalization
   render.rs     # text and JSON rendering
 tests/
   cli.rs        # executable-level behavior tests
+  fixtures/     # deterministic procfs parser fixtures
 ```
 
-There is no collector, observation, normalization, or finding module yet.
-Those boundaries should be introduced by the telemetry vertical slices that
-need them, beginning with CPU PSI, rather than as empty framework modules.
+There is no generic telemetry framework, inference engine, or process collector
+yet. `psi.rs` keeps CPU PSI collection and its narrow raw/interval model
+together until another collector creates a concrete shared boundary.
 
 ## Observation lifecycle
 

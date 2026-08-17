@@ -127,14 +127,16 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Milestone 1.1 is complete. The repository contains a minimal dependency-free
-Rust binary with real `hunt`, `capabilities`, help, version, duration parsing,
-and text/JSON output boundaries.
+Milestones 1.1 and 1.2 are complete. The repository contains a Rust binary
+with real `hunt`, `capabilities`, help, version, duration parsing, and
+text/JSON output boundaries.
 
-The bootstrap deliberately does not collect telemetry yet. `hunt` reports an
-explicit unavailable state, does not wait for the requested duration, and does
-not produce a healthy result or any fabricated finding. `capabilities` likewise
-reports that the host has not been probed.
+`hunt` reads `/proc/pressure/cpu` before and after the requested bounded
+interval, then reports CPU PSI `some` pressure from the cumulative `total`
+delta over the measured monotonic interval. It retains the kernel rolling
+averages as context. It does not yet infer contention severity, identify
+processes, or claim causal attribution. `capabilities` probes CPU PSI and
+reports available, unsupported, permission-denied, or failed states.
 
 Run the current binary with:
 
@@ -143,7 +145,6 @@ cargo run -- hunt --duration 1s
 cargo run -- capabilities
 ```
 
-The next task is CPU PSI collection and exact-interval pressure calculation,
-which begins the CPU scheduling contention vertical slice without eBPF.
+The next task is the CPU/process collector (M1.3).
 
 See [`docs/status.md`](docs/status.md) and [`docs/roadmap.md`](docs/roadmap.md).

@@ -2,7 +2,7 @@
 
 ## Current state
 
-The repository contains the Milestone 1.1 Rust/CLI bootstrap.
+The repository contains the Milestone 1.2 CPU PSI slice.
 
 Build and run it from the repository root:
 
@@ -12,8 +12,9 @@ cargo run -- hunt --duration 1s
 cargo run -- capabilities --json
 ```
 
-`hunt` is currently an explicit placeholder: it performs no observation and
-returns no diagnosis. CPU PSI collection is the next implementation task.
+`hunt` performs a bounded two-snapshot CPU PSI observation. It reports raw
+pressure evidence only; CPU inference and process collection are still future
+work.
 
 ## Toolchain
 
@@ -64,11 +65,9 @@ Do not add generated build output.
 
 ## Initial dependency philosophy
 
-The M1.1 bootstrap has no third-party dependencies. Its small command surface,
-duration parser, and fixed placeholder JSON can be implemented clearly with the
-standard library. Re-evaluate this when telemetry introduces genuinely dynamic
-structured data; do not preserve custom serialization merely to avoid a
-justified dependency.
+The CLI and PSI parser use the standard library. M1.2 adds `serde` and
+`serde_json` because live structured output has dynamic optional fields and
+should not rely on hand-built JSON escaping.
 
 Likely useful categories:
 
