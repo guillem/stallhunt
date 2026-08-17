@@ -255,8 +255,10 @@ not be merged with or substituted for a host finding; no model edge implies a
 process-to-device or cross-cgroup causal relation. A scoped memory pressure
 finding may carry an optional `mechanism` of `reclaim` or `swap` with separate
 low `mechanism_confidence` when `memory.stat` page deltas are present in the
-same window. Those fields are omitted when unlabeled. `memory.events` high/max
-remain chain-only evidence and do not label the finding.
+same window, or `cpu_quota_throttle` when a scoped CPU finding has a positive
+`cpu.stat` `throttled_usec` delta. Those fields are omitted when unlabeled.
+`memory.events` high/max remain chain-only evidence and do not label the
+finding. `nr_throttled` without throttled time does not label CPU.
 
 ## Confidence
 

@@ -207,9 +207,11 @@ exact PSI is a verdict about that scope only. CPU, memory, and I/O controller
 deltas plus path-derived systemd candidates are qualified scoped context, never
 cross-cgroup causal proof. When a scoped memory finding is already pressure,
 selected `memory.stat` page deltas may label it reclaim or swap with low
-confidence; they do not create that verdict. Capabilities consistently report
-partial cgroup collection when limits, permissions, lifecycle changes, or
-controller files make that context incomplete.
+confidence; they do not create that verdict. A positive `cpu.stat`
+`throttled_usec` delta may likewise label already-pressured scoped CPU as
+quota-throttle. Capabilities consistently report partial cgroup collection
+when limits, permissions, lifecycle changes, or controller files make that
+context incomplete.
 
 M5 adds `record`, `replay`, and `redact`. Recordings store normalized
 observations under `kind` `bottleneck.recording` schema version 1 so replay can

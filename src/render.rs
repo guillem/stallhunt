@@ -2090,6 +2090,8 @@ mod tests {
             |_| observation,
         );
         assert!(text.starts_with("Scoped cgroup findings"));
+        assert!(text.contains("Scoped CPU quota-throttle pressure"));
+        assert!(text.contains("mechanism confidence low"));
         assert!(text.contains("controller context: CPU usage +2s; throttled +250ms"));
         assert!(text.contains("scoped context only; not causal proof"));
 
@@ -2109,6 +2111,11 @@ mod tests {
             json["cgroup_findings"][0]["evidence"]["cpu"]["value"]["usage_usec"],
             2_000_000
         );
+        assert_eq!(
+            json["cgroup_findings"][0]["mechanism"],
+            "cpu_quota_throttle"
+        );
+        assert_eq!(json["cgroup_findings"][0]["mechanism_confidence"], "low");
     }
 
     #[test]

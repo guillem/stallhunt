@@ -156,10 +156,11 @@ M4 adds a separate scoped-cgroup finding section. It reports exact cgroup PSI
 only for that cgroup scope and displays CPU, memory, and I/O controller deltas
 as qualified context. When `memory.stat` supports it, a scoped memory pressure
 line may say reclaim or swap and include low mechanism confidence; page
-counters never create that pressure line. Cgroup capability is `partial`
-whenever the bounded snapshot or controller files are incomplete; this also
-makes the top-level hunt status `incomplete`, without discarding valid host
-findings.
+counters never create that pressure line. A scoped CPU pressure line may say
+quota-throttle when `cpu.stat` shows throttled time; throttle counters never
+create that pressure line. Cgroup capability is `partial` whenever the bounded
+snapshot or controller files are incomplete; this also makes the top-level hunt
+status `incomplete`, without discarding valid host findings.
 
 M5 adds `record`, `replay`, and `redact`. Recordings are not hunt JSON: they
 store normalized observations under `kind` `bottleneck.recording` schema

@@ -48,9 +48,10 @@ pub enum CgroupAssessmentKind {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CgroupMemoryMechanism {
+pub enum CgroupMechanism {
     Reclaim,
     Swap,
+    CpuQuotaThrottle,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CgroupEvidence {
@@ -76,7 +77,7 @@ pub struct CgroupFinding {
     pub severity: Severity,
     pub resource_confidence: Confidence,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mechanism: Option<CgroupMemoryMechanism>,
+    pub mechanism: Option<CgroupMechanism>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mechanism_confidence: Option<Confidence>,
     pub summary: String,
@@ -1471,12 +1472,21 @@ fn cgroup_finding(
     } else {
         CgroupAssessmentKind::Pressure
     };
-    let (mechanism, mechanism_confidence) = cgroup_memory_mechanism_label(resource, kind, group);
-    if mechanism.is_some() {
-        qualifiers.push(Qualifier {
-            kind: "cgroup_memory_mechanism_same_window_correlation",
-            message: "Cgroup memory.stat page deltas occurred in the same window as scoped PSI pressure; they support a reclaim or swap label but do not prove causality.",
-        });
+    let (mechanism, mechanism_confidence) = cgroup_mechanism_label(resource, kind, group);
+    match mechanism {
+        Some(CgroupMechanism::Reclaim | CgroupMechanism::Swap) => {
+            qualifiers.push(Qualifier {
+                kind: "cgroup_memory_mechanism_same_window_correlation",
+                message: "Cgroup memory.stat page deltas occurred in the same window as scoped PSI pressure; they support a reclaim or swap label but do not prove causality.",
+            });
+        }
+        Some(CgroupMechanism::CpuQuotaThrottle) => {
+            qualifiers.push(Qualifier {
+                kind: "cgroup_cpu_quota_throttle_same_window_correlation",
+                message: "Cgroup cpu.stat throttled time occurred in the same window as scoped CPU PSI pressure; it supports a quota-throttle label but does not prove the quota caused the stalls or host CPU pressure.",
+            });
+        }
+        None => {}
     }
     let confidence = if kind == CgroupAssessmentKind::InsufficientObservation {
         Confidence::Low
@@ -1491,13 +1501,18 @@ fn cgroup_finding(
         CgroupResourceKind::Io => "I/O",
     };
     let summary = match (kind, mechanism) {
-        (CgroupAssessmentKind::Pressure, Some(CgroupMemoryMechanism::Reclaim)) => format!(
+        (CgroupAssessmentKind::Pressure, Some(CgroupMechanism::Reclaim)) => format!(
             "Scoped memory reclaim pressure observed in {} ({:.2}% cgroup PSI some).",
             group.path,
             some.unwrap_or(0.0) * 100.0
         ),
-        (CgroupAssessmentKind::Pressure, Some(CgroupMemoryMechanism::Swap)) => format!(
+        (CgroupAssessmentKind::Pressure, Some(CgroupMechanism::Swap)) => format!(
             "Scoped memory swap pressure observed in {} ({:.2}% cgroup PSI some).",
+            group.path,
+            some.unwrap_or(0.0) * 100.0
+        ),
+        (CgroupAssessmentKind::Pressure, Some(CgroupMechanism::CpuQuotaThrottle)) => format!(
+            "Scoped CPU quota-throttle pressure observed in {} ({:.2}% cgroup PSI some).",
             group.path,
             some.unwrap_or(0.0) * 100.0
         ),
@@ -1543,26 +1558,47 @@ fn cgroup_finding(
     }
 }
 
-fn cgroup_memory_mechanism_label(
+fn cgroup_mechanism_label(
     resource: CgroupResourceKind,
     kind: CgroupAssessmentKind,
     group: &crate::cgroup::CgroupInterval,
-) -> (Option<CgroupMemoryMechanism>, Option<Confidence>) {
-    if resource != CgroupResourceKind::Memory || kind != CgroupAssessmentKind::Pressure {
+) -> (Option<CgroupMechanism>, Option<Confidence>) {
+    if kind != CgroupAssessmentKind::Pressure {
         return (None, None);
     }
-    let Some(stat) = group.memory_stat.value.as_ref() else {
-        return (None, None);
-    };
-    if stat.pswpin.is_some_and(|value| value > 0) {
-        return (Some(CgroupMemoryMechanism::Swap), Some(Confidence::Low));
+    match resource {
+        CgroupResourceKind::Memory => {
+            let Some(stat) = group.memory_stat.value.as_ref() else {
+                return (None, None);
+            };
+            if stat.pswpin.is_some_and(|value| value > 0) {
+                return (Some(CgroupMechanism::Swap), Some(Confidence::Low));
+            }
+            if stat.pgscan_direct.is_some_and(|value| value > 0)
+                && stat.pgsteal_direct.is_some_and(|value| value > 0)
+            {
+                return (Some(CgroupMechanism::Reclaim), Some(Confidence::Low));
+            }
+            (None, None)
+        }
+        CgroupResourceKind::Cpu => {
+            if group
+                .cpu
+                .value
+                .as_ref()
+                .and_then(|cpu| cpu.throttled_usec)
+                .is_some_and(|value| value > 0)
+            {
+                (
+                    Some(CgroupMechanism::CpuQuotaThrottle),
+                    Some(Confidence::Low),
+                )
+            } else {
+                (None, None)
+            }
+        }
+        CgroupResourceKind::Io => (None, None),
     }
-    if stat.pgscan_direct.is_some_and(|value| value > 0)
-        && stat.pgsteal_direct.is_some_and(|value| value > 0)
-    {
-        return (Some(CgroupMemoryMechanism::Reclaim), Some(Confidence::Low));
-    }
-    (None, None)
 }
 
 pub fn analyze_cpu(
@@ -2025,6 +2061,39 @@ mod tests {
         );
     }
 
+    fn with_cgroup_cpu(
+        mut group: CgroupInterval,
+        cpu: CgroupResource<CgroupCpuInterval>,
+    ) -> CgroupInterval {
+        group.cpu = cpu;
+        group
+    }
+
+    fn cgroup_cpu(
+        throttled_usec: Option<u64>,
+        nr_throttled: Option<u64>,
+    ) -> CgroupResource<CgroupCpuInterval> {
+        CgroupResource {
+            state: CgroupFileState::Available,
+            value: Some(CgroupCpuInterval {
+                usage_usec: Some(1_000_000),
+                user_usec: None,
+                system_usec: None,
+                nr_periods: Some(100),
+                nr_throttled,
+                throttled_usec,
+            }),
+        }
+    }
+
+    fn cpu_finding(observation: &CgroupObservation) -> CgroupFinding {
+        analyze_cgroups(Some(observation))
+            .findings
+            .into_iter()
+            .find(|finding| finding.resource == CgroupResourceKind::Cpu)
+            .expect("cpu finding")
+    }
+
     fn memory_finding(observation: &CgroupObservation) -> CgroupFinding {
         analyze_cgroups(Some(observation))
             .findings
@@ -2052,10 +2121,7 @@ mod tests {
         );
         let reclaim_finding = memory_finding(&reclaim);
         assert_eq!(reclaim_finding.kind, CgroupAssessmentKind::Pressure);
-        assert_eq!(
-            reclaim_finding.mechanism,
-            Some(CgroupMemoryMechanism::Reclaim)
-        );
+        assert_eq!(reclaim_finding.mechanism, Some(CgroupMechanism::Reclaim));
         assert_eq!(reclaim_finding.mechanism_confidence, Some(Confidence::Low));
         assert!(reclaim_finding.summary.contains("reclaim pressure"));
         assert!(
@@ -2079,7 +2145,7 @@ mod tests {
             elapsed,
         );
         let swap_finding = memory_finding(&swap);
-        assert_eq!(swap_finding.mechanism, Some(CgroupMemoryMechanism::Swap));
+        assert_eq!(swap_finding.mechanism, Some(CgroupMechanism::Swap));
         assert!(swap_finding.summary.contains("swap pressure"));
         assert!(!swap_finding.summary.to_lowercase().contains("cause"));
 
@@ -2136,6 +2202,78 @@ mod tests {
                 .iter()
                 .all(|finding| finding.kind != CgroupAssessmentKind::Pressure),
             "page counters must not create a pressure verdict"
+        );
+    }
+
+    #[test]
+    fn cgroup_cpu_stat_labels_quota_throttle_without_creating_pressure() {
+        let elapsed = Duration::from_secs(10);
+        let throttled = scoped_memory_io_observation(
+            vec![with_cgroup_cpu(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    None,
+                    None,
+                    Some(800_000),
+                    cgroup_events(None, None),
+                    elapsed,
+                ),
+                cgroup_cpu(Some(250_000), Some(4)),
+            )],
+            elapsed,
+        );
+        let finding = cpu_finding(&throttled);
+        assert_eq!(finding.kind, CgroupAssessmentKind::Pressure);
+        assert_eq!(finding.mechanism, Some(CgroupMechanism::CpuQuotaThrottle));
+        assert_eq!(finding.mechanism_confidence, Some(Confidence::Low));
+        assert!(finding.summary.contains("quota-throttle pressure"));
+        assert!(!finding.summary.to_lowercase().contains("cause"));
+        assert!(
+            finding
+                .qualifiers
+                .iter()
+                .any(|qualifier| qualifier.kind
+                    == "cgroup_cpu_quota_throttle_same_window_correlation")
+        );
+
+        let count_only = scoped_memory_io_observation(
+            vec![with_cgroup_cpu(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    None,
+                    None,
+                    Some(800_000),
+                    cgroup_events(None, None),
+                    elapsed,
+                ),
+                cgroup_cpu(Some(0), Some(4)),
+            )],
+            elapsed,
+        );
+        let unlabeled = cpu_finding(&count_only);
+        assert_eq!(unlabeled.kind, CgroupAssessmentKind::Pressure);
+        assert_eq!(unlabeled.mechanism, None);
+
+        let healthy = scoped_memory_io_observation(
+            vec![with_cgroup_cpu(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    None,
+                    None,
+                    Some(5_000),
+                    cgroup_events(None, None),
+                    elapsed,
+                ),
+                cgroup_cpu(Some(250_000), Some(4)),
+            )],
+            elapsed,
+        );
+        assert!(
+            analyze_cgroups(Some(&healthy))
+                .findings
+                .iter()
+                .all(|finding| finding.kind != CgroupAssessmentKind::Pressure),
+            "cpu.stat throttle counters must not create a pressure verdict"
         );
     }
 

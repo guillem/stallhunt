@@ -227,6 +227,11 @@ the test process and does not mutate the hierarchy.
   not label the finding. Scan without steal is unlabeled. Page counters without
   PSI do not create pressure. There is no scoped thrashing label. Watch still
   keys off `Pressure`.
+- Scoped CPU pressure findings may be labeled quota-throttle from an already
+  collected `cpu.stat` `throttled_usec` delta. PSI still creates the verdict;
+  `CgroupAssessmentKind` remains `Pressure`. Mechanism confidence is low.
+  `nr_throttled` without throttled time does not label. Throttle counters
+  without PSI do not create pressure. Watch still keys off `Pressure`.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -288,7 +293,9 @@ the test process and does not mutate the hierarchy.
   findings, and are not a watch identity. Generic memory pressure coincident
   with I/O pressure remains two findings with no chain. Direct scan without
   steal is not a cgroup reclaim mechanism. Scoped memory findings have no
-  thrashing label, and `memory.events` high/max do not label a finding.
+  thrashing label, and `memory.events` high/max do not label a finding. Scoped
+  CPU quota-throttle is same-window `cpu.stat` correlation, not proof that a
+  quota caused scoped or host CPU stalls.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -394,11 +401,11 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, scoped cgroup memory reclaim/swap labels were validated with
-deterministic analyzer coverage (reclaim, swap-wins, unlabeled high events,
-scan-without-steal, page counters without PSI) plus hunt text/JSON rendering of
-the reclaim label and `memory.stat` controller context. Formatting and
-locked-offline Clippy passed:
+On 2026-08-17, scoped cgroup CPU quota-throttle labels were validated with
+deterministic analyzer coverage (positive `throttled_usec`, count-without-time,
+throttle counters without PSI) plus hunt text/JSON rendering of the label
+beside existing `cpu.stat` controller context. Formatting and locked-offline
+Clippy passed:
 
 ```bash
 cargo fmt --all -- --check
@@ -406,8 +413,13 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Default-gate coverage is 144 unit tests, ten CLI tests, and five ignored
+Default-gate coverage is 145 unit tests, ten CLI tests, and five ignored
 host-workload tests.
+
+Earlier the same day, scoped cgroup memory reclaim/swap labels were validated
+with deterministic analyzer coverage (reclaim, swap-wins, unlabeled high
+events, scan-without-steal, page counters without PSI) plus hunt text/JSON
+rendering of the reclaim label; default-gate coverage was then 144 unit tests.
 
 Earlier the same day, M8's cgroup `memory.stat` mechanism slice was validated
 with deterministic parser, interval, analyzer, and renderer coverage (direct

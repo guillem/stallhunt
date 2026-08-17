@@ -305,7 +305,9 @@ Exact per-cgroup PSI `some` establishes a verdict for that scope only. `full`
 remains non-additive subset context, while `cpu.stat`, memory, and I/O
 controller deltas explain a scoped finding without creating it. Selected
 `memory.stat` page deltas may also label an already-pressured scoped memory
-finding as reclaim or swap; they still do not create that verdict.
+finding as reclaim or swap, and a positive `cpu.stat` `throttled_usec` delta
+may label already-pressured scoped CPU as quota-throttle; they still do not
+create those verdicts.
 A positive `memory.events` `high` or `max` delta, or positive `memory.stat`
 direct-reclaim or swap-in deltas, can independently support a same-cgroup
 `consistent_with` relation to that cgroup's I/O pressure; they still do not
