@@ -70,15 +70,24 @@ cargo test --workspace --all-features
 Add targeted commands as the project evolves.
 
 The executable integration tests are in `tests/cli.rs`; the opt-in rootless
-host-workload tests are `tests/cpu_acceptance.rs` and `tests/io_acceptance.rs`;
-parser and renderer unit tests live beside their implementations. Acceptance
-tests serialize their host workloads and should run only when intentionally
-creating bounded pressure:
+host-workload tests are `tests/cpu_acceptance.rs`, `tests/io_acceptance.rs`, and
+`tests/memory_acceptance.rs`; parser and renderer unit tests live beside their
+implementations. Acceptance tests serialize their host workloads and should run
+only when intentionally creating bounded pressure:
 
 ```bash
 cargo test --test cpu_acceptance -- --ignored
 cargo test --test io_acceptance -- --ignored
+BOTTLENECK_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
+  cargo test --locked --offline --test memory_acceptance -- --ignored --nocapture
 ```
+
+The memory acceptance path must be a caller-owned, writable delegated cgroup-v2
+parent with the `memory` controller already enabled for children. The test
+creates and cleans up only a generated child cgroup, applies bounded `memory.max`
+and `memory.high` settings there, and moves its owned allocator before it starts
+allocating. It never changes the parent cgroup or runs an unconstrained
+host-wide allocator.
 
 For manual collector-overhead measurements, build first and measure the release
 binary rather than Cargo or a debug build:

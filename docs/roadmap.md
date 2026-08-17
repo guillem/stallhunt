@@ -118,10 +118,11 @@ On a controlled CPU-saturation scenario, the tool identifies CPU contention and 
 ## Milestone 2 — Memory pressure
 
 Status: in progress. The first host-memory collector/analyzer/output slice and
-deterministic fixtures exist; safe controlled harmful-pressure validation is
-still required. The 2026-08-17 prerequisite check found no writable delegated
-cgroup, so it recorded a safe block instead of running an unconstrained
-host-wide allocator.
+deterministic fixtures exist. `tests/memory_acceptance.rs` now provides a safe,
+opt-in controlled harmful-pressure harness, but a successful live run is still
+required. The 2026-08-17 prerequisite check found no writable delegated cgroup,
+so it recorded a safe block instead of running an unconstrained host-wide
+allocator.
 
 Goal:
 

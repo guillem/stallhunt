@@ -4,15 +4,17 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 2 — harmful-memory-pressure validation (blocked on safe delegation)**
+**Milestone 2 — harmful-memory-pressure validation (awaiting delegated live run)**
 
 Milestone 1 — the CPU contention vertical slice, including M1.6 validation and
 overhead measurement — and M3 block-I/O pressure are functionally complete.
 M3's bounded controlled competing-I/O acceptance established a PSI-backed
 resource finding with qualified same-window candidates. It did not establish
 victim attribution, process-device mapping, or causality. M2's first
-host-memory collector/analyzer/output slice is implemented, but safely
-controlled harmful-memory-pressure validation remains open.
+host-memory collector/analyzer/output slice and an opt-in delegated-cgroup
+acceptance harness are implemented, but safely controlled harmful-memory-
+pressure validation remains open until that harness passes on a caller-provided
+delegated cgroup.
 
 M4 implements the cgroup-v2-only, membership-first collector, scoped PSI
 analysis, controller context, text/JSON output, and capability reporting. One
@@ -32,9 +34,10 @@ caller-owned delegated cgroup and does not mutate the hierarchy.
   inference, renderers, deterministic tests, bounded rootless acceptance tests,
   and overhead experiments satisfy the documented exit condition.
 - **M2 partial:** collection, normalization, host-wide inference, rendering,
-  deterministic fixtures, and healthy-host smoke coverage exist. No safe
-  controlled harmful-memory-pressure experiment has satisfied the milestone
-  exit condition.
+  deterministic fixtures, healthy-host smoke coverage, and an ignored bounded
+  delegated-cgroup acceptance harness exist. No safe controlled
+  harmful-memory-pressure experiment has yet satisfied the milestone exit
+  condition.
 - **M3 complete within its deliberately limited exit condition:** PSI-backed
   block-I/O pressure and same-window activity candidates were validated by the
   recorded controlled run. Victim attribution, process-device mapping, and
@@ -196,12 +199,16 @@ caller-owned delegated cgroup and does not mutate the hierarchy.
   case, but high-visible-PID/task overhead remains unvalidated.
 - No CI workflow or packaging configuration exists; validation is local.
 - M2 has not yet demonstrated safely controlled real-host harmful memory
-  pressure. The 2026-08-17 prerequisite check found readable memory telemetry,
-  zram swap, and `stress-ng`, but no writable current cgroup/subtree control;
-  an unconstrained allocator would be unsafe. Reclaim and swap labels have separate low mechanism confidence;
-  possible thrashing requires material direct-reclaim plus bidirectional-swap
-  rates and is capped at medium mechanism confidence. All remain
-  implementation/fixture validated rather than experimentally validated.
+  pressure. `tests/memory_acceptance.rs` needs
+  `BOTTLENECK_MEMORY_ACCEPTANCE_PATH` to identify a caller-owned writable
+  delegated cgroup-v2 parent with `memory` enabled for children; it creates
+  and cleans up only its own bounded child. The 2026-08-17 prerequisite check
+  found readable telemetry, zram swap, and `stress-ng`, but no such writable
+  current subtree; an unconstrained allocator would be unsafe. Reclaim and
+  swap labels have separate low mechanism confidence; possible thrashing
+  requires material direct-reclaim plus bidirectional-swap rates and is capped
+  at medium mechanism confidence. All remain implementation/fixture validated
+  rather than experimentally validated.
 - M3's controlled PSI/resource and same-window-candidate exit is validated,
   but it has not validated I/O victims, process-device mapping, or causality.
   High-visible-PID observer overhead also remains unvalidated.
@@ -223,9 +230,10 @@ caller-owned delegated cgroup and does not mutate the hierarchy.
 
 ## Current recommended next task
 
-Do not begin M5 record/replay. The current recommended task is the separate M2
-debt: safely demonstrate harmful memory pressure with exact memory PSI `some`
-as the verdict and `full`, meminfo, and vmstat as non-additive context only.
+Do not begin M5 record/replay. Run `tests/memory_acceptance.rs` with a
+caller-provided delegated cgroup and record the result. The M2 acceptance
+requires exact memory PSI `some` as the verdict; `full`, meminfo, and vmstat
+remain non-additive context only.
 
 Do not introduce eBPF as a prerequisite for M4.
 
@@ -314,14 +322,14 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M4 capability/completeness,
-controller-context, renderer, and delegated-scope acceptance checks passed the
-full deterministic gate (121 unit tests, six CLI tests; the delegated cgroup
-test correctly skipped without a configured owned scope). The follow-up M2
-prerequisite check confirmed readable memory PSI/meminfo/vmstat, zram swap, and
-an installed `stress-ng`, but no writable `cgroup.procs` or
-`cgroup.subtree_control`; `docs/experiments.md` records why a host-wide memory
-stressor was not run.
+On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, the full deterministic gate
+passed: 121 unit tests, six CLI tests, and five ignored host-workload tests.
+The new `memory_acceptance` test compiled and correctly skipped when
+`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` was unset. Formatting and locked-offline
+Clippy also passed. The follow-up M2 prerequisite check confirmed readable
+memory PSI/meminfo/vmstat, zram swap, and an installed `stress-ng`, but no
+writable `cgroup.procs` or `cgroup.subtree_control`; `docs/experiments.md`
+records why a host-wide stressor was not run.
 
 Earlier on 2026-08-17, the interrupted M4 checkpoint
 initially failed `cargo fmt --check` and Clippy because `src/cgroup.rs` was

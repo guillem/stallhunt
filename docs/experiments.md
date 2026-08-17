@@ -159,10 +159,24 @@ criterion safely.
 
 ### Follow-up
 
-Run a bounded allocator/reclaim workload inside a caller-provided writable,
-uniquely owned delegated cgroup with an explicit memory limit. Assert an exact
-memory PSI `some` finding; retain `full`, meminfo, and vmstat as non-additive
-context only.
+`tests/memory_acceptance.rs` now supplies the bounded opt-in harness. It
+requires `BOTTLENECK_MEMORY_ACCEPTANCE_PATH` to identify a caller-owned,
+writable delegated cgroup-v2 parent whose `memory` controller is already
+enabled for children. It creates one generated child, applies `memory.max` and
+`memory.high` only to that child, moves an owned `stress-ng --vm` allocator
+before allocation, and performs RAII cleanup. Run it explicitly and record the
+result here:
+
+```bash
+BOTTLENECK_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
+  cargo test --locked --offline --test memory_acceptance -- --ignored --nocapture
+```
+
+The run must produce an exact host-memory-PSI `some` fraction of at least 1%
+and a PSI-backed harmful-memory finding (generic, reclaim, swap, or
+possible-thrashing as its context supports). `full`, meminfo, and vmstat remain
+non-additive context. No successful controlled run is recorded yet, so this
+does not close M2.
 
 ## Planned I/O experiments
 

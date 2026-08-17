@@ -171,10 +171,26 @@ Examples:
 
 #### Memory
 
-Later:
-- constrained cgroup,
-- controlled allocation/reclaim,
-- verify memory pressure evidence.
+`tests/memory_acceptance.rs` is deliberately ignored and requires
+`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` to name an absolute filesystem path to a
+uniquely owned, writable delegated cgroup-v2 parent. The test requires its
+`memory` controller to already be enabled for children. It creates one
+generated child only, applies bounded `memory.max` and `memory.high` limits,
+moves an owned allocator into that child before it allocates, and removes the
+child after RAII cleanup. It never changes the caller-provided parent's limits
+or membership, and skips when the delegation, memory PSI, or `stress-ng` VM
+options are unavailable.
+
+```bash
+BOTTLENECK_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
+  cargo test --locked --offline --test memory_acceptance -- --ignored --nocapture
+```
+
+The test requires an exact host-memory-PSI `some` interval of at least 1% and
+a PSI-backed harmful-memory finding. The finding may be generic, reclaim,
+swap, or possible-thrashing according to independently collected context.
+`full`, meminfo, and vmstat remain context-only; the acceptance does not
+require or infer a process or cgroup-causality conclusion.
 
 #### I/O
 
