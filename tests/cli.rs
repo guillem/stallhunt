@@ -3,16 +3,36 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn bottleneck(arguments: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_bottleneck"))
+fn stallhunt(arguments: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_stallhunt"))
         .args(arguments)
         .output()
-        .expect("bottleneck binary should run")
+        .expect("stallhunt binary should run")
+}
+
+#[test]
+fn bare_invocation_runs_default_hunt() {
+    let output = stallhunt(&[]);
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("Verdict:") || stdout.contains("assessment"));
+}
+
+#[test]
+fn completions_subcommand_prints_bash_script() {
+    let output = stallhunt(&["completions", "bash"]);
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert!(output.status.success());
+    assert!(stdout.contains("_stallhunt"));
 }
 
 #[test]
 fn root_help_exposes_the_initial_command_set() {
-    let output = bottleneck(&["--help"]);
+    let output = stallhunt(&["--help"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
@@ -27,19 +47,16 @@ fn root_help_exposes_the_initial_command_set() {
 
 #[test]
 fn version_uses_the_binary_and_package_version() {
-    let output = bottleneck(&["version"]);
+    let output = stallhunt(&["version"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
-    assert_eq!(
-        stdout,
-        format!("bottleneck {}\n", env!("CARGO_PKG_VERSION"))
-    );
+    assert_eq!(stdout, format!("stallhunt {}\n", env!("CARGO_PKG_VERSION")));
 }
 
 #[test]
 fn hunt_handles_every_cpu_psi_capability_state() {
-    let output = bottleneck(&["hunt", "--duration", "100ms"]);
+    let output = stallhunt(&["hunt", "--duration", "100ms"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
@@ -55,7 +72,7 @@ fn hunt_handles_every_cpu_psi_capability_state() {
 
 #[test]
 fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
-    let output = bottleneck(&["hunt", "--duration=100ms", "--json"]);
+    let output = stallhunt(&["hunt", "--duration=100ms", "--json"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("hunt JSON should parse");
 
@@ -139,7 +156,7 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
 
 #[test]
 fn capabilities_json_reports_the_actual_cpu_psi_probe_state() {
-    let output = bottleneck(&["capabilities", "--json"]);
+    let output = stallhunt(&["capabilities", "--json"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
     let json: serde_json::Value =
         serde_json::from_str(&stdout).expect("capabilities JSON should parse");
@@ -186,7 +203,7 @@ fn capabilities_json_reports_the_actual_cpu_psi_probe_state() {
 
 #[test]
 fn invalid_invocation_uses_a_nonzero_exit_and_stderr() {
-    let output = bottleneck(&["hunt", "--duration", "10"]);
+    let output = stallhunt(&["hunt", "--duration", "10"]);
     let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
 
     assert_eq!(output.status.code(), Some(2));
@@ -200,7 +217,7 @@ fn unique_temp_path(label: &str) -> PathBuf {
         .expect("clock")
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "bottleneck-{label}-{}-{nanos}.json",
+        "stallhunt-{label}-{}-{nanos}.json",
         std::process::id()
     ))
 }
@@ -211,7 +228,7 @@ fn record_replay_and_redact_round_trip() {
     let redacted = unique_temp_path("redacted");
     let _cleanup = Cleanup(vec![path.clone(), redacted.clone()]);
 
-    let recorded = bottleneck(&[
+    let recorded = stallhunt(&[
         "record",
         "--duration",
         "100ms",
@@ -230,7 +247,7 @@ fn record_replay_and_redact_round_trip() {
     let json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&path).expect("recording should be readable"))
             .expect("recording JSON should parse");
-    assert_eq!(json["kind"], "bottleneck.recording");
+    assert_eq!(json["kind"], "stallhunt.recording");
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["redaction"], "none");
     assert_eq!(json["requested_duration_ms"], 100);
@@ -242,7 +259,7 @@ fn record_replay_and_redact_round_trip() {
         assert_eq!(mode, 0o600);
     }
 
-    let replayed = bottleneck(&["replay", "--json", path.to_str().expect("utf-8 path")]);
+    let replayed = stallhunt(&["replay", "--json", path.to_str().expect("utf-8 path")]);
     let replay_stdout = String::from_utf8(replayed.stdout).expect("stdout should be UTF-8");
     assert!(
         replayed.status.success(),
@@ -254,7 +271,7 @@ fn record_replay_and_redact_round_trip() {
     assert_eq!(replay_json["schema_version"], 1);
     assert!(replay_json["findings"].is_array());
 
-    let duplicate = bottleneck(&[
+    let duplicate = stallhunt(&[
         "record",
         "--duration",
         "100ms",
@@ -264,7 +281,7 @@ fn record_replay_and_redact_round_trip() {
     assert_eq!(duplicate.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already exists"));
 
-    let redacted_out = bottleneck(&[
+    let redacted_out = stallhunt(&[
         "redact",
         path.to_str().expect("utf-8 path"),
         "--output",
@@ -284,14 +301,20 @@ fn record_replay_and_redact_round_trip() {
 
 #[test]
 fn record_without_output_is_invalid_invocation() {
-    let output = bottleneck(&["record"]);
+    let output = stallhunt(&["record"]);
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("option '--output' is required"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("option '--output' is required")
+            || stderr.contains("--output")
+            || stderr.contains("required"),
+        "{stderr}"
+    );
 }
 
 #[test]
 fn watch_emits_one_lifecycle_window_and_json_stream_object() {
-    let text = bottleneck(&["watch", "--interval", "100ms", "--count", "1"]);
+    let text = stallhunt(&["watch", "--interval", "100ms", "--count", "1"]);
     let stdout = String::from_utf8(text.stdout).expect("stdout should be UTF-8");
     assert!(
         text.status.success(),
@@ -303,7 +326,7 @@ fn watch_emits_one_lifecycle_window_and_json_stream_object() {
     assert!(stdout.contains("Current window"));
     assert!(stdout.contains("NEW") || stdout.contains("no pressure findings this window"));
 
-    let json_out = bottleneck(&["watch", "--interval=100ms", "--count=1", "--json"]);
+    let json_out = stallhunt(&["watch", "--interval=100ms", "--count=1", "--json"]);
     let json_stdout = String::from_utf8(json_out.stdout).expect("stdout should be UTF-8");
     assert!(
         json_out.status.success(),
@@ -312,7 +335,7 @@ fn watch_emits_one_lifecycle_window_and_json_stream_object() {
     );
     let json: serde_json::Value =
         serde_json::from_str(json_stdout.trim()).expect("watch JSON should parse");
-    assert_eq!(json["kind"], "bottleneck.watch_window");
+    assert_eq!(json["kind"], "stallhunt.watch_window");
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["window_index"], 1);
     assert_eq!(json["window_count"], 1);
@@ -327,7 +350,7 @@ fn replay_rejects_hunt_json() {
     let path = unique_temp_path("not-a-recording");
     fs::write(&path, "{\"schema_version\":1,\"status\":\"observed\"}\n")
         .expect("fixture should write");
-    let output = bottleneck(&["replay", path.to_str().expect("utf-8 path")]);
+    let output = stallhunt(&["replay", path.to_str().expect("utf-8 path")]);
     let _ = fs::remove_file(&path);
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("recording JSON is invalid"));

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This repository is the source of truth for the Bottleneck Finder project.
+This repository is the source of truth for the Stallhunt project.
 
 ## Mission
 
@@ -14,9 +14,9 @@ Build a Linux-first command-line tool that automatically identifies active syste
 6. what evidence supports the diagnosis,
 7. how confident the tool is in each causal claim.
 
-The project is **not another `top` clone**. Traditional monitors report resource consumption. Bottleneck Finder should report **lost progress and likely causes**.
+The project is **not another `top` clone**. Traditional monitors report resource consumption. Stallhunt should report **lost progress and likely causes**.
 
-Working title: **Bottleneck Finder**. The final binary/package/project name is intentionally undecided.
+Product name: **Stallhunt**. Crate, package, and binary: `stallhunt`. See ADR-0012.
 
 ## Operating principle
 
@@ -189,9 +189,9 @@ A likely eventual shape is:
 
 ```text
 crates/
-  bottleneck-core/       # normalized model, scoring, inference
-  bottleneck-linux/      # Linux telemetry collectors
-  bottleneck-cli/        # command-line application
+  stallhunt-core/       # normalized model, scoring, inference
+  stallhunt-linux/      # Linux telemetry collectors
+  stallhunt-cli/        # command-line application
 ```
 
 Do not create this split merely for aesthetics. Start simpler if one crate is sufficient.

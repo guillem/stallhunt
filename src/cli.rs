@@ -1,7 +1,11 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
+
 pub const DEFAULT_HUNT_DURATION_MS: u64 = 10_000;
+#[allow(dead_code)] // referenced by CLI defaults, docs, and unit tests
 pub const DEFAULT_WATCH_INTERVAL_MS: u64 = 2_000;
 pub const MIN_HUNT_DURATION_MS: u64 = 100;
 pub const MAX_HUNT_DURATION_MS: u64 = 300_000;
@@ -21,17 +25,6 @@ pub struct HuntOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilitiesOptions {
     pub output: OutputFormat,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HelpTopic {
-    Root,
-    Hunt,
-    Capabilities,
-    Record,
-    Replay,
-    Redact,
-    Watch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,7 +63,7 @@ pub enum Command {
     Replay(ReplayOptions),
     Redact(RedactOptions),
     Watch(WatchOptions),
-    Help(HelpTopic),
+    Completions(Shell),
     Version,
 }
 
@@ -95,408 +88,219 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
-pub fn parse<I, S>(arguments: I) -> Result<Command, CliError>
-where
-    I: IntoIterator<Item = S>,
-    S: Into<String>,
-{
-    let mut arguments = arguments.into_iter().map(Into::into);
-    let Some(command) = arguments.next() else {
-        return Ok(Command::Help(HelpTopic::Root));
-    };
-
-    match command.as_str() {
-        "-h" | "--help" | "help" => parse_help(arguments),
-        "-V" | "--version" => reject_trailing_arguments(arguments, Command::Version),
-        "version" => reject_trailing_arguments(arguments, Command::Version),
-        "hunt" => parse_hunt(arguments),
-        "capabilities" => parse_capabilities(arguments),
-        "record" => parse_record(arguments),
-        "replay" => parse_replay(arguments),
-        "redact" => parse_redact(arguments),
-        "watch" => parse_watch(arguments),
-        _ if command.starts_with('-') => Err(CliError::new(format!("unknown option '{command}'"))),
-        _ => Err(CliError::new(format!("unknown command '{command}'"))),
-    }
+#[derive(Parser)]
+#[command(
+    name = "stallhunt",
+    version,
+    about = "Linux performance triage that reports evidence-backed bottlenecks",
+    after_help = "Run `stallhunt` with no subcommand for a default 10s hunt.\nUse `stallhunt completions <SHELL>` to generate shell completions."
+)]
+pub struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
 }
 
-fn parse_help<I>(mut arguments: I) -> Result<Command, CliError>
-where
-    I: Iterator<Item = String>,
-{
-    let topic = match arguments.next().as_deref() {
-        None => HelpTopic::Root,
-        Some("hunt") => HelpTopic::Hunt,
-        Some("capabilities") => HelpTopic::Capabilities,
-        Some("record") => HelpTopic::Record,
-        Some("replay") => HelpTopic::Replay,
-        Some("redact") => HelpTopic::Redact,
-        Some("watch") => HelpTopic::Watch,
-        Some(other) => return Err(CliError::new(format!("unknown help topic '{other}'"))),
-    };
-
-    reject_trailing_arguments(arguments, Command::Help(topic))
+#[derive(Subcommand)]
+enum Commands {
+    /// Run a bounded diagnosis
+    Hunt(HuntArgs),
+    /// Track rolling finding lifecycle
+    Watch(WatchArgs),
+    /// Report available telemetry
+    Capabilities(CapabilitiesArgs),
+    /// Capture a normalized observation for later replay
+    Record(RecordArgs),
+    /// Re-analyze a recording without collecting live telemetry
+    Replay(ReplayArgs),
+    /// Replace identifiers in a recording for sharing
+    Redact(RedactArgs),
+    /// Print shell completions to stdout
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+    /// Print version information
+    Version,
 }
 
-fn parse_hunt<I>(arguments: I) -> Result<Command, CliError>
-where
-    I: Iterator<Item = String>,
-{
-    let mut duration_ms = DEFAULT_HUNT_DURATION_MS;
-    let mut duration_seen = false;
-    let mut output = OutputFormat::Text;
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+struct HuntArgs {
+    /// Observation duration from 100ms to 5m
+    #[arg(long, value_name = "DURATION", default_value = "10s", value_parser = parse_duration_value)]
+    duration: u64,
+    /// Emit machine-readable JSON
+    #[arg(long)]
+    json: bool,
+}
 
-    let mut arguments = arguments.peekable();
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "-h" | "--help" => {
-                return reject_trailing_arguments(arguments, Command::Help(HelpTopic::Hunt));
-            }
-            "--json" => set_json_output(&mut output)?,
-            "--duration" => {
-                if duration_seen {
-                    return Err(CliError::new("option '--duration' may only be used once"));
-                }
-                let value = arguments
-                    .next()
-                    .ok_or_else(|| CliError::new("option '--duration' requires a value"))?;
-                duration_ms = parse_duration(&value)?;
-                duration_seen = true;
-            }
-            _ if argument.starts_with("--duration=") => {
-                if duration_seen {
-                    return Err(CliError::new("option '--duration' may only be used once"));
-                }
-                let (_, value) = argument
-                    .split_once('=')
-                    .expect("prefix check guarantees an equals sign");
-                duration_ms = parse_duration(value)?;
-                duration_seen = true;
-            }
-            _ if argument.starts_with('-') => {
-                return Err(CliError::new(format!(
-                    "unknown option '{argument}' for 'hunt'"
-                )));
-            }
-            _ => {
-                return Err(CliError::new(format!(
-                    "unexpected argument '{argument}' for 'hunt'"
-                )));
-            }
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+struct CapabilitiesArgs {
+    /// Emit machine-readable JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+struct RecordArgs {
+    /// Recording file to create
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+    /// Observation duration from 100ms to 5m
+    #[arg(long, value_name = "DURATION", default_value = "10s", value_parser = parse_duration_value)]
+    duration: u64,
+    /// Replace process names, device names, and cgroup paths
+    #[arg(long)]
+    redact: bool,
+    /// Overwrite the output path if it already exists
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+struct ReplayArgs {
+    /// Recording to replay
+    path: PathBuf,
+    /// Emit machine-readable JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+struct RedactArgs {
+    /// Recording to redact
+    path: PathBuf,
+    /// Redacted recording to create
+    #[arg(long, value_name = "PATH")]
+    output: PathBuf,
+    /// Overwrite the output path if it already exists
+    #[arg(long)]
+    force: bool,
+}
+
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+struct WatchArgs {
+    /// Rolling window from 100ms to 5m
+    #[arg(long, value_name = "DURATION", default_value = "2s", value_parser = parse_duration_value)]
+    interval: u64,
+    /// Stop after N windows; omit to run until interrupted
+    #[arg(long, value_name = "N", value_parser = parse_count_value)]
+    count: Option<u32>,
+    /// Emit one compact JSON object per window
+    #[arg(long)]
+    json: bool,
+}
+
+impl From<HuntArgs> for HuntOptions {
+    fn from(args: HuntArgs) -> Self {
+        Self {
+            duration_ms: args.duration,
+            output: output_format(args.json),
         }
     }
-
-    Ok(Command::Hunt(HuntOptions {
-        duration_ms,
-        output,
-    }))
 }
 
-fn parse_capabilities<I>(arguments: I) -> Result<Command, CliError>
-where
-    I: Iterator<Item = String>,
-{
-    let mut output = OutputFormat::Text;
-
-    for argument in arguments {
-        match argument.as_str() {
-            "-h" | "--help" => {
-                return Ok(Command::Help(HelpTopic::Capabilities));
-            }
-            "--json" => set_json_output(&mut output)?,
-            _ if argument.starts_with('-') => {
-                return Err(CliError::new(format!(
-                    "unknown option '{argument}' for 'capabilities'"
-                )));
-            }
-            _ => {
-                return Err(CliError::new(format!(
-                    "unexpected argument '{argument}' for 'capabilities'"
-                )));
-            }
+impl From<CapabilitiesArgs> for CapabilitiesOptions {
+    fn from(args: CapabilitiesArgs) -> Self {
+        Self {
+            output: output_format(args.json),
         }
     }
-
-    Ok(Command::Capabilities(CapabilitiesOptions { output }))
 }
 
-fn parse_record<I>(arguments: I) -> Result<Command, CliError>
-where
-    I: Iterator<Item = String>,
-{
-    let mut duration_ms = DEFAULT_HUNT_DURATION_MS;
-    let mut duration_seen = false;
-    let mut output = None;
-    let mut redaction = crate::record::Redaction::None;
-    let mut force = false;
-
-    let mut arguments = arguments.peekable();
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "-h" | "--help" => {
-                return reject_trailing_arguments(arguments, Command::Help(HelpTopic::Record));
-            }
-            "--redact" => {
-                if redaction != crate::record::Redaction::None {
-                    return Err(CliError::new("option '--redact' may only be used once"));
-                }
-                redaction = crate::record::Redaction::Identifiers;
-            }
-            "--force" => set_flag(&mut force, "--force")?,
-            "--duration" => {
-                if duration_seen {
-                    return Err(CliError::new("option '--duration' may only be used once"));
-                }
-                let value = arguments
-                    .next()
-                    .ok_or_else(|| CliError::new("option '--duration' requires a value"))?;
-                duration_ms = parse_duration(&value)?;
-                duration_seen = true;
-            }
-            "--output" => {
-                if output.is_some() {
-                    return Err(CliError::new("option '--output' may only be used once"));
-                }
-                let value = arguments
-                    .next()
-                    .ok_or_else(|| CliError::new("option '--output' requires a value"))?;
-                output = Some(PathBuf::from(value));
-            }
-            _ if argument.starts_with("--duration=") => {
-                if duration_seen {
-                    return Err(CliError::new("option '--duration' may only be used once"));
-                }
-                let (_, value) = argument
-                    .split_once('=')
-                    .expect("prefix check guarantees an equals sign");
-                duration_ms = parse_duration(value)?;
-                duration_seen = true;
-            }
-            _ if argument.starts_with("--output=") => {
-                if output.is_some() {
-                    return Err(CliError::new("option '--output' may only be used once"));
-                }
-                let (_, value) = argument
-                    .split_once('=')
-                    .expect("prefix check guarantees an equals sign");
-                if value.is_empty() {
-                    return Err(CliError::new("option '--output' requires a value"));
-                }
-                output = Some(PathBuf::from(value));
-            }
-            _ if argument.starts_with('-') => {
-                return Err(CliError::new(format!(
-                    "unknown option '{argument}' for 'record'"
-                )));
-            }
-            _ => {
-                return Err(CliError::new(format!(
-                    "unexpected argument '{argument}' for 'record'"
-                )));
-            }
+impl From<RecordArgs> for RecordOptions {
+    fn from(args: RecordArgs) -> Self {
+        Self {
+            duration_ms: args.duration,
+            output: args.output,
+            redaction: if args.redact {
+                crate::record::Redaction::Identifiers
+            } else {
+                crate::record::Redaction::None
+            },
+            force: args.force,
         }
     }
-
-    let output = output.ok_or_else(|| CliError::new("option '--output' is required"))?;
-    Ok(Command::Record(RecordOptions {
-        duration_ms,
-        output,
-        redaction,
-        force,
-    }))
 }
 
-fn parse_replay<I>(arguments: I) -> Result<Command, CliError>
-where
-    I: Iterator<Item = String>,
-{
-    let mut output = OutputFormat::Text;
-    let mut input = None;
-    let mut arguments = arguments.peekable();
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "-h" | "--help" => {
-                return reject_trailing_arguments(arguments, Command::Help(HelpTopic::Replay));
-            }
-            "--json" => set_json_output(&mut output)?,
-            _ if argument.starts_with('-') => {
-                return Err(CliError::new(format!(
-                    "unknown option '{argument}' for 'replay'"
-                )));
-            }
-            _ if input.is_some() => {
-                return Err(CliError::new(format!(
-                    "unexpected argument '{argument}' for 'replay'"
-                )));
-            }
-            _ => input = Some(PathBuf::from(argument)),
+impl From<ReplayArgs> for ReplayOptions {
+    fn from(args: ReplayArgs) -> Self {
+        Self {
+            input: args.path,
+            output: output_format(args.json),
         }
     }
-    let input = input.ok_or_else(|| CliError::new("replay requires a recording path"))?;
-    Ok(Command::Replay(ReplayOptions { input, output }))
 }
 
-fn parse_redact<I>(arguments: I) -> Result<Command, CliError>
-where
-    I: Iterator<Item = String>,
-{
-    let mut input = None;
-    let mut output = None;
-    let mut force = false;
-    let mut arguments = arguments.peekable();
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "-h" | "--help" => {
-                return reject_trailing_arguments(arguments, Command::Help(HelpTopic::Redact));
-            }
-            "--force" => set_flag(&mut force, "--force")?,
-            "--output" => {
-                if output.is_some() {
-                    return Err(CliError::new("option '--output' may only be used once"));
-                }
-                let value = arguments
-                    .next()
-                    .ok_or_else(|| CliError::new("option '--output' requires a value"))?;
-                output = Some(PathBuf::from(value));
-            }
-            _ if argument.starts_with("--output=") => {
-                if output.is_some() {
-                    return Err(CliError::new("option '--output' may only be used once"));
-                }
-                let (_, value) = argument
-                    .split_once('=')
-                    .expect("prefix check guarantees an equals sign");
-                if value.is_empty() {
-                    return Err(CliError::new("option '--output' requires a value"));
-                }
-                output = Some(PathBuf::from(value));
-            }
-            _ if argument.starts_with('-') => {
-                return Err(CliError::new(format!(
-                    "unknown option '{argument}' for 'redact'"
-                )));
-            }
-            _ if input.is_some() => {
-                return Err(CliError::new(format!(
-                    "unexpected argument '{argument}' for 'redact'"
-                )));
-            }
-            _ => input = Some(PathBuf::from(argument)),
+impl From<RedactArgs> for RedactOptions {
+    fn from(args: RedactArgs) -> Self {
+        Self {
+            input: args.path,
+            output: args.output,
+            force: args.force,
         }
     }
-    let input = input.ok_or_else(|| CliError::new("redact requires a recording path"))?;
-    let output = output.ok_or_else(|| CliError::new("option '--output' is required"))?;
-    Ok(Command::Redact(RedactOptions {
-        input,
-        output,
-        force,
-    }))
 }
 
-fn parse_watch<I>(arguments: I) -> Result<Command, CliError>
-where
-    I: Iterator<Item = String>,
-{
-    let mut interval_ms = DEFAULT_WATCH_INTERVAL_MS;
-    let mut interval_seen = false;
-    let mut count = None;
-    let mut output = OutputFormat::Text;
-
-    let mut arguments = arguments.peekable();
-    while let Some(argument) = arguments.next() {
-        match argument.as_str() {
-            "-h" | "--help" => {
-                return reject_trailing_arguments(arguments, Command::Help(HelpTopic::Watch));
-            }
-            "--json" => set_json_output(&mut output)?,
-            "--interval" => {
-                if interval_seen {
-                    return Err(CliError::new("option '--interval' may only be used once"));
-                }
-                let value = arguments
-                    .next()
-                    .ok_or_else(|| CliError::new("option '--interval' requires a value"))?;
-                interval_ms = parse_duration(&value)?;
-                interval_seen = true;
-            }
-            "--count" => {
-                if count.is_some() {
-                    return Err(CliError::new("option '--count' may only be used once"));
-                }
-                let value = arguments
-                    .next()
-                    .ok_or_else(|| CliError::new("option '--count' requires a value"))?;
-                count = Some(parse_count(&value)?);
-            }
-            _ if argument.starts_with("--interval=") => {
-                if interval_seen {
-                    return Err(CliError::new("option '--interval' may only be used once"));
-                }
-                let (_, value) = argument
-                    .split_once('=')
-                    .expect("prefix check guarantees an equals sign");
-                interval_ms = parse_duration(value)?;
-                interval_seen = true;
-            }
-            _ if argument.starts_with("--count=") => {
-                if count.is_some() {
-                    return Err(CliError::new("option '--count' may only be used once"));
-                }
-                let (_, value) = argument
-                    .split_once('=')
-                    .expect("prefix check guarantees an equals sign");
-                count = Some(parse_count(value)?);
-            }
-            _ if argument.starts_with('-') => {
-                return Err(CliError::new(format!(
-                    "unknown option '{argument}' for 'watch'"
-                )));
-            }
-            _ => {
-                return Err(CliError::new(format!(
-                    "unexpected argument '{argument}' for 'watch'"
-                )));
-            }
+impl From<WatchArgs> for WatchOptions {
+    fn from(args: WatchArgs) -> Self {
+        Self {
+            interval_ms: args.interval,
+            count: args.count,
+            output: output_format(args.json),
         }
     }
-
-    Ok(Command::Watch(WatchOptions {
-        interval_ms,
-        count,
-        output,
-    }))
 }
 
-fn set_flag(flag: &mut bool, name: &str) -> Result<(), CliError> {
-    if *flag {
-        return Err(CliError::new(format!(
-            "option '{name}' may only be used once"
-        )));
+impl Cli {
+    pub fn into_command(self) -> Command {
+        match self.command {
+            None => Command::Hunt(HuntOptions {
+                duration_ms: DEFAULT_HUNT_DURATION_MS,
+                output: OutputFormat::Text,
+            }),
+            Some(Commands::Hunt(args)) => Command::Hunt(args.into()),
+            Some(Commands::Watch(args)) => Command::Watch(args.into()),
+            Some(Commands::Capabilities(args)) => Command::Capabilities(args.into()),
+            Some(Commands::Record(args)) => Command::Record(args.into()),
+            Some(Commands::Replay(args)) => Command::Replay(args.into()),
+            Some(Commands::Redact(args)) => Command::Redact(args.into()),
+            Some(Commands::Completions { shell }) => Command::Completions(shell),
+            Some(Commands::Version) => Command::Version,
+        }
     }
-    *flag = true;
-    Ok(())
 }
 
-fn reject_trailing_arguments<I>(mut arguments: I, command: Command) -> Result<Command, CliError>
-where
-    I: Iterator<Item = String>,
-{
-    if let Some(argument) = arguments.next() {
-        Err(CliError::new(format!("unexpected argument '{argument}'")))
+const fn output_format(json: bool) -> OutputFormat {
+    if json {
+        OutputFormat::Json
     } else {
-        Ok(command)
+        OutputFormat::Text
     }
 }
 
-fn set_json_output(output: &mut OutputFormat) -> Result<(), CliError> {
-    if *output == OutputFormat::Json {
-        return Err(CliError::new("option '--json' may only be used once"));
-    }
-    *output = OutputFormat::Json;
-    Ok(())
+pub fn command() -> clap::Command {
+    Cli::command()
 }
 
-fn parse_duration(value: &str) -> Result<u64, CliError> {
+#[allow(dead_code)] // used by integration tests and CLI unit tests
+pub fn parse_from<I, T>(arguments: I) -> Result<Command, clap::Error>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    Cli::try_parse_from(arguments).map(Cli::into_command)
+}
+
+fn parse_duration_value(value: &str) -> Result<u64, String> {
+    parse_duration(value).map_err(|error| error.to_string())
+}
+
+fn parse_count_value(value: &str) -> Result<u32, String> {
+    parse_count(value).map_err(|error| error.to_string())
+}
+
+pub fn parse_duration(value: &str) -> Result<u64, CliError> {
     let (number, unit_ms) = if let Some(number) = value.strip_suffix("ms") {
         (number, 1_u64)
     } else if let Some(number) = value.strip_suffix('s') {
@@ -585,22 +389,33 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn parse(arguments: impl IntoIterator<Item = &'static str>) -> Result<Command, clap::Error> {
+        parse_from(arguments)
+    }
+
+    fn expect_parse(arguments: impl IntoIterator<Item = &'static str>) -> Command {
+        parse(arguments).expect("parse should succeed")
+    }
+
     #[test]
-    fn no_arguments_shows_root_help() {
+    fn no_arguments_defaults_to_hunt() {
         assert_eq!(
-            parse(Vec::<String>::new()),
-            Ok(Command::Help(HelpTopic::Root))
+            expect_parse(["stallhunt"]),
+            Command::Hunt(HuntOptions {
+                duration_ms: DEFAULT_HUNT_DURATION_MS,
+                output: OutputFormat::Text,
+            })
         );
     }
 
     #[test]
     fn hunt_uses_documented_defaults() {
         assert_eq!(
-            parse(["hunt"]),
-            Ok(Command::Hunt(HuntOptions {
+            expect_parse(["stallhunt", "hunt"]),
+            Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
-            }))
+            })
         );
     }
 
@@ -613,11 +428,11 @@ mod tests {
             ("1m", 60_000),
         ] {
             assert_eq!(
-                parse(["hunt", "--json", "--duration", value]),
-                Ok(Command::Hunt(HuntOptions {
+                expect_parse(["stallhunt", "hunt", "--json", "--duration", value]),
+                Command::Hunt(HuntOptions {
                     duration_ms: expected_ms,
                     output: OutputFormat::Json,
-                }))
+                })
             );
         }
     }
@@ -625,86 +440,95 @@ mod tests {
     #[test]
     fn hunt_accepts_duration_equals_syntax() {
         assert_eq!(
-            parse(["hunt", "--duration=750ms"]),
-            Ok(Command::Hunt(HuntOptions {
+            expect_parse(["stallhunt", "hunt", "--duration=750ms"]),
+            Command::Hunt(HuntOptions {
                 duration_ms: 750,
                 output: OutputFormat::Text,
-            }))
+            })
         );
     }
 
     #[test]
     fn hunt_accepts_inclusive_duration_boundaries() {
-        assert!(parse(["hunt", "--duration", "100ms"]).is_ok());
-        assert!(parse(["hunt", "--duration", "5m"]).is_ok());
+        assert!(parse(["stallhunt", "hunt", "--duration", "100ms"]).is_ok());
+        assert!(parse(["stallhunt", "hunt", "--duration", "5m"]).is_ok());
     }
 
     #[test]
     fn hunt_rejects_out_of_range_durations() {
         for value in ["99ms", "5.1m", "6m"] {
-            let error = parse(["hunt", "--duration", value]).unwrap_err();
+            let error = parse(["stallhunt", "hunt", "--duration", value]).unwrap_err();
             assert!(error.to_string().contains("outside the supported range"));
         }
     }
 
     #[test]
     fn hunt_rejects_malformed_or_sub_millisecond_durations() {
-        for value in ["", "10", "ms", "1.", ".5s", "1.2.3s", "0.0001s", "-1s"] {
-            let error = parse(["hunt", "--duration", value]).unwrap_err();
+        for value in ["", "10", "ms", "1.", ".5s", "1.2.3s", "0.0001s"] {
+            let error = parse(["stallhunt", "hunt", "--duration", value]).unwrap_err();
             assert!(error.to_string().contains("invalid duration"), "{value}");
         }
+        assert!(parse(["stallhunt", "hunt", "--duration=-1s"]).is_err());
     }
 
     #[test]
     fn options_cannot_be_repeated() {
-        assert!(parse(["hunt", "--json", "--json"]).is_err());
-        assert!(parse(["hunt", "--duration", "1s", "--duration=2s"]).is_err());
+        assert!(parse(["stallhunt", "hunt", "--json", "--json"]).is_err());
+        assert!(parse(["stallhunt", "hunt", "--duration", "1s", "--duration=2s"]).is_err());
     }
 
     #[test]
     fn capabilities_supports_json() {
         assert_eq!(
-            parse(["capabilities", "--json"]),
-            Ok(Command::Capabilities(CapabilitiesOptions {
+            expect_parse(["stallhunt", "capabilities", "--json"]),
+            Command::Capabilities(CapabilitiesOptions {
                 output: OutputFormat::Json,
-            }))
+            })
         );
     }
 
     #[test]
     fn unknown_commands_and_options_are_errors() {
-        assert!(parse(["explain"]).is_err());
-        assert!(parse(["hunt", "--verbose"]).is_err());
-        assert!(parse(["capabilities", "extra"]).is_err());
+        assert!(parse(["stallhunt", "explain"]).is_err());
+        assert!(parse(["stallhunt", "hunt", "--verbose"]).is_err());
+        assert!(parse(["stallhunt", "capabilities", "extra"]).is_err());
     }
 
     #[test]
     fn watch_uses_documented_defaults_and_bounds() {
         assert_eq!(
-            parse(["watch"]),
-            Ok(Command::Watch(WatchOptions {
+            expect_parse(["stallhunt", "watch"]),
+            Command::Watch(WatchOptions {
                 interval_ms: DEFAULT_WATCH_INTERVAL_MS,
                 count: None,
                 output: OutputFormat::Text,
-            }))
+            })
         );
         assert_eq!(
-            parse(["watch", "--json", "--interval", "1s", "--count=3"]),
-            Ok(Command::Watch(WatchOptions {
+            expect_parse([
+                "stallhunt",
+                "watch",
+                "--json",
+                "--interval",
+                "1s",
+                "--count=3"
+            ]),
+            Command::Watch(WatchOptions {
                 interval_ms: 1_000,
                 count: Some(3),
                 output: OutputFormat::Json,
-            }))
+            })
         );
-        assert!(parse(["watch", "--count", "0"]).is_err());
-        assert!(parse(["watch", "--interval", "1s", "--interval=2s"]).is_err());
+        assert!(parse(["stallhunt", "watch", "--count", "0"]).is_err());
+        assert!(parse(["stallhunt", "watch", "--interval", "1s", "--interval=2s"]).is_err());
     }
 
     #[test]
     fn record_requires_output_and_accepts_redact() {
-        assert!(parse(["record"]).is_err());
+        assert!(parse(["stallhunt", "record"]).is_err());
         assert_eq!(
-            parse([
+            expect_parse([
+                "stallhunt",
                 "record",
                 "--duration",
                 "500ms",
@@ -712,32 +536,60 @@ mod tests {
                 "--output",
                 "out.json"
             ]),
-            Ok(Command::Record(RecordOptions {
+            Command::Record(RecordOptions {
                 duration_ms: 500,
                 output: PathBuf::from("out.json"),
                 redaction: crate::record::Redaction::Identifiers,
                 force: false,
-            }))
+            })
         );
     }
 
     #[test]
     fn replay_and_redact_require_paths() {
-        assert!(parse(["replay"]).is_err());
+        assert!(parse(["stallhunt", "replay"]).is_err());
         assert_eq!(
-            parse(["replay", "--json", "incident.json"]),
-            Ok(Command::Replay(ReplayOptions {
+            expect_parse(["stallhunt", "replay", "--json", "incident.json"]),
+            Command::Replay(ReplayOptions {
                 input: PathBuf::from("incident.json"),
                 output: OutputFormat::Json,
-            }))
+            })
         );
         assert_eq!(
-            parse(["redact", "in.json", "--output=out.json", "--force"]),
-            Ok(Command::Redact(RedactOptions {
+            expect_parse([
+                "stallhunt",
+                "redact",
+                "in.json",
+                "--output=out.json",
+                "--force"
+            ]),
+            Command::Redact(RedactOptions {
                 input: PathBuf::from("in.json"),
                 output: PathBuf::from("out.json"),
                 force: true,
-            }))
+            })
         );
+    }
+
+    #[test]
+    fn completions_subcommand_is_available() {
+        assert!(matches!(
+            parse(["stallhunt", "completions", "bash"]),
+            Ok(Command::Completions(Shell::Bash))
+        ));
+    }
+
+    #[test]
+    fn root_help_exposes_the_initial_command_set() {
+        let mut command = command();
+        let help = command.render_help().to_string();
+        assert!(help.contains("hunt"));
+        assert!(help.contains("watch"));
+        assert!(help.contains("capabilities"));
+        assert!(help.contains("record"));
+        assert!(help.contains("replay"));
+        assert!(help.contains("redact"));
+        assert!(help.contains("completions"));
+        assert!(help.contains("version"));
     }
 }

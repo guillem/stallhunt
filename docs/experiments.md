@@ -52,7 +52,7 @@ Only the values needed to support the conclusion.
 
 ### Tool finding
 
-What did Bottleneck Finder report?
+What did Stallhunt report?
 
 ### Result
 
@@ -173,7 +173,7 @@ already had `memory` in `cgroup.subtree_control`. The ignored test created one
 generated child, set `memory.max=256 MiB` and `memory.high=128 MiB` only on
 that child, moved an owned `stress-ng --vm 1 --vm-bytes 192MiB --vm-keep
 --vm-populate --timeout 8` allocator into it, and ran
-`bottleneck hunt --duration 2s --json` with a five-second hunt timeout.
+`stallhunt hunt --duration 2s --json` with a five-second hunt timeout.
 
 The first Drop implementation called `rmdir` immediately after killing the
 dispatcher, so it failed while `stress-ng` workers were still in the child; an
@@ -279,7 +279,7 @@ At minimum measure:
 
 Record:
 
-- Bottleneck Finder CPU time,
+- Stallhunt CPU time,
 - peak RSS,
 - number/size of procfs reads if measurable,
 - observation timing skew,
@@ -292,7 +292,7 @@ The two ignored `tests/cpu_acceptance.rs` tests ran rootlessly with readable CPU
 PSI. They are serialized because they create host workloads. The clean case
 uses sleeping threads; the oversubscribed case starts nine owned shell busy loops
 (one more than the available CPUs), waits 150 ms, then runs
-`bottleneck hunt --duration 1s --json`. Both have an eight-second controller
+`stallhunt hunt --duration 1s --json`. Both have an eight-second controller
 timeout and RAII cleanup; the oversubscribed case also has an
 at-most-eight-logical-CPU safety gate before it creates CPU workers.
 
@@ -372,9 +372,9 @@ the small-process EXP-0002 profiles?
 
 ```bash
 cargo build --release --locked --offline
-tools/measure-overhead.sh --binary target/release/bottleneck --duration 1 --repetitions 3 --scenario baseline
-tools/measure-overhead.sh --binary target/release/bottleneck --duration 1 --repetitions 3 --scenario many_pids --sleepers 64
-tools/measure-overhead.sh --binary target/release/bottleneck --duration 1 --repetitions 3 --scenario many_tasks --tasks 512
+tools/measure-overhead.sh --binary target/release/stallhunt --duration 1 --repetitions 3 --scenario baseline
+tools/measure-overhead.sh --binary target/release/stallhunt --duration 1 --repetitions 3 --scenario many_pids --sleepers 64
+tools/measure-overhead.sh --binary target/release/stallhunt --duration 1 --repetitions 3 --scenario many_tasks --tasks 512
 ```
 
 Helpers were owned and cleaned up. CPU PID (4,096), schedstat task (16,384),

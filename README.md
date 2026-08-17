@@ -1,56 +1,58 @@
-# Bottleneck Finder
+# Stallhunt
 
-**Working title. Final project/binary name TBD.**
-
-Bottleneck Finder is a Linux-first command-line performance triage tool.
+Stallhunt is a Linux-first command-line performance triage tool.
 
 Traditional tools such as `top`, `htop`, `iotop`, `vmstat`, and `iostat` expose measurements. They are excellent tools, but the human operator still has to answer the harder question:
 
 > **What is actually constraining useful work right now, who is suffering, and who is probably responsible?**
 
-Bottleneck Finder aims to automate that reasoning.
+Stallhunt aims to automate that reasoning.
 
-## Quickstart
+## Install
 
 Requirements:
 
-- Linux with procfs mounted; readable PSI files under `/proc/pressure` are
-  required for pressure verdicts,
-- a stable Rust toolchain with Cargo.
+- Linux 4.20 or newer with procfs mounted; readable PSI files under `/proc/pressure` are required for pressure verdicts,
+- Rust 1.85 or newer for source builds.
 
-Baseline collection is designed to run as an ordinary user. There is no
-packaged installation yet, so run it through Cargo from a clone:
+See [`docs/install.md`](docs/install.md) for `cargo install`, release tarballs, and the support matrix.
+
+From a clone:
 
 ```bash
-cargo run --locked -- capabilities
-cargo run --locked -- hunt --duration 10s
+cargo install --path .
+stallhunt
 ```
 
-Use JSON when the complete structured evidence is needed:
+Bare `stallhunt` runs a default 10-second hunt. Use `--json` for the full structured evidence:
 
 ```bash
-cargo run --locked -- hunt --duration 10s --json
+stallhunt --json
+stallhunt hunt --duration 30s
 ```
 
 Capture and replay a normalized observation:
 
 ```bash
-cargo run --locked -- record --duration 10s --output incident.json
-cargo run --locked -- replay incident.json
-cargo run --locked -- redact incident.json --output incident.redacted.json
+stallhunt record --duration 10s --output incident.json
+stallhunt replay incident.json
+stallhunt redact incident.json --output incident.redacted.json
 ```
 
 Follow finding lifecycle for a bounded number of rolling windows:
 
 ```bash
-cargo run --locked -- watch --interval 2s --count 3
+stallhunt watch --interval 2s --count 3
 ```
 
-Recording output paths are not overwritten unless `--force` is supplied.
-Ten-second hunts are the normal diagnostic path; sub-second observations are
-telemetry smoke tests and do not receive healthy or pressure verdicts. See
-[`docs/development.md`](docs/development.md) for validation and opt-in
-acceptance commands.
+Generate shell completions:
+
+```bash
+stallhunt completions bash > ~/.local/share/bash-completion/completions/stallhunt
+stallhunt completions zsh > ~/.local/share/zsh/site-functions/_stallhunt
+```
+
+Recording output paths are not overwritten unless `--force` is supplied. Ten-second hunts are the normal diagnostic path; sub-second observations are telemetry smoke tests and do not receive healthy or pressure verdicts. See [`docs/development.md`](docs/development.md) for validation and opt-in acceptance commands.
 
 ## Core idea
 
@@ -65,10 +67,10 @@ High utilization is not automatically a problem. A machine using 95% of its RAM 
 - network-related waits,
 - eventually deeper blocking chains.
 
-The long-term installed-binary output target looks like:
+Example output shape:
 
 ```text
-$ bottleneck hunt --duration 10s
+$ stallhunt
 
 SYSTEM HEALTH: DEGRADED
 
@@ -135,7 +137,10 @@ Later releases may add:
 ```text
 .
 ├── AGENTS.md
+├── CHANGELOG.md
 ├── Cargo.toml
+├── LICENSE-APACHE
+├── LICENSE-MIT
 ├── README.md
 ├── src/
 │   ├── analysis.rs
@@ -162,6 +167,7 @@ Later releases may add:
 │       └── proc-*
 └── docs/
     ├── README.md
+    ├── install.md
     ├── product.md
     ├── architecture.md
     ├── data-model.md
@@ -182,12 +188,16 @@ Later releases may add:
 
 Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
+## License
+
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
+
 ## Current state
 
 Milestones 1–6 are functionally complete. Milestone 8's first two evidence-chain
 slices are implemented. Milestone 2's host-memory slice is
 implemented and has a recorded delegated-cgroup harmful-pressure acceptance.
-The repository contains a Rust binary with real `hunt`, `watch`, `record`,
+The repository contains a Rust binary named `stallhunt` with real `hunt`, `watch`, `record`,
 `replay`, `redact`, `capabilities`, help, version, duration parsing, and
 text/JSON output boundaries.
 
@@ -253,8 +263,9 @@ collection when limits, permissions, lifecycle changes, or controller files
 make that context incomplete.
 
 M5 adds `record`, `replay`, and `redact`. Recordings store normalized
-observations under `kind` `bottleneck.recording` schema version 1 so replay can
-re-run current inference. They are not hunt JSON and have no pre-1.0
+observations under `kind` `stallhunt.recording` schema version 1 so replay can
+re-run current inference. Legacy `bottleneck.recording` files are accepted on
+replay. They are not hunt JSON and have no pre-1.0
 compatibility promise. New files are created mode 0600. `--redact` replaces
 process names, disk names, and cgroup path components while keeping counters
 and process keys.
@@ -264,7 +275,7 @@ command tracks host CPU/memory/I/O and a bounded set of cgroup pressure
 findings as new, persistent, or resolved. Scoped cgroup `kind` values name the
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label.
 TTY text refreshes the screen; JSON emits one compact
-`bottleneck.watch_window` object per window. Watch is not a TUI and is not a
+`stallhunt.watch_window` object per window. Watch is not a TUI and is not a
 recording. Full evidence remains on `hunt --json` and `record`.
 
 M8 adds a conservative evidence chain: when memory reclaim, swap, or possible

@@ -12,12 +12,19 @@ question; see `status.md`.
 Build and run it from the repository root:
 
 ```bash
-cargo build
-cargo run -- hunt --duration 1s
-cargo run -- capabilities --json
-cargo run -- record --duration 1s --output /tmp/incident.json
-cargo run -- replay /tmp/incident.json
-cargo run -- watch --interval 1s --count 2
+cargo build --release --locked
+./target/release/stallhunt hunt --duration 1s
+./target/release/stallhunt capabilities --json
+./target/release/stallhunt record --duration 1s --output /tmp/incident.json
+./target/release/stallhunt replay /tmp/incident.json
+./target/release/stallhunt watch --interval 1s --count 2
+```
+
+For installed use, see [`install.md`](install.md):
+
+```bash
+cargo install --path .
+stallhunt
 ```
 
 `hunt` performs bounded CPU PSI, host CPU/load, process CPU, scheduler-accounting,
@@ -53,16 +60,14 @@ retains the complete structured evidence and collection context.
 
 ## Toolchain
 
-Initial recommendation:
+Requirements:
 
-- stable Rust,
+- stable Rust **1.85+** (MSRV, recorded in `Cargo.toml`),
 - Cargo,
 - rustfmt,
 - Clippy.
 
-Do not pin a Rust version until CI/reproducibility needs justify it.
-
-When a minimum supported Rust version is chosen, record it here and potentially in an ADR if compatibility is a deliberate product commitment.
+Linux **4.20+** with procfs and PSI is the supported runtime baseline (ADR-0012).
 
 ## Default quality gates
 
@@ -105,8 +110,8 @@ binary rather than Cargo or a debug build:
 
 ```bash
 cargo build --release --locked --offline
-tools/measure-overhead.sh --binary target/release/bottleneck --duration 1 --repetitions 3
-tools/measure-overhead.sh --binary target/release/bottleneck --duration 1 --repetitions 3 --scenario high --sleepers 64 --tasks 512
+tools/measure-overhead.sh --binary target/release/stallhunt --duration 1 --repetitions 3
+tools/measure-overhead.sh --binary target/release/stallhunt --duration 1 --repetitions 3 --scenario high --sleepers 64 --tasks 512
 ```
 
 The harness is opt-in and scenario-specific. It may use an already-installed
@@ -121,9 +126,11 @@ Recommended root files once implementation starts:
 ```text
 Cargo.toml
 Cargo.lock
-rust-toolchain.toml        # only if deliberately pinned
+rust-toolchain.toml        # optional; MSRV is in Cargo.toml
 .gitignore
-LICENSE                    # after license is chosen
+LICENSE-MIT
+LICENSE-APACHE
+CHANGELOG.md
 AGENTS.md
 README.md
 docs/
@@ -135,19 +142,18 @@ Do not add generated build output.
 
 ## Initial dependency philosophy
 
-The CLI and PSI parser use the standard library. M1.2 adds `serde` and
+The CLI uses clap 4 with derive parsing. M1.2 adds `serde` and
 `serde_json` because live structured output has dynamic optional fields and
 should not rely on hand-built JSON escaping.
 
 Likely useful categories:
 
-- CLI parser,
 - serialization,
 - error/context handling,
 - terminal formatting,
 - duration parsing.
 
-However, do not preselect crates in documentation before implementation evaluates current ecosystem choices.
+Clap covers CLI parsing. Do not preselect other crates in documentation before implementation evaluates current ecosystem choices.
 
 For small parsers under procfs/sysfs, custom parsing may be clearer and safer than a broad abstraction crate.
 

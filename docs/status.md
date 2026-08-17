@@ -1,6 +1,6 @@
 # Project status
 
-Last updated: 2026-08-17
+Last updated: 2026-08-18
 
 ## Current milestone
 
@@ -61,7 +61,7 @@ the test process and does not mutate the hierarchy.
 
 ## Implemented
 
-- A single stable-Rust package builds the `bottleneck` binary.
+- A single stable-Rust package builds the `stallhunt` binary (MSRV 1.85).
 - The package forbids unsafe Rust.
 - Real `hunt`, `watch`, `record`, `replay`, `redact`, `capabilities`, help, and
   version command structure exists.
@@ -198,8 +198,9 @@ the test process and does not mutate the hierarchy.
   included in text and JSON output.
 - M5 records normalized hunt observations, not findings. `record --output PATH`
   captures the same bounded observation as `hunt`, writes schema `kind`
-  `bottleneck.recording` version 1, and creates new files with mode 0600.
-  `replay` reconstructs the observation and re-runs current inference into the
+  `stallhunt.recording` version 1, and creates new files with mode 0600.
+  Legacy `bottleneck.recording` files are accepted on replay. `replay`
+  reconstructs the observation and re-runs current inference into the
   existing text/JSON renderers. `redact` and `record --redact` replace process
   names, disk names, cgroup path components, and inferred unit candidates while
   keeping counters, process keys, and path hierarchy. Hunt JSON is not a
@@ -211,7 +212,7 @@ the test process and does not mutate the hierarchy.
   identities are classified as new, persistent, or resolved. Healthy results do
   not create findings; missing or short-window data does not resolve an active
   finding. History is capped at 16 compact windows. TTY text clears the screen;
-  JSON emits one `bottleneck.watch_window` object per window. Watch JSON is not
+  JSON emits one `stallhunt.watch_window` object per window. Watch JSON is not
   hunt JSON and not a recording. Scoped cgroup lifecycle `kind` values name the
   resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
   identity remains path plus resource.
@@ -258,7 +259,9 @@ the test process and does not mutate the hierarchy.
   with 370 visible PIDs and ~1,587--2,099 stable tasks: about 6 MiB RSS and
   110--210 ms PSI-window skew on a one-second hunt. The 4,096-PID and 16,384-task
   caps were not reached.
-- No CI workflow or packaging configuration exists; validation is local.
+- CI workflow or release tarball packaging is not yet wired; validation is local.
+- Product identity, license (MIT OR Apache-2.0), MSRV (1.85), Linux baseline
+  (4.20+), and clap-based CLI are decided (ADR-0012, [`install.md`](install.md)).
 - M2's live harmful-pressure run used a delegated 128/256 MiB child and an
   owned 192 MiB `stress-ng --vm` allocator. It produced 21–24% host memory PSI
   `some` and `memory_swap_pressure` over a ~2.15 s window. That swap label is
@@ -346,37 +349,24 @@ Operational and delivery gaps:
   workstation, so scoped context is partial and can omit higher-PID groups;
 - unlimited watch has no graceful SIGINT drain;
 - recordings are single-window, pre-1.0, and have no compatibility promise;
-- CI, packaging, a license, a minimum Rust version, and a minimum supported
-  Linux baseline are undecided or absent.
+- CI and release tarball automation remain open.
 
 ## Known bugs
 
-- `watch` can report an active cgroup finding as `resolved` when that scope is
-  still pressured but falls below the current window's top-16 cgroup ranking.
-  The path remains in `observed_cgroup_paths`, while the capped pressure map
-  omits its identity, so lifecycle classification mistakes ranking omission for
-  an observed healthy result.
-- The generic hunt JSON serialization fallback suppresses the underlying error
-  and emits only `{"status":"serialization_failed"}` if a future serializable
-  shape fails.
+None recorded at this milestone boundary.
+
+The watch top-16 false-resolution bug (a pressured cgroup below the ranking cap
+was reported as `resolved`) was fixed in v0.1.0. Ranking omission now leaves
+the finding persistent and unconfirmed; see
+[`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-
-Fix the watch top-16 false-resolution bug before implementing another
-diagnostic slice. Add a deterministic regression in which an already-tracked
-cgroup remains pressured but drops below the top-16 ranking; it must stay
-persistent and unconfirmed rather than resolve. Preserve the 16-identity bound.
-
-After that bug is fixed, write down one concrete diagnostic question and the
-independent evidence needed to answer it before selecting another feature. No
-such question is currently selected. Do not start Milestone 7 unless the
-question cannot be answered with current `/proc`, PSI, and cgroup collectors.
-Do not add another M8 chain unless independent linking evidence already exists;
-do not treat coincident PSI as a path, and do not link host findings to cgroup
-findings.
-
-Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
-4,096-PID or 16,384-task caps without a quota-aware setup.
+Write down one concrete diagnostic question and the independent evidence needed
+to answer it before selecting another feature. No such question is currently
+selected. Do not start Milestone 7 unless the question cannot be answered with
+current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain unless
+independent linking evidence already exists; do not treat coincident PSI as a
+path, and do not link host findings to cgroup findings.
 
 ## Current design risks
 
@@ -447,41 +437,52 @@ Mitigation:
 - consider staged or target-aware selection only after a quota-aware
   measurement demonstrates the need.
 
+Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
+4,096-PID or 16,384-task caps without a quota-aware setup.
+
 ## Known open decisions
 
 Not yet decided:
 
-- final project/binary name,
-- license,
-- minimum Rust version,
-- minimum Linux kernel/support baseline,
-- long-term CLI argument parsing strategy,
-- serialization crate/versioning policy for dynamic JSON,
-- error-handling approach beyond the current small CLI,
+- serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
 - color/terminal crate,
 - eventual eBPF framework,
-- CI provider/configuration,
-- packaging/distribution.
+- CI provider/configuration and release tarball automation,
+- renaming acceptance environment variables from `BOTTLENECK_*` to `STALLHUNT_*`.
 
-These should be decided when implementation makes the tradeoff concrete, not
-all at bootstrap.
+Decided in ADR-0012:
+
+- product/binary name: `stallhunt`,
+- license: MIT OR Apache-2.0,
+- MSRV: Rust 1.85,
+- minimum Linux baseline: 4.20+,
+- CLI: clap 4 with derive; bare `stallhunt` defaults to 10s hunt; `stallhunt completions <shell>`.
+
+These remaining items should be decided when implementation makes the tradeoff
+concrete, not all at once.
 
 ## Last meaningful validation
 
-On 2026-08-17, a project-wide implementation/documentation consistency audit
-verified current milestone, causality, recording, scoped-mechanism, and watch-
-identity claims. The audit refreshed the README quickstart, pending-work
-handoff, cgroup budgets, watch-kind catalog, acceptance instructions, ADR
-cross-references, and experiment state. It also identified and recorded the
-watch top-16 false-resolution bug as the next task. The documented quickstart
-CLI syntax was checked against the current binary. Formatting, locked-offline
-Clippy, and all default tests passed:
+On 2026-08-18, Stallhunt v0.1.0 productization landed: binary/package name
+`stallhunt`, clap CLI with default hunt and completions, JSON kinds
+`stallhunt.recording` and `stallhunt.watch_window`, dual license, MSRV 1.85,
+Linux 4.20+ baseline, watch top-16 false-resolution fix, and documentation
+rewritten for installed use. Formatting, locked-offline Clippy, and all default
+tests passed:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --offline --workspace --all-features
 ```
+
+On 2026-08-17, a project-wide implementation/documentation consistency audit
+verified current milestone, causality, recording, scoped-mechanism, and watch-
+identity claims. The audit refreshed the README quickstart, pending-work
+handoff, cgroup budgets, watch-kind catalog, acceptance instructions, ADR
+cross-references, and experiment state. The documented quickstart CLI syntax
+was checked against the current binary. Formatting, locked-offline Clippy, and
+all default tests passed.
 
 Default-gate coverage is 148 unit tests, ten CLI tests, and five ignored Linux
 acceptance tests.

@@ -24,6 +24,7 @@ use crate::observe::{
 
 pub const MAX_HISTORY_WINDOWS: usize = 16;
 pub const MAX_TRACKED_CGROUPS: usize = 16;
+pub const WATCH_WINDOW_KIND: &str = "stallhunt.watch_window";
 const CLEAR_SCREEN: &str = "\u{1b}[H\u{1b}[2J";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -122,6 +123,7 @@ pub struct WindowSignals {
     pub io: ResourceSignal,
     pub cgroups: Vec<(FindingId, ResourceSignal)>,
     pub observed_cgroup_paths: BTreeSet<String>,
+    pub ranking_omitted_cgroup_ids: BTreeSet<FindingId>,
     pub cgroup_tracking_capped: bool,
 }
 
@@ -202,7 +204,12 @@ impl WatchTracker {
         let mut still_active = BTreeMap::new();
 
         for (id, record) in &self.active {
-            match status_for(id, &current_pressure, &signals.observed_cgroup_paths) {
+            match status_for(
+                id,
+                &current_pressure,
+                &signals.observed_cgroup_paths,
+                &signals.ranking_omitted_cgroup_ids,
+            ) {
                 ObservationStatus::Pressure => {
                     let signal = current_pressure
                         .get(id)
@@ -346,9 +353,13 @@ fn status_for(
     id: &FindingId,
     current: &BTreeMap<FindingId, ResourceSignal>,
     observed_cgroup_paths: &BTreeSet<String>,
+    ranking_omitted_cgroup_ids: &BTreeSet<FindingId>,
 ) -> ObservationStatus {
     if let Some(signal) = current.get(id) {
         return signal.status;
+    }
+    if ranking_omitted_cgroup_ids.contains(id) {
+        return ObservationStatus::Unconfirmed;
     }
     if let FindingId::Cgroup { path, .. } = id
         && observed_cgroup_paths.contains(path)
@@ -373,6 +384,17 @@ pub fn run(options: &WatchOptions) -> io::Result<()> {
     run_on(&mut writer, options, refresh)
 }
 
+fn write_window(
+    writer: &mut dyn Write,
+    options: &WatchOptions,
+    window: &WatchWindow,
+    refresh: bool,
+) -> io::Result<()> {
+    write!(writer, "{}", render_window(options, window, refresh)?)?;
+    writer.flush()?;
+    Ok(())
+}
+
 fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::Result<()> {
     let requested = Duration::from_millis(options.interval_ms);
     if requested.is_zero() {
@@ -394,8 +416,13 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
         let mut window = tracker.ingest(&observation);
         window.count = options.count;
         window.interval_ms = options.interval_ms;
-        write!(writer, "{}", render_window(options, &window, refresh))?;
-        writer.flush()?;
+        write_window(writer, options, &window, refresh).or_else(|error| {
+            if error.kind() == io::ErrorKind::BrokenPipe {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        })?;
         if options.count == Some(completed) {
             break;
         }
@@ -403,10 +430,14 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
     Ok(())
 }
 
-pub fn render_window(options: &WatchOptions, window: &WatchWindow, refresh: bool) -> String {
+pub fn render_window(
+    options: &WatchOptions,
+    window: &WatchWindow,
+    refresh: bool,
+) -> Result<String, serde_json::Error> {
     match options.output {
         OutputFormat::Json => watch_json(window),
-        OutputFormat::Text => watch_text(window, refresh),
+        OutputFormat::Text => Ok(watch_text(window, refresh)),
     }
 }
 
@@ -524,7 +555,7 @@ fn current_line(label: &str, signal: &ResourceSignal) -> String {
     )
 }
 
-fn watch_json(window: &WatchWindow) -> String {
+fn watch_json(window: &WatchWindow) -> Result<String, serde_json::Error> {
     let current_cgroups: Vec<CgroupCurrentJson<'_>> = window
         .current
         .cgroups
@@ -533,7 +564,7 @@ fn watch_json(window: &WatchWindow) -> String {
         .map(|(id, signal)| CgroupCurrentJson { id, signal })
         .collect();
     let payload = WatchWindowJson {
-        kind: "bottleneck.watch_window",
+        kind: WATCH_WINDOW_KIND,
         schema_version: 1,
         tool_version: env!("CARGO_PKG_VERSION"),
         window_index: window.index,
@@ -549,10 +580,7 @@ fn watch_json(window: &WatchWindow) -> String {
         },
         history: &window.history,
     };
-    match serde_json::to_string(&payload) {
-        Ok(json) => format!("{json}\n"),
-        Err(_) => "{\"status\":\"serialization_failed\"}\n".to_owned(),
-    }
+    Ok(format!("{}\n", serde_json::to_string(&payload)?))
 }
 
 #[derive(Serialize)]
@@ -631,9 +659,9 @@ fn psi_suffix(fraction: Option<f64>) -> String {
 }
 
 fn format_ms(duration_ms: u64) -> String {
-    if duration_ms.is_multiple_of(60_000) && duration_ms >= 60_000 {
+    if duration_ms % 60_000 == 0 && duration_ms >= 60_000 {
         format!("{}m", duration_ms / 60_000)
-    } else if duration_ms.is_multiple_of(1_000) {
+    } else if duration_ms % 1_000 == 0 {
         format!("{}s", duration_ms / 1_000)
     } else {
         format!("{duration_ms}ms")
@@ -654,14 +682,15 @@ pub fn signals_from_observation(observation: &HuntObservation) -> WindowSignals 
     let cpu = cpu_signal(observation);
     let memory = memory_signal(observation);
     let io = io_signal(observation);
-    let (cgroups, observed_cgroup_paths, cgroup_tracking_capped) = cgroup_signals(observation);
+    let cgroup_signals = cgroup_signals(observation);
     WindowSignals {
         cpu,
         memory,
         io,
-        cgroups,
-        observed_cgroup_paths,
-        cgroup_tracking_capped,
+        cgroups: cgroup_signals.pressured,
+        observed_cgroup_paths: cgroup_signals.observed_cgroup_paths,
+        ranking_omitted_cgroup_ids: cgroup_signals.ranking_omitted_cgroup_ids,
+        cgroup_tracking_capped: cgroup_signals.capped,
     }
 }
 
@@ -779,14 +808,29 @@ fn io_finding_signal(finding: &IoFinding) -> ResourceSignal {
     }
 }
 
-fn cgroup_signals(
-    observation: &HuntObservation,
-) -> (Vec<(FindingId, ResourceSignal)>, BTreeSet<String>, bool) {
+struct CgroupSignalBundle {
+    pressured: Vec<(FindingId, ResourceSignal)>,
+    observed_cgroup_paths: BTreeSet<String>,
+    ranking_omitted_cgroup_ids: BTreeSet<FindingId>,
+    capped: bool,
+}
+
+fn cgroup_signals(observation: &HuntObservation) -> CgroupSignalBundle {
     let Some(cgroup) = observation.cgroup.as_ref() else {
-        return (Vec::new(), BTreeSet::new(), false);
+        return CgroupSignalBundle {
+            pressured: Vec::new(),
+            observed_cgroup_paths: BTreeSet::new(),
+            ranking_omitted_cgroup_ids: BTreeSet::new(),
+            capped: false,
+        };
     };
     let Ok(cgroup) = cgroup.observation.as_ref() else {
-        return (Vec::new(), BTreeSet::new(), false);
+        return CgroupSignalBundle {
+            pressured: Vec::new(),
+            observed_cgroup_paths: BTreeSet::new(),
+            ranking_omitted_cgroup_ids: BTreeSet::new(),
+            capped: false,
+        };
     };
     let observed_cgroup_paths = cgroup
         .groups
@@ -805,8 +849,18 @@ fn cgroup_signals(
             .then_with(|| left.0.cmp(&right.0))
     });
     let capped = pressured.len() > MAX_TRACKED_CGROUPS;
+    let ranking_omitted_cgroup_ids = pressured
+        .iter()
+        .skip(MAX_TRACKED_CGROUPS)
+        .map(|(id, _)| id.clone())
+        .collect();
     pressured.truncate(MAX_TRACKED_CGROUPS);
-    (pressured, observed_cgroup_paths, capped)
+    CgroupSignalBundle {
+        pressured,
+        observed_cgroup_paths,
+        ranking_omitted_cgroup_ids,
+        capped,
+    }
 }
 
 fn cgroup_pressure_signal(finding: CgroupFinding) -> Option<(FindingId, ResourceSignal)> {
@@ -914,6 +968,7 @@ mod tests {
             io,
             cgroups: Vec::new(),
             observed_cgroup_paths: BTreeSet::new(),
+            ranking_omitted_cgroup_ids: BTreeSet::new(),
             cgroup_tracking_capped: false,
         }
     }
@@ -1112,6 +1167,39 @@ mod tests {
     }
 
     #[test]
+    fn ranking_omitted_cgroup_pressure_stays_unconfirmed_not_resolved() {
+        let mut tracker = WatchTracker::new();
+        let id = FindingId::Cgroup {
+            path: "/low-ranked.scope".into(),
+            resource: CgroupResourceKind::Memory,
+        };
+        let mut first = host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        );
+        first.cgroups.push((
+            id.clone(),
+            pressure("cgroup_memory_reclaim_pressure", Severity::Moderate, 0.1),
+        ));
+        tracker.ingest_signals(first);
+
+        let mut omitted = host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        );
+        omitted
+            .observed_cgroup_paths
+            .insert("/low-ranked.scope".into());
+        omitted.ranking_omitted_cgroup_ids.insert(id.clone());
+        let window = tracker.ingest_signals(omitted);
+        assert_eq!(window.lifecycle[0].id, id);
+        assert_eq!(window.lifecycle[0].state, LifecycleState::Persistent);
+        assert!(!window.lifecycle[0].confirmed);
+    }
+
+    #[test]
     fn text_and_json_render_lifecycle_without_becoming_a_dashboard() {
         let mut tracker = WatchTracker::new();
         let mut first = tracker.ingest_signals(host_signals(
@@ -1128,7 +1216,8 @@ mod tests {
             },
             &first,
             false,
-        );
+        )
+        .expect("watch text render");
         assert!(text.contains("WATCH  window 1/3  interval 2s"));
         assert!(text.contains("NEW         CPU  cpu_scheduling_contention  high  PSI 20.00%"));
         assert!(text.contains("Current window"));
@@ -1140,17 +1229,20 @@ mod tests {
             include_str!("../tests/fixtures/render/watch-lifecycle.txt")
         );
 
-        let json: serde_json::Value = serde_json::from_str(&render_window(
-            &WatchOptions {
-                interval_ms: 2_000,
-                count: Some(3),
-                output: OutputFormat::Json,
-            },
-            &first,
-            false,
-        ))
+        let json: serde_json::Value = serde_json::from_str(
+            &render_window(
+                &WatchOptions {
+                    interval_ms: 2_000,
+                    count: Some(3),
+                    output: OutputFormat::Json,
+                },
+                &first,
+                false,
+            )
+            .expect("watch json render"),
+        )
         .unwrap();
-        assert_eq!(json["kind"], "bottleneck.watch_window");
+        assert_eq!(json["kind"], WATCH_WINDOW_KIND);
         assert_eq!(json["schema_version"], 1);
         assert_eq!(json["window_index"], 1);
         assert_eq!(json["lifecycle"][0]["state"], "new");

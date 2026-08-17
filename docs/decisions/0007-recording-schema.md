@@ -30,7 +30,8 @@ an older recording; that is intended, not a format break.
 
 The on-disk document is a distinct schema from hunt JSON:
 
-- `kind` is `bottleneck.recording`
+- `kind` is `stallhunt.recording`
+- legacy `bottleneck.recording` is accepted on replay
 - `schema_version` is an integer, currently `1`
 - durations are integer microseconds
 - each resource is `observed` or `unavailable` with a typed error

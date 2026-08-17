@@ -33,7 +33,7 @@ impl OwnedCgroup {
         for _ in 0..32 {
             let sequence = CHILD_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = parent.join(format!(
-                "bottleneck-memory-acceptance-{}-{timestamp}-{sequence}",
+                "stallhunt-memory-acceptance-{}-{timestamp}-{sequence}",
                 std::process::id()
             ));
             match fs::create_dir(&path) {
@@ -219,7 +219,7 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Outpu
     if timed_out {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            "bottleneck hunt exceeded the acceptance-test timeout",
+            "stallhunt hunt exceeded the acceptance-test timeout",
         ));
     }
     Ok(Output {
@@ -297,7 +297,7 @@ fn delegated_memory_pressure_reports_host_psi_finding() {
         return;
     }
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bottleneck"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_stallhunt"));
     command.args(["hunt", "--duration", "2s", "--json"]);
     let output = run_with_timeout(command, HUNT_TIMEOUT)
         .expect("the bounded memory JSON hunt should complete before its timeout");

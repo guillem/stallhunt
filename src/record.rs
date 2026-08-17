@@ -29,7 +29,8 @@ use crate::psi::{
     MemoryPsiObservation,
 };
 
-pub const RECORDING_KIND: &str = "bottleneck.recording";
+pub const RECORDING_KIND: &str = "stallhunt.recording";
+pub const LEGACY_RECORDING_KIND: &str = "bottleneck.recording";
 pub const RECORDING_SCHEMA_VERSION: u32 = 1;
 pub const MAX_RECORDING_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -335,9 +336,9 @@ pub fn redact_recording(recording: &mut Recording) {
 }
 
 fn validate_header(recording: &Recording) -> Result<(), RecordError> {
-    if recording.kind != RECORDING_KIND {
+    if recording.kind != RECORDING_KIND && recording.kind != LEGACY_RECORDING_KIND {
         return Err(RecordError::new(format!(
-            "unsupported recording kind '{}'; expected '{RECORDING_KIND}'",
+            "unsupported recording kind '{}'; expected '{RECORDING_KIND}' or '{LEGACY_RECORDING_KIND}'",
             recording.kind
         )));
     }
@@ -951,5 +952,68 @@ mod tests {
         let error =
             decode_recording("{\"schema_version\":1,\"status\":\"observed\"}\n").unwrap_err();
         assert!(error.to_string().contains("recording JSON is invalid"));
+    }
+
+    fn write_fixture(name: &str, observation: &HuntObservation) {
+        let mut recording = recording_from_observation(observation, 10_000, Redaction::Identifiers)
+            .expect("encode");
+        redact_recording(&mut recording);
+        let path = format!(
+            "{}/tests/fixtures/recordings/{name}.redacted.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        write_recording(std::path::Path::new(&path), &recording, true).expect("write fixture");
+    }
+
+    fn healthy_cpu_observation() -> HuntObservation {
+        let mut observation = sample_observation();
+        if let Ok(psi) = observation.psi.as_mut() {
+            psi.interval.some_fraction = 0.001;
+            psi.end.total_us = 10_000;
+        }
+        if let Ok(cpu) = observation.cpu.as_mut() {
+            cpu.host.utilization_fraction = 0.05;
+            cpu.processes.clear();
+        }
+        observation
+    }
+
+    fn memory_pressure_observation() -> HuntObservation {
+        let mut observation = healthy_cpu_observation();
+        if let Some(memory) = observation.memory.as_mut() {
+            if let Ok(psi) = memory.psi.as_mut() {
+                psi.interval.some.fraction = 0.12;
+                psi.end.some.total_us = 1_200_000;
+            }
+            if let Ok(context) = memory.context.as_mut() {
+                context
+                    .vmstat_deltas
+                    .insert(VmstatCounter::ScanKswapd, 50_000);
+                context
+                    .vmstat_deltas
+                    .insert(VmstatCounter::StealKswapd, 45_000);
+            }
+        }
+        observation
+    }
+
+    fn io_pressure_observation() -> HuntObservation {
+        let mut observation = healthy_cpu_observation();
+        if let Some(io) = observation.io.as_mut() {
+            if let Ok(psi) = io.psi.as_mut() {
+                psi.interval.some.fraction = 0.18;
+                psi.end.some.total_us = 1_800_000;
+            }
+        }
+        observation
+    }
+
+    #[test]
+    #[ignore = "writes committed replay fixtures; run with cargo test write_committed_replay_fixtures -- --ignored"]
+    fn write_committed_replay_fixtures() {
+        write_fixture("cpu-healthy", &healthy_cpu_observation());
+        write_fixture("cpu-contention", &sample_observation());
+        write_fixture("memory-pressure", &memory_pressure_observation());
+        write_fixture("io-pressure", &io_pressure_observation());
     }
 }

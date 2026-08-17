@@ -1,0 +1,359 @@
+{
+  "kind": "stallhunt.recording",
+  "schema_version": 1,
+  "tool_version": "0.1.0",
+  "recorded_at_unix_ms": 1787007256418,
+  "redaction": "identifiers",
+  "requested_duration_ms": 10000,
+  "observation": {
+    "cpu_psi": {
+      "status": "observed",
+      "value": {
+        "requested": 10000000,
+        "interval": {
+          "elapsed": 10000000,
+          "total_delta_us": 2000000,
+          "some_fraction": 0.001
+        },
+        "start": {
+          "avg10_percent": 0.0,
+          "avg60_percent": 0.0,
+          "avg300_percent": 0.0,
+          "total_us": 0
+        },
+        "end": {
+          "avg10_percent": 20.0,
+          "avg60_percent": 5.0,
+          "avg300_percent": 1.0,
+          "total_us": 10000
+        }
+      }
+    },
+    "cpu": {
+      "status": "observed",
+      "value": {
+        "elapsed": 10000000,
+        "clock_ticks_per_second": 100,
+        "host": {
+          "total_ticks": 1000,
+          "busy_ticks": 800,
+          "idle_ticks": 200,
+          "utilization_fraction": 0.05,
+          "cpu_count": 4
+        },
+        "load": {
+          "avg1": 2.0,
+          "avg5": 1.0,
+          "avg15": 0.5,
+          "runnable_tasks": 6,
+          "total_tasks": 80,
+          "last_pid": 99
+        },
+        "load_availability": "available",
+        "processes": [],
+        "collection_issues": {
+          "enumeration_failed": false,
+          "enumeration_errors": 0,
+          "disappeared": 0,
+          "permission_denied": 0,
+          "unreadable": 0,
+          "malformed": 0,
+          "counter_regressed": 0,
+          "appeared": 0,
+          "exited": 0,
+          "limit_reached": false
+        },
+        "scheduler_delay_candidates": [],
+        "schedstat_collection_issues": {
+          "task_enumeration_failed": 0,
+          "task_enumeration_errors": 0,
+          "task_disappeared": 0,
+          "task_unsupported": 0,
+          "task_appeared": 0,
+          "task_exited": 0,
+          "task_identity_changed": 0,
+          "task_permission_denied": 0,
+          "task_unreadable": 0,
+          "task_malformed": 0,
+          "aggregate_overflow": 0,
+          "counter_regressed": 0,
+          "task_limit_reached": false,
+          "tasks_read": 0,
+          "stable_tasks": 0
+        },
+        "schedstat_capability": "unsupported"
+      }
+    },
+    "memory": {
+      "psi": {
+        "status": "observed",
+        "value": {
+          "requested": 10000000,
+          "interval": {
+            "elapsed": 10000000,
+            "some": {
+              "total_delta_us": 0,
+              "fraction": 0.0
+            },
+            "full": "missing"
+          },
+          "start": {
+            "some": {
+              "avg10_percent": 0.0,
+              "avg60_percent": 0.0,
+              "avg300_percent": 0.0,
+              "total_us": 0
+            },
+            "full": null
+          },
+          "end": {
+            "some": {
+              "avg10_percent": 0.0,
+              "avg60_percent": 0.0,
+              "avg300_percent": 0.0,
+              "total_us": 0
+            },
+            "full": null
+          }
+        }
+      },
+      "context": {
+        "status": "observed",
+        "value": {
+          "elapsed_us": 10000000,
+          "observation": {
+            "end_meminfo": {
+              "mem_total_bytes": 8000000,
+              "mem_available_bytes": 4000000,
+              "swap_total_bytes": 0,
+              "swap_free_bytes": 0,
+              "cached_bytes": null,
+              "sreclaimable_bytes": null,
+              "anon_pages_bytes": null
+            },
+            "meminfo_capability": "available",
+            "vmstat_capability": "available",
+            "vmstat_deltas": {
+              "page_faults": 0,
+              "major_page_faults": 0,
+              "swap_in": 0,
+              "swap_out": 0,
+              "scan_kswapd": 0,
+              "scan_direct": 0,
+              "steal_kswapd": 0,
+              "steal_direct": 0
+            },
+            "vmstat_issues": {
+              "missing": [],
+              "regressed": []
+            }
+          }
+        }
+      }
+    },
+    "io": {
+      "psi": {
+        "status": "observed",
+        "value": {
+          "requested": 10000000,
+          "interval": {
+            "elapsed": 10000000,
+            "some": {
+              "total_delta_us": 1500000,
+              "fraction": 0.15
+            },
+            "full": {
+              "available": {
+                "total_delta_us": 100000,
+                "fraction": 0.01
+              }
+            }
+          },
+          "start": {
+            "some": {
+              "avg10_percent": 0.0,
+              "avg60_percent": 0.0,
+              "avg300_percent": 0.0,
+              "total_us": 0
+            },
+            "full": {
+              "avg10_percent": 0.0,
+              "avg60_percent": 0.0,
+              "avg300_percent": 0.0,
+              "total_us": 0
+            }
+          },
+          "end": {
+            "some": {
+              "avg10_percent": 0.0,
+              "avg60_percent": 0.0,
+              "avg300_percent": 0.0,
+              "total_us": 1500000
+            },
+            "full": {
+              "avg10_percent": 0.0,
+              "avg60_percent": 0.0,
+              "avg300_percent": 0.0,
+              "total_us": 100000
+            }
+          }
+        }
+      },
+      "diskstats": {
+        "status": "observed",
+        "value": {
+          "elapsed_us": 10000000,
+          "observation": {
+            "capability": "available",
+            "devices": [
+              {
+                "key": {
+                  "major": 8,
+                  "minor": 0
+                },
+                "name": "dev-8-0",
+                "reads_completed": 10,
+                "sectors_read_512": 8192,
+                "writes_completed": 20,
+                "sectors_written_512": 16384,
+                "io_ticks_ms": 400,
+                "weighted_io_ticks_ms": 500,
+                "end_in_flight": 1
+              }
+            ],
+            "issues": {
+              "start_error": null,
+              "end_error": null,
+              "appeared": [],
+              "exited": [],
+              "identity_changed": [],
+              "regressed": [],
+              "limit_reached": false
+            }
+          }
+        }
+      },
+      "processes": {
+        "status": "observed",
+        "value": {
+          "elapsed_us": 10000000,
+          "observation": {
+            "capability": "available",
+            "processes": [
+              {
+                "key": {
+                  "pid": 7,
+                  "start_time_ticks": 3
+                },
+                "name": "pid-7",
+                "read_bytes": 100,
+                "write_bytes": 200,
+                "cancelled_write_bytes": null,
+                "rchar": null,
+                "wchar": null
+              }
+            ],
+            "issues": {
+              "counter_width_unsupported": false,
+              "enumeration_failed": false,
+              "enumeration_errors": 0,
+              "disappeared": 0,
+              "identity_changed": 0,
+              "permission_denied": 0,
+              "unsupported": 0,
+              "unreadable": 0,
+              "malformed": 0,
+              "limit_reached": false,
+              "appeared": 0,
+              "exited": 0,
+              "reused": 0,
+              "counter_regressed": 0
+            },
+            "regressed": []
+          }
+        }
+      }
+    },
+    "cgroup": {
+      "status": "observed",
+      "value": {
+        "elapsed_us": 10000000,
+        "groups": [
+          {
+            "path": "/c0/c1",
+            "cpu": {
+              "state": "missing",
+              "value": null
+            },
+            "memory_current_end": {
+              "state": "missing",
+              "value": null
+            },
+            "memory_events": {
+              "state": "missing",
+              "value": null
+            },
+            "memory_stat": {
+              "state": "missing",
+              "value": null
+            },
+            "io": {
+              "state": "missing",
+              "value": null
+            },
+            "cpu_pressure": {
+              "state": "available",
+              "value": {
+                "elapsed_us": 10000000,
+                "some_total_usec": 2000000,
+                "full_total_usec": null,
+                "state": "available"
+              }
+            },
+            "memory_pressure": {
+              "state": "missing",
+              "value": null
+            },
+            "io_pressure": {
+              "state": "missing",
+              "value": null
+            },
+            "systemd_unit_candidate": "redacted.service"
+          }
+        ],
+        "members": [
+          {
+            "key": {
+              "pid": 42,
+              "start_time_ticks": 7
+            },
+            "name": "pid-42",
+            "cgroup_path": "/c0/c1"
+          }
+        ],
+        "issues": {
+          "process_enumeration_failed": false,
+          "process_enumeration_errors": 0,
+          "process_disappeared": 0,
+          "process_identity_changed": 0,
+          "process_permission_denied": 0,
+          "process_malformed": 0,
+          "process_limit_reached": false,
+          "cgroup_limit_reached": false,
+          "path_rejected": 0,
+          "cgroup_disappeared": 0,
+          "cgroup_permission_denied": 0,
+          "cgroup_unreadable": 0,
+          "cgroup_malformed": 0,
+          "budget_exhausted": false,
+          "read_attempts": 0,
+          "bytes_read": 0,
+          "members_appeared": 0,
+          "members_exited": 0,
+          "members_reused": 0,
+          "members_moved": 0
+        }
+      }
+    }
+  }
+}

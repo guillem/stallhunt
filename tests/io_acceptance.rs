@@ -207,7 +207,7 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Outpu
     if timed_out {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            "bottleneck hunt exceeded the acceptance-test timeout",
+            "stallhunt hunt exceeded the acceptance-test timeout",
         ));
     }
     Ok(Output {
@@ -297,7 +297,7 @@ fn bounded_real_io_pressure_reports_activity_candidates() {
         }
     }
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bottleneck"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_stallhunt"));
     command.args(["hunt", "--duration", "2s", "--json"]);
     let output = run_with_timeout(command, HUNT_TIMEOUT)
         .expect("the bounded I/O JSON hunt should complete before its timeout");

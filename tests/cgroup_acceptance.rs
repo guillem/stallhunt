@@ -28,10 +28,10 @@ fn delegated_scope_is_collected_without_mutating_the_hierarchy() {
         return;
     }
 
-    let output = Command::new(env!("CARGO_BIN_EXE_bottleneck"))
+    let output = Command::new(env!("CARGO_BIN_EXE_stallhunt"))
         .args(["hunt", "--duration", "1s", "--json"])
         .output()
-        .expect("bottleneck binary should run");
+        .expect("stallhunt binary should run");
     assert!(output.status.success());
     let json: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("hunt JSON should parse");
