@@ -175,6 +175,29 @@ Severity may be adjusted using:
 
 Document final thresholds when implemented.
 
+### Implemented M2 memory rule
+
+Only valid exact-interval memory PSI `some` establishes a memory verdict. The
+effective window is the shorter of requested and measured memory-PSI duration:
+below one second is insufficient; 1s..<5s has medium resource confidence; at
+least 5s has high confidence. The provisional `<1%`, `1/5/15/30%` severity
+bands are shared with CPU. Below 1% reports no harmful pressure even when
+occupancy is high or swap is allocated.
+
+For active PSI pressure, positive swap-in classifies correlated swap pressure;
+positive direct scan and direct steal classify correlated reclaim pressure;
+otherwise the mechanism remains generic active pressure. These same-window
+mechanism labels have low confidence independently of the PSI-backed pressure
+confidence. Possible thrashing requires high/severe `some`, at least 1% valid
+`full`, a 5s effective PSI window, and at least 1,024 pages/second in each of
+direct scan, direct steal, swap-in, and swap-out over the independent vmstat
+interval. Its mechanism confidence is capped at medium. The threshold is
+provisional and the conclusion remains explicitly heuristic. Memory `full` is
+a non-additive subset of `some`, so it never increases the PSI fraction or
+independently establishes pressure. Meminfo/vmstat are classification/context
+only. This is host-wide evidence: M2 emits no victims, suspects, or causal
+process claims.
+
 ## Confidence model
 
 Confidence reflects evidence quality.

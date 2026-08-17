@@ -99,6 +99,14 @@ The top-level `status: "observed"` in capability JSON means the probe completed;
 the nested capability state is authoritative and may still be `unsupported`,
 `permission_denied`, or `failed`.
 
+M2 extends the same `hunt` with a separate host-memory assessment and reports
+memory PSI, meminfo, and vmstat capabilities. Exact-interval memory PSI `some`
+controls the memory verdict; memory `full` is displayed as separately-qualified
+all-non-idle-task stall context and is not added to `some`. Text makes the
+host-wide/no-process-attribution limit explicit. JSON retains memory
+observation, evidence, counter availability, and qualifiers even where the
+concise text renders only the relevant finding/context.
+
 ## Human output structure
 
 Current `hunt` text output is concise and finding-first. It shows the CPU

@@ -67,6 +67,20 @@ Severity should consider:
 - number/type of victims,
 - corroborating metrics.
 
+### Implemented host-memory collection
+
+M2 reads `/proc/pressure/memory` with a mandatory `some` line and optional
+`full` line. It rejects malformed endpoint records, then normalizes each
+cumulative total over the completed monotonic memory-PSI interval. Valid `some`
+is retained when an otherwise valid `full` interval is missing, regresses,
+exceeds elapsed time, or exceeds `some`; those cases are explicit full-state
+qualifiers. `full` is a subset of `some` and is never added to it.
+
+The same bounded hunt performs one requested sleep between start and end reads.
+Memory PSI, CPU PSI, CPU/process, and memory context are collected
+sequentially, so each pair has an independent measured interval rather than an
+atomic shared snapshot.
+
 ## `/proc/stat`
 
 Collect at least:
@@ -191,6 +205,8 @@ Values of interest may include:
 Memory occupancy alone is not a finding.
 
 Use this data to explain pressure findings and rule out simplistic interpretations.
+M2 retains end gauges for occupancy and swap-allocation context only; they
+cannot create or override a memory-pressure verdict.
 
 ## `/proc/vmstat`
 
@@ -204,6 +220,16 @@ Potentially important counters:
 - dirty/writeback context.
 
 Choose only counters that support explicit memory/I/O hypotheses.
+
+M2 retains bounded deltas for faults, `pswpin`/`pswpout`, direct and kswapd
+scan/steal counters. A direct scan plus direct steal conjunction can classify
+correlated reclaim context; positive swap-in can classify correlated active
+swap context. These mechanism labels carry confidence separately from the
+PSI-backed pressure verdict. Background kswapd activity and swap-out without
+swap-in remain qualifiers. These are host-wide counters, not process
+attribution, and page counts remain pages rather than being presented as bytes
+without a page-size contract. Rates use the independent vmstat interval, never
+the PSI interval.
 
 ## `/proc/diskstats`
 

@@ -1,0 +1,10 @@
+nr_free_pages 10
+pgfault 100
+pgmajfault 4
+pswpin 3
+pswpout 2
+pgscan_kswapd 5
+pgscan_direct 6
+pgsteal_kswapd 7
+pgsteal_direct 8
+unrelated_counter 999

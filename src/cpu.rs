@@ -2,12 +2,9 @@ use std::collections::{BTreeMap, BinaryHeap};
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
-
-use crate::psi::{self, CpuPsiError, CpuPsiObservation};
 
 const MAX_PROCESSES: usize = 4_096;
 // Schedstat is thread-scoped. This global cap bounds selected task samples
@@ -163,12 +160,6 @@ pub struct CpuProcessObservation {
     pub scheduler_delay_candidates: Vec<ProcessSchedulerDelayInterval>,
     pub schedstat_collection_issues: SchedstatCollectionIssues,
     pub schedstat_capability: SchedstatCapability,
-}
-
-#[derive(Debug)]
-pub struct HuntObservation {
-    pub psi: Result<CpuPsiObservation, CpuPsiError>,
-    pub cpu: Result<CpuProcessObservation, CpuError>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -339,48 +330,7 @@ impl CpuError {
     }
 }
 
-pub fn observe_hunt(requested: Duration) -> HuntObservation {
-    if requested.is_zero() {
-        return HuntObservation {
-            psi: Err(CpuPsiError::EmptyInterval),
-            cpu: Err(CpuError::EmptyInterval),
-        };
-    }
-
-    let psi_start = psi::read_cpu_psi();
-    let psi_started_at = Instant::now();
-    let cpu_start = read_snapshot(Path::new("/proc"));
-    let cpu_started_at = Instant::now();
-    thread::sleep(requested);
-    let cpu_end = read_snapshot(Path::new("/proc"));
-    let cpu_ended_at = Instant::now();
-    let psi_end = psi::read_cpu_psi();
-    let psi_ended_at = Instant::now();
-
-    let psi = match (psi_start, psi_end) {
-        (Ok(start), Ok(end)) => {
-            psi::interval_from_raw(start, end, psi_ended_at.duration_since(psi_started_at)).map(
-                |interval| CpuPsiObservation {
-                    requested,
-                    interval,
-                    start,
-                    end,
-                },
-            )
-        }
-        (Err(error), _) | (_, Err(error)) => Err(error),
-    };
-    let cpu = match (cpu_start, cpu_end) {
-        (Ok(start), Ok(end)) => {
-            interval_from_snapshots(start, end, cpu_ended_at.duration_since(cpu_started_at))
-        }
-        (Err(error), _) | (_, Err(error)) => Err(error),
-    };
-
-    HuntObservation { psi, cpu }
-}
-
-fn read_snapshot(proc_root: &Path) -> Result<CpuSnapshot, CpuError> {
+pub(crate) fn read_snapshot(proc_root: &Path) -> Result<CpuSnapshot, CpuError> {
     let stat = fs::read_to_string(proc_root.join("stat")).map_err(map_io_error)?;
     let host = parse_proc_stat(&stat)?;
     let (load, load_availability) = match fs::read_to_string(proc_root.join("loadavg")) {

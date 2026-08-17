@@ -1,6 +1,8 @@
 mod analysis;
 mod cli;
 mod cpu;
+mod memory;
+mod observe;
 mod psi;
 mod render;
 
@@ -13,10 +15,14 @@ fn main() -> ExitCode {
     match parse(env::args().skip(1)) {
         Ok(command) => {
             let output = match command {
-                Command::Hunt(options) => render::hunt(&options, cpu::observe_hunt),
-                Command::Capabilities(options) => {
-                    render::capabilities(&options, psi::probe_cpu_psi(), cpu::probe_cpu_telemetry())
-                }
+                Command::Hunt(options) => render::hunt(&options, observe::observe_hunt),
+                Command::Capabilities(options) => render::capabilities(
+                    &options,
+                    psi::probe_cpu_psi(),
+                    cpu::probe_cpu_telemetry(),
+                    psi::probe_memory_psi(),
+                    memory::probe_memory_context(),
+                ),
                 Command::Help(topic) => render::help(topic).to_owned(),
                 Command::Version => render::version(),
             };

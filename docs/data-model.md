@@ -220,6 +220,15 @@ summed runnable delay; suspects retain same-window CPU fraction.
 
 Centralize scoring configuration.
 
+M2 adds typed `MemoryFinding` and `MemoryEvidence` values. The evidence retains
+the exact memory-PSI `some` interval, optional independently-qualified `full`
+interval, end-of-window meminfo gauges, optional vmstat deltas, capability
+states, the independent memory-context interval, and qualifiers. `full` is
+represented separately because it is a subset of `some`, not a second pressure
+amount to add. Pressure confidence and optional VM-counter mechanism confidence
+are separate. The host-memory finding has no victims or suspects: the input
+evidence is host-wide and the collector does not walk processes.
+
 ## Confidence
 
 Suggested vocabulary:

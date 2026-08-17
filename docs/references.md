@@ -22,6 +22,10 @@ Relevant to:
 - PSI triggers
 - per-cgroup pressure
 
+For M2, this is the authoritative source for memory PSI `some`/`full` subset
+semantics and cumulative microsecond `total`; rolling averages are context, not
+the bounded-hunt verdict source.
+
 ### Scheduler statistics / `/proc/<pid>/schedstat`
 
 - <https://docs.kernel.org/scheduler/sched-stats.html>
@@ -43,6 +47,10 @@ Also consult the kernel source/UAPI when field semantics are ambiguous.
 Important implementation warning:
 
 `/proc/<pid>/stat` cannot be parsed correctly by naïvely splitting the entire line on whitespace because the command name is parenthesized and may contain spaces.
+
+The same upstream procfs documentation is the primary reference for the
+host-wide `/proc/meminfo` gauges and `/proc/vmstat` counters used by M2. Retain
+vmstat page counters in pages unless a page-size contract is explicitly added.
 
 ### Kernel accounting
 

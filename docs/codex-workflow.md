@@ -31,23 +31,23 @@ them.
 
 ## Starting from the current implementation
 
-Milestone 1 is complete. The current recommended Codex session is:
+Milestone 1 is complete and M2's first host-memory slice exists. The current
+recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Implement Milestone 2: memory pressure as the next small vertical slice.
+Complete M2 validation: safely demonstrate controlled harmful memory pressure
+without root/destructive host changes, and compare it with healthy/high-
+occupancy behavior.
 
 Requirements:
-- distinguish high memory occupancy from harmful pressure using bounded Linux
-  telemetry and normalized interval evidence,
-- begin with `/proc/pressure/memory` and only add supporting signals that
-  resolve a stated diagnostic ambiguity,
+- preserve the implemented rule that exact memory PSI `some` controls the
+  verdict, while `full`, meminfo, and vmstat remain non-additive context,
 - preserve finding-first text output and full structured JSON evidence,
-- add deterministic positive, negative, boundary, missing-data, and
-  contradictory-evidence coverage,
-- record validation methods, results, and remaining limits in project memory.
+- record controlled validation methods, results, and remaining limits in project
+  memory; do not claim process attribution from host-wide memory evidence.
 
 Do not broaden into I/O, cgroups, or eBPF during this milestone. Update
 docs/status.md, docs/experiments.md, and any affected design docs.

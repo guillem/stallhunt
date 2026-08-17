@@ -1,0 +1,10 @@
+MemTotal:       16384 kB
+MemFree:          1024 kB
+MemAvailable:     4096 kB
+Cached:             512 kB
+SwapCached:            0 kB
+Active:             128 kB
+SReclaimable:        64 kB
+AnonPages:          256 kB
+SwapTotal:          512 kB
+SwapFree:           256 kB

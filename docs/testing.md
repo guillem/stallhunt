@@ -114,6 +114,17 @@ These tests should primarily verify:
 
 Do not assert that the host is currently bottlenecked.
 
+M2 adds deterministic parser, interval, analyzer, renderer, and executable
+healthy-host coverage for memory PSI, meminfo, and vmstat. The analyzer matrix
+covers no pressure despite high occupancy/allocated swap, each provisional PSI
+boundary, generic pressure with missing context, direct-reclaim and swap-in
+conjunctions, full-as-subset validation, possible thrashing, short windows, and
+contradictory background-reclaim/swap-out context. The possible-thrashing tests
+also reject immaterial churn and verify that page rates use the independent
+vmstat interval rather than the PSI interval. A live healthy smoke only
+checks structural capability/degradation behavior; it is not controlled harmful
+memory-pressure validation.
+
 Mark environment-dependent tests clearly.
 
 ### 6. Synthetic load scenarios
@@ -264,6 +275,10 @@ A new finding type should not be considered trustworthy until:
 3. positive/negative analyzer tests exist,
 4. at least one synthetic real-host experiment behaves as expected,
 5. documented limitations match observed behavior.
+
+M2 has satisfied deterministic and healthy-host smoke layers, but not item 4:
+do not call the memory diagnosis fully validated until a safe, controlled
+real-host harmful-pressure scenario is demonstrated.
 
 # CPU analyzer fixtures
 

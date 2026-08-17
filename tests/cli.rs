@@ -65,6 +65,18 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
         Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
     ));
     assert!(matches!(
+        json["capabilities"]["memory_psi"]["state"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
+        json["capabilities"]["meminfo"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
+        json["capabilities"]["vmstat"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
         capability,
         "available" | "unsupported" | "permission_denied" | "failed"
     ));
@@ -73,17 +85,26 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
             assert_eq!(capability, "available");
             assert_eq!(json["findings"][0]["kind"], "insufficient_observation");
             assert!(json["observation"]["cpu_psi"]["some_fraction"].is_number());
+            assert!(json["observation"]["memory_psi"]["some_fraction"].is_number());
+            assert!(json["observation"]["memory_psi"]["full_state"].is_string());
+            assert!(json["observation"]["memory_context"].is_object());
+            assert!(json["findings"].as_array().is_some_and(|findings| {
+                findings
+                    .iter()
+                    .any(|finding| finding["resource"] == "memory")
+            }));
             assert!(json["observation"]["scheduler_delay_candidates"].is_array());
             assert!(json["observation"]["schedstat_collection_issues"].is_object());
         }
         Some("incomplete") => {
             assert!(json["observation"].is_null() || json["observation"].is_object());
-            if json["observation"].is_object() {
-                assert!(
-                    json["observation"]["cpu_psi"].is_null()
-                        || json["observation"]["host_cpu"].is_null()
-                );
-            }
+            assert!(
+                capability != "available"
+                    || json["capabilities"]["host_cpu"] != "available"
+                    || json["capabilities"]["memory_psi"]["state"] != "available"
+                    || json["capabilities"]["meminfo"] != "available"
+                    || json["capabilities"]["vmstat"] != "available"
+            );
         }
         status => panic!("unexpected hunt status: {status:?}"),
     }
@@ -107,6 +128,19 @@ fn capabilities_json_reports_the_actual_cpu_psi_probe_state() {
         Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
     ));
     assert!(json["capabilities"]["process_schedstat"]["message"].is_string());
+    assert!(matches!(
+        json["capabilities"]["memory_psi"]["state"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(json["capabilities"]["memory_psi"]["message"].is_string());
+    assert!(matches!(
+        json["capabilities"]["meminfo"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
+        json["capabilities"]["vmstat"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
 }
 
 #[test]

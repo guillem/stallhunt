@@ -153,8 +153,8 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 ## Current implementation layout
 
-Milestone 1 combines bounded CPU/process and scheduler-delay collection with
-the CPU inference slice and M1.6 validation/output boundaries:
+Milestones 1 and the initial M2 host-memory slice combine bounded CPU/process,
+memory-context, and PSI collection with typed inference/output boundaries:
 
 ```text
 src/
@@ -162,7 +162,9 @@ src/
   main.rs       # process entry point and exit behavior
   cli.rs        # command/options model and duration parsing
   cpu.rs        # procfs CPU/process snapshots and interval normalization
-  psi.rs        # CPU PSI parsing, capabilities, and interval normalization
+  memory.rs     # bounded host meminfo/vmstat snapshots and intervals
+  observe.rs    # sequential bounded multi-resource observation orchestration
+  psi.rs        # CPU and memory PSI parsing, capabilities, and intervals
   render.rs     # concise finding-first text and full-evidence JSON rendering
 tests/
   cli.rs                # executable-level behavior tests
@@ -182,6 +184,17 @@ failed CPU/process context becomes qualification and removes attribution rather
 than invalidating PSI. Procfs remains outside analysis and renderers do not
 recompute rules. The text renderer is intentionally concise; JSON retains the
 complete structured observation, evidence, roles, and collection qualifiers.
+
+The M2 path keeps memory PSI separate from memory context. `observe.rs` reads
+all start snapshots, performs one requested sleep, then reads end snapshots;
+each CPU PSI, memory PSI, CPU/process, and memory-context pair has its own
+monotonic interval because the reads are sequential. Memory PSI `some` is the
+resource-verdict boundary. Memory `full` is a separately validated subset of
+`some`, never additive evidence. `/proc/meminfo` and `/proc/vmstat` only add
+mechanism/context qualifiers. The collector performs no PID walk for memory, so
+the initial host-wide finding deliberately has no process attribution. VM rates
+use the independently measured memory-context interval; mechanism confidence is
+separate from pressure confidence.
 
 ## Observation lifecycle
 

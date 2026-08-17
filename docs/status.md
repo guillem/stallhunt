@@ -7,7 +7,9 @@ Last updated: 2026-08-17
 **Milestone 2 — Memory pressure**
 
 Milestone 1 — the CPU contention vertical slice, including M1.6 validation and
-overhead measurement — is complete. Milestone 2 memory pressure is next.
+overhead measurement — is complete. Milestone 2 memory pressure is in progress:
+its first host-memory collector/analyzer/output slice is implemented, but
+controlled harmful-pressure validation remains open.
 
 ## Implemented
 
@@ -89,6 +91,21 @@ overhead measurement — is complete. Milestone 2 memory pressure is next.
 - `tools/measure-overhead.sh` is an opt-in, scenario-specific release-binary
   harness for baseline, process, churn, and CPU-stress measurements. It may use
   an already-installed `stress-ng`, never installs it, and has no CI timing gate.
+- M2 reads bounded host `/proc/pressure/memory`, `/proc/meminfo`, and selected
+  `/proc/vmstat` snapshots around the existing one requested sleep. Each
+  resource pair uses its own completed monotonic interval because collection is
+  sequential.
+- Memory PSI `some` is the sole memory resource-verdict signal. Valid `full` is
+  retained only as a separately-qualified non-additive subset; a missing or
+  interval-invalid `full` cannot invalidate valid `some`. Meminfo occupancy/swap allocation and
+  vmstat counters only classify or qualify a PSI verdict.
+- M2 produces typed host-memory findings for no harmful pressure, generic active
+  pressure, reclaim pressure, swap pressure, possible thrashing, and insufficient
+  observation. The slice has no process walk or process attribution; all memory
+  evidence is explicitly host-wide.
+- Deterministic memory parser/normalization/analyzer/renderer fixtures cover
+  positive, negative, boundary, missing, and contradictory cases. A live healthy
+  memory smoke passed, including graceful capability behavior.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -108,19 +125,23 @@ overhead measurement — is complete. Milestone 2 memory pressure is next.
   73 stable tasks / 146 endpoint reads in the clean sleeping-thread acceptance
   case, but high-visible-PID/task overhead remains unvalidated.
 - No CI workflow or packaging configuration exists; validation is local.
+- M2 has not yet demonstrated safely controlled real-host harmful memory
+  pressure. Reclaim and swap labels have separate low mechanism confidence;
+  possible thrashing requires material direct-reclaim plus bidirectional-swap
+  rates and is capped at medium mechanism confidence. All remain
+  implementation/fixture validated rather than experimentally validated.
 - CPU thresholds are provisional and event telemetry is still required for
   stronger causal attribution.
 
 ## Current recommended next task
 
-Implement **Milestone 2: memory pressure** as the next small vertical slice:
+Complete **Milestone 2: memory pressure** validation:
 
-- distinguish high memory occupancy from harmful pressure with bounded Linux
-  telemetry and normalized interval evidence;
-- begin with memory PSI and add supporting counters only for explicit diagnostic
-  ambiguities;
-- preserve concise finding-first text, full-evidence JSON, deterministic tests,
-  and conservative causal wording.
+- safely demonstrate a bounded controlled harmful-pressure scenario and compare
+  it with healthy/high-occupancy behavior;
+- preserve exact memory PSI `some` as the verdict, with `full`, meminfo, and
+  vmstat as non-additive context only;
+- retain host-wide/no-process-attribution and conservative causal wording.
 
 Do not broaden this task into I/O, cgroups, or eBPF.
 
@@ -230,7 +251,12 @@ loadavg total tasks 986, 34 schedstat reads, five victim candidates, and three
 suspect candidates. Full controlled-load and release-harness ranges are in
 `docs/experiments.md`.
 
-## Next milestone
+The current M2 slice also passed its deterministic memory parser, interval,
+analyzer, renderer, and executable healthy-host smoke coverage. That smoke
+observed a healthy host and validates capability/degradation behavior; it does
+not substitute for a controlled harmful-memory-pressure experiment.
+
+## Current milestone
 
 **Milestone 2 — Memory pressure.**
 

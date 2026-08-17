@@ -1,0 +1,1 @@
+{"schema":"normalized_memory_fixture_v1","psi_some_fraction":0.005,"psi_full_fraction":0.001,"window_ms":10000,"context":true,"occupancy_fraction":0.95,"swap_used_bytes":75000,"expected_kind":"memory_no_harmful_pressure","expected_severity":"none","expected_qualifier":"high_occupancy_context"}

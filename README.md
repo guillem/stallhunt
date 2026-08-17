@@ -133,7 +133,8 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Milestone 1 is complete. The repository contains a Rust binary
+Milestone 1 is complete and Milestone 2's first host-memory slice is implemented
+but not yet fully validated. The repository contains a Rust binary
 with real `hunt`, `capabilities`, help, version, duration parsing, and
 text/JSON output boundaries.
 
@@ -171,4 +172,13 @@ structured-evidence interface. The
 controlled results exercise the provisional none/low/moderate/high/severe bands,
 but do not prove portable exact boundaries or high-visible-PID overhead.
 
-The next task is **Milestone 2: memory pressure**.
+`hunt` also takes bounded host-memory PSI, `/proc/meminfo`, and selected
+`/proc/vmstat` snapshots around the same requested sleep. Exact-interval memory
+PSI `some` alone controls the memory verdict; `full` is retained as a
+non-additive subset for possible-thrashing context. That heuristic also
+requires material direct-reclaim and bidirectional-swap rates and carries a
+separate confidence ceiling. Meminfo and vmstat only
+classify/contextualize a PSI verdict, and this host-wide slice makes no process
+attribution. Deterministic fixtures and a live healthy smoke pass, but a safely
+controlled real-host harmful-memory-pressure experiment remains required before
+Milestone 2 can be complete.

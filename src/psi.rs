@@ -7,6 +7,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 pub const CPU_PSI_PATH: &str = "/proc/pressure/cpu";
+pub const MEMORY_PSI_PATH: &str = "/proc/pressure/memory";
 
 /// A direct CPU PSI `some` reading. `total_us` is cumulative since boot.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -228,11 +229,301 @@ fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), CpuPsiError> {
     }
 }
 
+/// One fully parsed PSI line. `total_us` is cumulative since boot.
+///
+/// Memory PSI retains both `some` and `full`, unlike CPU PSI where host-level
+/// `full` has intentionally been treated as compatibility-only data.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MemoryPsiLine {
+    pub avg10_percent: f64,
+    pub avg60_percent: f64,
+    pub avg300_percent: f64,
+    pub total_us: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MemoryPsiRaw {
+    pub some: MemoryPsiLine,
+    pub full: Option<MemoryPsiLine>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MemoryPsiLineInterval {
+    pub total_delta_us: u64,
+    pub fraction: f64,
+}
+
+/// The `full` interval is independently qualified so valid `some` evidence
+/// remains available when a kernel exposes no `full` line or only that counter
+/// is inconsistent between endpoints.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MemoryPsiFullInterval {
+    Available(MemoryPsiLineInterval),
+    Missing,
+    CounterRegressed,
+    DeltaExceedsElapsed,
+    ExceedsSome,
+}
+
+impl MemoryPsiFullInterval {
+    /// Explains the `full` dimension without changing the broader capability
+    /// state. This is used when valid memory-PSI `some` evidence is retained.
+    pub const fn explanation(self) -> &'static str {
+        match self {
+            Self::Available(_) => "Memory PSI `some` and `full` have valid exact intervals.",
+            Self::Missing => {
+                "Memory PSI `some` has a valid exact interval, but `full` was absent at one or both snapshots."
+            }
+            Self::CounterRegressed => {
+                "Memory PSI `some` has a valid exact interval, but `full` cumulative total decreased during the observation."
+            }
+            Self::DeltaExceedsElapsed => {
+                "Memory PSI `some` has a valid exact interval, but `full` cumulative delta exceeded the measured interval."
+            }
+            Self::ExceedsSome => {
+                "Memory PSI `some` has a valid exact interval, but `full` exceeded `some` during the observation."
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MemoryPsiInterval {
+    pub elapsed: Duration,
+    pub some: MemoryPsiLineInterval,
+    pub full: MemoryPsiFullInterval,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MemoryPsiObservation {
+    pub requested: Duration,
+    pub interval: MemoryPsiInterval,
+    pub start: MemoryPsiRaw,
+    pub end: MemoryPsiRaw,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryPsiCapability {
+    Available,
+    Partial,
+    Unsupported,
+    PermissionDenied,
+    Failed,
+}
+
+impl MemoryPsiCapability {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Partial => "partial",
+            Self::Unsupported => "unsupported",
+            Self::PermissionDenied => "permission_denied",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub const fn explanation(self) -> &'static str {
+        match self {
+            Self::Available => "Memory PSI `some` and `full` are readable and valid.",
+            Self::Partial => "Memory PSI `some` is readable and valid, but `full` is absent.",
+            Self::Unsupported => "The kernel does not expose /proc/pressure/memory.",
+            Self::PermissionDenied => "Permission was denied while reading memory PSI.",
+            Self::Failed => "Memory PSI could not be read or parsed.",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryPsiError {
+    Unsupported,
+    PermissionDenied,
+    Unreadable,
+    Malformed,
+    CounterRegressed,
+    EmptyInterval,
+    DeltaExceedsElapsed,
+    FullExceedsSome,
+}
+
+impl MemoryPsiError {
+    pub const fn capability(self) -> MemoryPsiCapability {
+        match self {
+            Self::Unsupported => MemoryPsiCapability::Unsupported,
+            Self::PermissionDenied => MemoryPsiCapability::PermissionDenied,
+            Self::Unreadable | Self::Malformed | Self::FullExceedsSome => {
+                MemoryPsiCapability::Failed
+            }
+            Self::CounterRegressed | Self::EmptyInterval | Self::DeltaExceedsElapsed => {
+                MemoryPsiCapability::Available
+            }
+        }
+    }
+}
+
+pub fn probe_memory_psi() -> MemoryPsiCapability {
+    match read_memory_psi() {
+        Ok(raw) if raw.full.is_some() => MemoryPsiCapability::Available,
+        Ok(_) => MemoryPsiCapability::Partial,
+        Err(error) => error.capability(),
+    }
+}
+
+pub fn read_memory_psi() -> Result<MemoryPsiRaw, MemoryPsiError> {
+    let contents = fs::read_to_string(MEMORY_PSI_PATH).map_err(classify_memory_read_error)?;
+    parse_memory_psi(&contents)
+}
+
+fn classify_memory_read_error(error: io::Error) -> MemoryPsiError {
+    match error.kind() {
+        io::ErrorKind::NotFound => MemoryPsiError::Unsupported,
+        io::ErrorKind::PermissionDenied => MemoryPsiError::PermissionDenied,
+        _ => MemoryPsiError::Unreadable,
+    }
+}
+
+/// Parses memory PSI with one mandatory `some` line and one optional `full`
+/// line. A present `full` line must be complete and semantically no greater
+/// than `some`; malformed data is never silently discarded.
+pub fn parse_memory_psi(input: &str) -> Result<MemoryPsiRaw, MemoryPsiError> {
+    let mut some = None;
+    let mut full = None;
+
+    for line in input.lines().filter(|line| !line.trim().is_empty()) {
+        let mut fields = line.split_ascii_whitespace();
+        let kind = fields.next().ok_or(MemoryPsiError::Malformed)?;
+        let parsed = parse_memory_psi_line(fields)?;
+        match kind {
+            "some" if some.is_none() => some = Some(parsed),
+            "full" if full.is_none() => full = Some(parsed),
+            _ => return Err(MemoryPsiError::Malformed),
+        }
+    }
+
+    let some = some.ok_or(MemoryPsiError::Malformed)?;
+    if let Some(full) = full {
+        ensure_full_not_greater_than_some(full, some)?;
+    }
+    Ok(MemoryPsiRaw { some, full })
+}
+
+fn parse_memory_psi_line<'a>(
+    fields: impl Iterator<Item = &'a str>,
+) -> Result<MemoryPsiLine, MemoryPsiError> {
+    let mut avg10 = None;
+    let mut avg60 = None;
+    let mut avg300 = None;
+    let mut total = None;
+    for field in fields {
+        let (name, value) = field.split_once('=').ok_or(MemoryPsiError::Malformed)?;
+        match name {
+            "avg10" => set_memory_once(&mut avg10, parse_memory_percent(value)?)?,
+            "avg60" => set_memory_once(&mut avg60, parse_memory_percent(value)?)?,
+            "avg300" => set_memory_once(&mut avg300, parse_memory_percent(value)?)?,
+            "total" => set_memory_once(
+                &mut total,
+                value.parse().map_err(|_| MemoryPsiError::Malformed)?,
+            )?,
+            _ => {}
+        }
+    }
+    Ok(MemoryPsiLine {
+        avg10_percent: avg10.ok_or(MemoryPsiError::Malformed)?,
+        avg60_percent: avg60.ok_or(MemoryPsiError::Malformed)?,
+        avg300_percent: avg300.ok_or(MemoryPsiError::Malformed)?,
+        total_us: total.ok_or(MemoryPsiError::Malformed)?,
+    })
+}
+
+fn parse_memory_percent(value: &str) -> Result<f64, MemoryPsiError> {
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| MemoryPsiError::Malformed)?;
+    if parsed.is_finite() && (0.0..=100.0).contains(&parsed) {
+        Ok(parsed)
+    } else {
+        Err(MemoryPsiError::Malformed)
+    }
+}
+
+fn set_memory_once<T>(slot: &mut Option<T>, value: T) -> Result<(), MemoryPsiError> {
+    if slot.replace(value).is_some() {
+        Err(MemoryPsiError::Malformed)
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_full_not_greater_than_some(
+    full: MemoryPsiLine,
+    some: MemoryPsiLine,
+) -> Result<(), MemoryPsiError> {
+    if full.avg10_percent > some.avg10_percent
+        || full.avg60_percent > some.avg60_percent
+        || full.avg300_percent > some.avg300_percent
+        || full.total_us > some.total_us
+    {
+        Err(MemoryPsiError::FullExceedsSome)
+    } else {
+        Ok(())
+    }
+}
+
+/// Normalizes memory PSI totals across the measured monotonic interval.
+/// `some` failures reject the observation. `full` failures qualify only the
+/// `full` dimension, preserving the valid `some` interval.
+pub fn memory_interval_from_raw(
+    start: MemoryPsiRaw,
+    end: MemoryPsiRaw,
+    elapsed: Duration,
+) -> Result<MemoryPsiInterval, MemoryPsiError> {
+    let elapsed_us = elapsed.as_micros();
+    if elapsed_us == 0 {
+        return Err(MemoryPsiError::EmptyInterval);
+    }
+    let some = memory_line_interval(start.some, end.some, elapsed_us)?;
+    let full = match (start.full, end.full) {
+        (Some(start), Some(end)) => match memory_line_interval(start, end, elapsed_us) {
+            Ok(full) if full.total_delta_us <= some.total_delta_us => {
+                MemoryPsiFullInterval::Available(full)
+            }
+            Ok(_) => MemoryPsiFullInterval::ExceedsSome,
+            Err(MemoryPsiError::CounterRegressed) => MemoryPsiFullInterval::CounterRegressed,
+            Err(MemoryPsiError::DeltaExceedsElapsed) => MemoryPsiFullInterval::DeltaExceedsElapsed,
+            Err(_) => unreachable!("memory line intervals only return counter errors"),
+        },
+        _ => MemoryPsiFullInterval::Missing,
+    };
+    Ok(MemoryPsiInterval {
+        elapsed,
+        some,
+        full,
+    })
+}
+
+fn memory_line_interval(
+    start: MemoryPsiLine,
+    end: MemoryPsiLine,
+    elapsed_us: u128,
+) -> Result<MemoryPsiLineInterval, MemoryPsiError> {
+    let total_delta_us = end
+        .total_us
+        .checked_sub(start.total_us)
+        .ok_or(MemoryPsiError::CounterRegressed)?;
+    if u128::from(total_delta_us) > elapsed_us {
+        return Err(MemoryPsiError::DeltaExceedsElapsed);
+    }
+    Ok(MemoryPsiLineInterval {
+        total_delta_us,
+        fraction: total_delta_us as f64 / elapsed_us as f64,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const VALID: &str = include_str!("../tests/fixtures/proc-pressure-cpu-valid");
+    const MEMORY_VALID: &str = include_str!("../tests/fixtures/proc-pressure-memory-valid");
 
     #[test]
     fn parses_cpu_psi_fixture() {
@@ -368,6 +659,219 @@ mod tests {
         assert_eq!(
             classify_read_error(io::Error::from(io::ErrorKind::Other)),
             CpuPsiError::Unreadable
+        );
+    }
+
+    #[test]
+    fn parses_memory_psi_fixture_and_retains_both_lines() {
+        assert_eq!(
+            parse_memory_psi(MEMORY_VALID),
+            Ok(MemoryPsiRaw {
+                some: MemoryPsiLine {
+                    avg10_percent: 2.5,
+                    avg60_percent: 1.25,
+                    avg300_percent: 0.75,
+                    total_us: 9_000,
+                },
+                full: Some(MemoryPsiLine {
+                    avg10_percent: 1.0,
+                    avg60_percent: 0.5,
+                    avg300_percent: 0.25,
+                    total_us: 4_000,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn memory_psi_some_without_full_is_partial_but_valid() {
+        let raw = parse_memory_psi("some avg10=1 avg60=0.5 avg300=0.25 total=100\n").unwrap();
+        assert_eq!(raw.full, None);
+        assert_eq!(
+            memory_interval_from_raw(
+                raw,
+                MemoryPsiRaw {
+                    some: MemoryPsiLine {
+                        total_us: 600,
+                        ..raw.some
+                    },
+                    full: None,
+                },
+                Duration::from_millis(1)
+            )
+            .unwrap()
+            .full,
+            MemoryPsiFullInterval::Missing
+        );
+    }
+
+    #[test]
+    fn memory_parser_rejects_malformed_duplicate_and_invalid_full_lines() {
+        for input in [
+            "some avg10=1 avg60=1 avg300=1 total=1\nfull avg10=1 avg60=1 total=1\n",
+            "some avg10=1 avg60=1 avg300=1 total=1\nsome avg10=1 avg60=1 avg300=1 total=1\n",
+            "some avg10=1 avg60=1 avg300=1 total=1\nfull avg10=1 avg60=1 avg300=1 total=1\nfull avg10=1 avg60=1 avg300=1 total=1\n",
+        ] {
+            assert_eq!(parse_memory_psi(input), Err(MemoryPsiError::Malformed));
+        }
+        assert_eq!(
+            parse_memory_psi(
+                "some avg10=1 avg60=1 avg300=1 total=10\nfull avg10=2 avg60=1 avg300=1 total=9\n"
+            ),
+            Err(MemoryPsiError::FullExceedsSome)
+        );
+        assert_eq!(
+            MemoryPsiError::FullExceedsSome.capability(),
+            MemoryPsiCapability::Failed
+        );
+    }
+
+    #[test]
+    fn memory_intervals_normalize_some_and_full_and_check_boundaries() {
+        let start = MemoryPsiRaw {
+            some: MemoryPsiLine {
+                avg10_percent: 0.0,
+                avg60_percent: 0.0,
+                avg300_percent: 0.0,
+                total_us: 100,
+            },
+            full: Some(MemoryPsiLine {
+                avg10_percent: 0.0,
+                avg60_percent: 0.0,
+                avg300_percent: 0.0,
+                total_us: 50,
+            }),
+        };
+        let end = MemoryPsiRaw {
+            some: MemoryPsiLine {
+                total_us: 1_100,
+                ..start.some
+            },
+            full: Some(MemoryPsiLine {
+                total_us: 550,
+                ..start.full.unwrap()
+            }),
+        };
+        let interval = memory_interval_from_raw(start, end, Duration::from_millis(1)).unwrap();
+        assert_eq!(interval.some.total_delta_us, 1_000);
+        assert_eq!(interval.some.fraction, 1.0);
+        assert_eq!(
+            interval.full,
+            MemoryPsiFullInterval::Available(MemoryPsiLineInterval {
+                total_delta_us: 500,
+                fraction: 0.5,
+            })
+        );
+        assert_eq!(
+            memory_interval_from_raw(start, end, Duration::ZERO),
+            Err(MemoryPsiError::EmptyInterval)
+        );
+        assert_eq!(
+            memory_interval_from_raw(
+                start,
+                MemoryPsiRaw {
+                    some: MemoryPsiLine {
+                        total_us: 1_101,
+                        ..start.some
+                    },
+                    full: end.full,
+                },
+                Duration::from_millis(1)
+            ),
+            Err(MemoryPsiError::DeltaExceedsElapsed)
+        );
+    }
+
+    #[test]
+    fn memory_full_interval_problems_do_not_discard_valid_some_evidence() {
+        let start = MemoryPsiRaw {
+            some: MemoryPsiLine {
+                avg10_percent: 0.0,
+                avg60_percent: 0.0,
+                avg300_percent: 0.0,
+                total_us: 100,
+            },
+            full: Some(MemoryPsiLine {
+                avg10_percent: 0.0,
+                avg60_percent: 0.0,
+                avg300_percent: 0.0,
+                total_us: 100,
+            }),
+        };
+        let full = start.full.unwrap();
+        for (full, expected) in [
+            (
+                MemoryPsiLine {
+                    total_us: 99,
+                    ..full
+                },
+                MemoryPsiFullInterval::CounterRegressed,
+            ),
+            (
+                MemoryPsiLine {
+                    total_us: 1_101,
+                    ..full
+                },
+                MemoryPsiFullInterval::DeltaExceedsElapsed,
+            ),
+            (
+                MemoryPsiLine {
+                    total_us: 701,
+                    ..full
+                },
+                MemoryPsiFullInterval::ExceedsSome,
+            ),
+        ] {
+            let interval = memory_interval_from_raw(
+                start,
+                MemoryPsiRaw {
+                    some: MemoryPsiLine {
+                        total_us: 600,
+                        ..start.some
+                    },
+                    full: Some(full),
+                },
+                Duration::from_millis(1),
+            )
+            .unwrap();
+            assert_eq!(interval.some.total_delta_us, 500);
+            assert_eq!(interval.full, expected);
+        }
+    }
+
+    #[test]
+    fn memory_full_interval_explanations_distinguish_absence_from_invalid_data() {
+        assert!(
+            MemoryPsiFullInterval::Missing
+                .explanation()
+                .contains("absent")
+        );
+        assert!(
+            MemoryPsiFullInterval::CounterRegressed
+                .explanation()
+                .contains("decreased")
+        );
+        assert!(
+            MemoryPsiFullInterval::DeltaExceedsElapsed
+                .explanation()
+                .contains("exceeded the measured interval")
+        );
+        assert!(
+            MemoryPsiFullInterval::ExceedsSome
+                .explanation()
+                .contains("exceeded `some`")
+        );
+    }
+
+    #[test]
+    fn memory_read_errors_have_explicit_capabilities() {
+        assert_eq!(
+            classify_memory_read_error(io::Error::from(io::ErrorKind::NotFound)),
+            MemoryPsiError::Unsupported
+        );
+        assert_eq!(
+            classify_memory_read_error(io::Error::from(io::ErrorKind::PermissionDenied)),
+            MemoryPsiError::PermissionDenied
         );
     }
 }

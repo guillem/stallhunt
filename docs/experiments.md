@@ -113,12 +113,20 @@ Determine how observation duration and transient PSI should affect severity/conf
 
 ## Planned memory experiments
 
-Do not run until Milestone 2.
-
 - high cache/occupancy with negligible pressure,
 - constrained cgroup with reclaim pressure,
 - swap pressure if safe and reproducible,
 - memory churn/thrashing scenario.
+
+## EXP-0003: M2 healthy-host memory smoke
+
+Date: 2026-08-17. The M2 deterministic fixture and executable healthy-host
+smoke paths passed with readable memory PSI. This validates parsing, independent
+bounded intervals, JSON/text degradation, and the conservative no-harmful-
+pressure path on that host. It is not a controlled harmful-memory-pressure
+experiment: no reclaim, swap-pressure, or possible-thrashing conclusion is
+validated by it. The required follow-up is a safe, bounded controlled scenario
+that produces exact memory PSI `some` with relevant reclaim and/or swap context.
 
 ## Planned I/O experiments
 

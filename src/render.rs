@@ -4,8 +4,15 @@ use serde::Serialize;
 
 use crate::analysis::{self, AnalysisResult, AssessmentKind};
 use crate::cli::{CapabilitiesOptions, HelpTopic, HuntOptions, OutputFormat};
-use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities, HuntObservation};
-use crate::psi::{CpuPsiCapability, CpuPsiObservation};
+use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
+use crate::memory::{
+    MemoryContextCapabilities, MemoryContextCapability, MemoryContextObservation, VmstatCounter,
+};
+use crate::observe::{HuntObservation, MemoryHuntObservation};
+use crate::psi::{
+    CpuPsiCapability, CpuPsiObservation, MemoryPsiCapability, MemoryPsiFullInterval,
+    MemoryPsiObservation,
+};
 
 const ROOT_HELP: &str = "Linux performance triage that reports evidence-backed bottlenecks.\n\nUSAGE:\n    bottleneck <COMMAND>\n\nCOMMANDS:\n    hunt          Run a bounded diagnosis\n    capabilities  Report available telemetry\n    version       Print version information\n    help          Print this help or help for a command\n\nOPTIONS:\n    -h, --help     Print help\n    -V, --version  Print version information\n";
 
@@ -40,16 +47,22 @@ pub fn capabilities(
     options: &CapabilitiesOptions,
     cpu_psi: CpuPsiCapability,
     cpu: CpuTelemetryCapabilities,
+    memory_psi: MemoryPsiCapability,
+    memory: MemoryContextCapabilities,
 ) -> String {
     match options.output {
         OutputFormat::Text => format!(
-            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\n",
+            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\nMemory PSI: {}\n{}\nHost /proc/meminfo: {}\nHost /proc/vmstat: {}\n",
             cpu_psi.as_str(),
             cpu_psi.explanation(),
             cpu.host_cpu.as_str(),
             cpu.process_stat.as_str(),
             cpu.process_schedstat.as_str(),
             cpu.process_schedstat.explanation(),
+            memory_psi.as_str(),
+            memory_psi.explanation(),
+            memory.meminfo.as_str(),
+            memory.vmstat.as_str(),
         ),
         OutputFormat::Json => to_json(&CapabilitiesJson {
             schema_version: 1,
@@ -66,13 +79,51 @@ pub fn capabilities(
                     state: cpu.process_schedstat.as_str(),
                     message: cpu.process_schedstat.explanation(),
                 },
+                memory_psi: CapabilityJson {
+                    state: memory_psi.as_str(),
+                    message: memory_psi.explanation(),
+                },
+                meminfo: memory.meminfo.as_str(),
+                vmstat: memory.vmstat.as_str(),
             },
         }),
     }
 }
 
 fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
-    match (result.psi, result.cpu) {
+    let cpu_rank = analysis::analyze_cpu(result.psi.as_ref().ok(), result.cpu.as_ref().ok())
+        .findings
+        .first()
+        .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
+        .unwrap_or((0, 0));
+    let memory_rank = result
+        .memory
+        .as_ref()
+        .and_then(|memory| {
+            analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok())
+                .findings
+                .first()
+                .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
+        })
+        .unwrap_or((0, 0));
+    let cpu_output = cpu_hunt_text(options, result.psi, result.cpu);
+    let Some(memory) = result.memory else {
+        return cpu_output;
+    };
+    let memory_output = memory_hunt_text(options, memory);
+    if memory_rank > cpu_rank {
+        format!("{memory_output}\n{cpu_output}")
+    } else {
+        format!("{cpu_output}\n{memory_output}")
+    }
+}
+
+fn cpu_hunt_text(
+    options: &HuntOptions,
+    psi: Result<CpuPsiObservation, crate::psi::CpuPsiError>,
+    cpu: Result<CpuProcessObservation, crate::cpu::CpuError>,
+) -> String {
+    match (psi, cpu) {
         (Ok(observation), Ok(cpu)) => {
             let analysis = analysis::analyze_cpu(Some(&observation), Some(&cpu));
             finding_text(
@@ -110,6 +161,210 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
             ));
             output
         }
+    }
+}
+
+fn text_finding_rank(
+    severity: crate::analysis::Severity,
+    confidence: crate::analysis::Confidence,
+) -> (u8, u8) {
+    let severity = match severity {
+        crate::analysis::Severity::None => 0,
+        crate::analysis::Severity::Low => 1,
+        crate::analysis::Severity::Moderate => 2,
+        crate::analysis::Severity::High => 3,
+        crate::analysis::Severity::Severe => 4,
+    };
+    let confidence = match confidence {
+        crate::analysis::Confidence::Low => 0,
+        crate::analysis::Confidence::Medium => 1,
+        crate::analysis::Confidence::High => 2,
+    };
+    (severity, confidence)
+}
+
+fn memory_hunt_text(options: &HuntOptions, memory: MemoryHuntObservation) -> String {
+    match (memory.psi, memory.context) {
+        (Ok(psi), Ok(context)) => {
+            let analysis = analysis::analyze_memory(Some(&psi), Some(&context));
+            memory_finding_text(&analysis, options.duration_ms, &psi, Some(&context))
+        }
+        (Ok(psi), Err(_)) => {
+            let analysis = analysis::analyze_memory(Some(&psi), None);
+            memory_finding_text(&analysis, options.duration_ms, &psi, None)
+        }
+        (Err(error), Ok(context)) => {
+            let occupancy = context.end_meminfo.as_ref().map_or_else(
+                || "unavailable".to_owned(),
+                |meminfo| {
+                    format!(
+                        "{:.1}% occupied ({} available)",
+                        (1.0 - meminfo.mem_available_bytes as f64 / meminfo.mem_total_bytes as f64)
+                            * 100.0,
+                        human_bytes(meminfo.mem_available_bytes)
+                    )
+                },
+            );
+            format!(
+                "Memory assessment unavailable\nVerdict: unavailable (no exact memory PSI interval)\nCapability: memory PSI {} — {}\nRetained context: {occupancy}; meminfo {}; vmstat {}.\nContext and limitations:\n  Occupancy and VM counters cannot establish harmful memory pressure without exact-interval memory PSI.\nTiming: requested {}; memory context measured {}\n",
+                error.capability().as_str(),
+                memory_psi_error_explanation(error),
+                context.meminfo_capability.as_str(),
+                context.vmstat_capability.as_str(),
+                human_duration(options.duration_ms),
+                human_duration_from_duration(context.elapsed),
+            )
+        }
+        (Err(error), Err(_)) => format!(
+            "Memory assessment unavailable\nVerdict: unavailable (no exact memory PSI interval)\nCapability: memory PSI {} — {}\nContext and limitations:\n  Memory context was also unavailable; no memory diagnosis was produced.\nTiming: requested {}\n",
+            error.capability().as_str(),
+            memory_psi_error_explanation(error),
+            human_duration(options.duration_ms),
+        ),
+    }
+}
+
+fn memory_finding_text(
+    analysis: &crate::analysis::MemoryAnalysisResult,
+    requested_duration_ms: u64,
+    psi: &MemoryPsiObservation,
+    context: Option<&MemoryContextObservation>,
+) -> String {
+    let Some(finding) = analysis.findings.first() else {
+        return format!(
+            "Memory assessment unavailable\nVerdict: unavailable\nTiming: requested {}\n",
+            human_duration(requested_duration_ms)
+        );
+    };
+    let verdict = match finding.kind {
+        crate::analysis::MemoryAssessmentKind::NoHarmfulPressure => "no harmful pressure",
+        crate::analysis::MemoryAssessmentKind::Pressure => "active pressure",
+        crate::analysis::MemoryAssessmentKind::ReclaimPressure => "reclaim pressure",
+        crate::analysis::MemoryAssessmentKind::SwapPressure => "swap pressure",
+        crate::analysis::MemoryAssessmentKind::PossibleThrashing => "possible thrashing",
+        crate::analysis::MemoryAssessmentKind::InsufficientObservation => {
+            "insufficient observation"
+        }
+    };
+    let mechanism_confidence = finding.mechanism_confidence.map_or_else(
+        || "unavailable".to_string(),
+        |confidence| confidence_name(confidence).to_string(),
+    );
+    let mut output = format!(
+        "{}\nVerdict: {verdict} · severity {} · pressure confidence {} · mechanism confidence {mechanism_confidence}\nEvidence: memory PSI some {:.2}% over exact {} interval ({} cumulative stalled time)",
+        finding.summary,
+        severity_name(finding.severity),
+        confidence_name(finding.resource_confidence),
+        finding.evidence.psi_some_fraction * 100.0,
+        human_duration_from_duration(psi.interval.elapsed),
+        human_duration_from_duration(Duration::from_micros(
+            finding.evidence.psi_some_total_delta_us
+        )),
+    );
+    if let (Some(fraction), Some(total)) = (
+        finding.evidence.psi_full_fraction,
+        finding.evidence.psi_full_total_delta_us,
+    ) {
+        output.push_str(&format!(
+            "; full {:.2}% ({} all-non-idle-task stall)",
+            fraction * 100.0,
+            human_duration_from_duration(Duration::from_micros(total))
+        ));
+    } else {
+        output.push_str("; full unavailable or excluded");
+    }
+    output.push('\n');
+    if let (Some(occupancy), Some(available), Some(total)) = (
+        finding.evidence.memory_occupancy_fraction,
+        finding.evidence.memory_available_bytes,
+        finding.evidence.memory_total_bytes,
+    ) {
+        output.push_str(&format!(
+            "Memory context: {:.1}% occupied; {} available of {} total",
+            occupancy * 100.0,
+            human_bytes(available),
+            human_bytes(total),
+        ));
+        if let Some(swap_used) = finding.evidence.swap_used_bytes {
+            output.push_str(&format!("; {} swap allocated", human_bytes(swap_used)));
+        }
+        output.push('\n');
+    } else {
+        output.push_str("Memory context: unavailable or incomplete\n");
+    }
+    let vm_delta =
+        |counter| context.and_then(|context| context.vmstat_deltas.get(&counter).copied());
+    output.push_str(&format!(
+        "VM interval context: direct scan/steal {}/{} pages; swap in/out {}/{} pages; major faults {}\n",
+        optional_counter(vm_delta(VmstatCounter::ScanDirect)),
+        optional_counter(vm_delta(VmstatCounter::StealDirect)),
+        optional_counter(vm_delta(VmstatCounter::SwapIn)),
+        optional_counter(vm_delta(VmstatCounter::SwapOut)),
+        optional_counter(vm_delta(VmstatCounter::MajorPageFaults)),
+    ));
+    output.push_str("Attribution: unavailable (host-wide evidence only)\n");
+    if !finding.qualifiers.is_empty() {
+        output.push_str("Context and limitations:\n");
+        for qualifier in &finding.qualifiers {
+            output.push_str(&format!("  {}\n", qualifier.message));
+        }
+    }
+    output.push_str(&format!(
+        "Timing: requested {}; memory PSI measured {}{}\n",
+        human_duration(requested_duration_ms),
+        human_duration_from_duration(psi.interval.elapsed),
+        context.map_or_else(String::new, |context| format!(
+            "; memory context measured {}",
+            human_duration_from_duration(context.elapsed)
+        )),
+    ));
+    output
+}
+
+fn memory_psi_error_explanation(error: crate::psi::MemoryPsiError) -> &'static str {
+    match error {
+        crate::psi::MemoryPsiError::Unsupported => {
+            "The kernel does not expose /proc/pressure/memory."
+        }
+        crate::psi::MemoryPsiError::PermissionDenied => {
+            "Permission was denied while reading memory PSI."
+        }
+        crate::psi::MemoryPsiError::Unreadable => "Memory PSI could not be read.",
+        crate::psi::MemoryPsiError::Malformed => {
+            "Memory PSI was readable but did not match the expected kernel format."
+        }
+        crate::psi::MemoryPsiError::CounterRegressed => {
+            "Memory PSI `some` cumulative total decreased during the observation."
+        }
+        crate::psi::MemoryPsiError::EmptyInterval => {
+            "Memory PSI snapshots did not have a measurable interval."
+        }
+        crate::psi::MemoryPsiError::DeltaExceedsElapsed => {
+            "Memory PSI `some` cumulative delta exceeded the measured interval."
+        }
+        crate::psi::MemoryPsiError::FullExceedsSome => {
+            "Memory PSI `full` exceeded `some` and was rejected as inconsistent."
+        }
+    }
+}
+
+fn optional_counter(value: Option<u64>) -> String {
+    value.map_or_else(|| "unavailable".to_owned(), |value| value.to_string())
+}
+
+fn human_bytes(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let bytes = bytes as f64;
+    if bytes >= GIB {
+        format!("{:.2} GiB", bytes / GIB)
+    } else if bytes >= MIB {
+        format!("{:.1} MiB", bytes / MIB)
+    } else if bytes >= KIB {
+        format!("{:.1} KiB", bytes / KIB)
+    } else {
+        format!("{} B", bytes as u64)
     }
 }
 
@@ -273,112 +528,228 @@ fn terminal_name(name: &str) -> String {
 }
 
 fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
-    let requested_observation = RequestedObservation {
-        duration_ms: options.duration_ms,
+    let cpu = cpu_json_parts(result.psi, result.cpu);
+    let memory = memory_json_parts(result.memory.as_ref());
+    let status = if cpu.complete && memory.complete {
+        "observed"
+    } else {
+        "incomplete"
     };
-    match (result.psi, result.cpu) {
-        (Ok(observation), Ok(cpu)) => {
+    let findings = analysis::ranked_findings(cpu.analysis, memory.analysis);
+    let mut qualifiers = cpu.qualifiers;
+    qualifiers.extend(memory.qualifiers);
+    let observation = if cpu.psi.is_some()
+        || cpu.cpu.is_some()
+        || memory.psi.is_some()
+        || memory.context.is_some()
+    {
+        Some(ObservationJson::from_parts(
+            cpu.psi,
+            cpu.cpu,
+            memory.psi,
+            memory.context,
+        ))
+    } else {
+        None
+    };
+    to_json(&HuntJson {
+        schema_version: 1,
+        tool_version: env!("CARGO_PKG_VERSION"),
+        status,
+        requested_observation: RequestedObservation {
+            duration_ms: options.duration_ms,
+        },
+        observation,
+        capabilities: CapabilitiesJsonValue {
+            cpu_psi: CapabilityJson {
+                state: cpu.psi_state,
+                message: cpu.psi_message,
+            },
+            host_cpu: cpu.host_cpu,
+            process_stat: cpu.process_stat,
+            process_schedstat: CapabilityJson {
+                state: cpu.process_schedstat,
+                message: cpu.process_schedstat_message,
+            },
+            memory_psi: CapabilityJson {
+                state: memory.psi_state,
+                message: memory.psi_message,
+            },
+            meminfo: memory.meminfo,
+            vmstat: memory.vmstat,
+        },
+        findings,
+        qualifiers,
+    })
+}
+
+struct CpuJsonParts {
+    psi: Option<CpuPsiObservation>,
+    cpu: Option<CpuProcessObservation>,
+    psi_state: &'static str,
+    psi_message: &'static str,
+    host_cpu: &'static str,
+    process_stat: &'static str,
+    process_schedstat: &'static str,
+    process_schedstat_message: &'static str,
+    analysis: AnalysisResult,
+    qualifiers: Vec<QualifierJson<'static>>,
+    complete: bool,
+}
+
+fn cpu_json_parts(
+    psi: Result<CpuPsiObservation, crate::psi::CpuPsiError>,
+    cpu: Result<CpuProcessObservation, crate::cpu::CpuError>,
+) -> CpuJsonParts {
+    let analysis = analysis::analyze_cpu(psi.as_ref().ok(), cpu.as_ref().ok());
+    match (psi, cpu) {
+        (Ok(psi), Ok(cpu)) => {
             let process_stat = crate::cpu::process_capability(&cpu.collection_issues).as_str();
             let process_schedstat = cpu.schedstat_capability;
-            let findings = analysis::analyze_cpu(Some(&observation), Some(&cpu)).findings;
-            to_json(&HuntJson {
-                schema_version: 1,
-                tool_version: env!("CARGO_PKG_VERSION"),
-                status: "observed",
-                requested_observation,
-                observation: Some(ObservationJson::from_parts(Some(observation), Some(cpu))),
-                capabilities: CapabilitiesJsonValue {
-                    cpu_psi: CapabilityJson {
-                        state: "available",
-                        message: CpuPsiCapability::Available.explanation(),
-                    },
-                    host_cpu: "available",
-                    process_stat,
-                    process_schedstat: CapabilityJson {
-                        state: process_schedstat.as_str(),
-                        message: process_schedstat.explanation(),
-                    },
-                },
-                findings,
-                qualifiers: Vec::new(),
-            })
+            CpuJsonParts {
+                psi: Some(psi),
+                cpu: Some(cpu),
+                psi_state: "available",
+                psi_message: CpuPsiCapability::Available.explanation(),
+                host_cpu: "available",
+                process_stat,
+                process_schedstat: process_schedstat.as_str(),
+                process_schedstat_message: process_schedstat.explanation(),
+                analysis,
+                qualifiers: vec![],
+                complete: true,
+            }
         }
         (Err(error), Ok(cpu)) => {
             let process_stat = crate::cpu::process_capability(&cpu.collection_issues).as_str();
             let process_schedstat = cpu.schedstat_capability;
-            to_json(&HuntJson {
-                schema_version: 1,
-                tool_version: env!("CARGO_PKG_VERSION"),
-                status: "incomplete",
-                requested_observation,
-                observation: Some(ObservationJson::from_parts(None, Some(cpu))),
-                capabilities: CapabilitiesJsonValue {
-                    cpu_psi: CapabilityJson {
-                        state: error.capability().as_str(),
-                        message: error.explanation(),
-                    },
-                    host_cpu: "available",
-                    process_stat,
-                    process_schedstat: CapabilityJson {
-                        state: process_schedstat.as_str(),
-                        message: process_schedstat.explanation(),
-                    },
-                },
-                findings: Vec::new(),
+            CpuJsonParts {
+                psi: None,
+                cpu: Some(cpu),
+                psi_state: error.capability().as_str(),
+                psi_message: error.explanation(),
+                host_cpu: "available",
+                process_stat,
+                process_schedstat: process_schedstat.as_str(),
+                process_schedstat_message: process_schedstat.explanation(),
+                analysis,
                 qualifiers: vec![QualifierJson {
                     kind: "capability_limit",
                     message: "CPU PSI was unavailable; host and process CPU evidence is retained without a diagnosis.",
                 }],
-            })
+                complete: false,
+            }
         }
-        (Ok(psi), Err(error)) => to_json(&HuntJson {
-            schema_version: 1,
-            tool_version: env!("CARGO_PKG_VERSION"),
-            status: "incomplete",
-            requested_observation,
-            observation: Some(ObservationJson::from_parts(Some(psi), None)),
-            capabilities: CapabilitiesJsonValue {
-                cpu_psi: CapabilityJson {
-                    state: "available",
-                    message: CpuPsiCapability::Available.explanation(),
-                },
-                host_cpu: "failed",
-                process_stat: "failed",
-                process_schedstat: CapabilityJson {
-                    state: "failed",
-                    message: "CPU process telemetry was unavailable.",
-                },
-            },
-            findings: analysis::analyze_cpu(Some(&psi), None).findings,
+        (Ok(psi), Err(error)) => CpuJsonParts {
+            psi: Some(psi),
+            cpu: None,
+            psi_state: "available",
+            psi_message: CpuPsiCapability::Available.explanation(),
+            host_cpu: "failed",
+            process_stat: "failed",
+            process_schedstat: "failed",
+            process_schedstat_message: "CPU process telemetry was unavailable.",
+            analysis,
             qualifiers: vec![QualifierJson {
                 kind: "collection_limit",
                 message: error.explanation(),
             }],
-        }),
-        (Err(error), Err(cpu_error)) => to_json(&HuntJson {
-            schema_version: 1,
-            tool_version: env!("CARGO_PKG_VERSION"),
-            status: "incomplete",
-            requested_observation,
-            observation: None,
-            capabilities: CapabilitiesJsonValue {
-                cpu_psi: CapabilityJson {
-                    state: error.capability().as_str(),
-                    message: error.explanation(),
-                },
-                host_cpu: "failed",
-                process_stat: "failed",
-                process_schedstat: CapabilityJson {
-                    state: "failed",
-                    message: "CPU process telemetry was unavailable.",
-                },
-            },
-            findings: Vec::new(),
+            complete: false,
+        },
+        (Err(error), Err(cpu_error)) => CpuJsonParts {
+            psi: None,
+            cpu: None,
+            psi_state: error.capability().as_str(),
+            psi_message: error.explanation(),
+            host_cpu: "failed",
+            process_stat: "failed",
+            process_schedstat: "failed",
+            process_schedstat_message: "CPU process telemetry was unavailable.",
+            analysis,
             qualifiers: vec![QualifierJson {
                 kind: "capability_limit",
                 message: cpu_error.explanation(),
             }],
-        }),
+            complete: false,
+        },
+    }
+}
+
+struct MemoryJsonParts {
+    psi: Option<MemoryPsiObservation>,
+    context: Option<MemoryContextObservation>,
+    psi_state: &'static str,
+    psi_message: &'static str,
+    meminfo: &'static str,
+    vmstat: &'static str,
+    analysis: crate::analysis::MemoryAnalysisResult,
+    qualifiers: Vec<QualifierJson<'static>>,
+    complete: bool,
+}
+
+fn memory_json_parts(memory: Option<&MemoryHuntObservation>) -> MemoryJsonParts {
+    let Some(memory) = memory else {
+        return MemoryJsonParts {
+            psi: None,
+            context: None,
+            psi_state: "not_observed",
+            psi_message: "Memory telemetry was not included in this injected observation.",
+            meminfo: "not_observed",
+            vmstat: "not_observed",
+            analysis: crate::analysis::MemoryAnalysisResult::default(),
+            qualifiers: vec![],
+            complete: true,
+        };
+    };
+    let analysis = analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok());
+    let (psi, psi_state, psi_message, psi_complete) = match &memory.psi {
+        Ok(psi) => {
+            let capability = match psi.interval.full {
+                MemoryPsiFullInterval::Available(_) => MemoryPsiCapability::Available,
+                _ => MemoryPsiCapability::Partial,
+            };
+            (
+                Some(*psi),
+                capability.as_str(),
+                psi.interval.full.explanation(),
+                capability == MemoryPsiCapability::Available,
+            )
+        }
+        Err(error) => (
+            None,
+            error.capability().as_str(),
+            memory_psi_error_explanation(*error),
+            false,
+        ),
+    };
+    let (context, meminfo, vmstat, context_complete) = match &memory.context {
+        Ok(context) => (
+            Some(context.clone()),
+            context.meminfo_capability.as_str(),
+            context.vmstat_capability.as_str(),
+            context.meminfo_capability == MemoryContextCapability::Available
+                && context.vmstat_capability == MemoryContextCapability::Available,
+        ),
+        Err(_) => (None, "failed", "failed", false),
+    };
+    let qualifiers = analysis
+        .qualifiers
+        .iter()
+        .map(|qualifier| QualifierJson {
+            kind: qualifier.kind,
+            message: qualifier.message,
+        })
+        .collect();
+    MemoryJsonParts {
+        psi,
+        context,
+        psi_state,
+        psi_message,
+        meminfo,
+        vmstat,
+        analysis,
+        qualifiers,
+        complete: psi_complete && context_complete,
     }
 }
 
@@ -405,7 +776,7 @@ struct HuntJson<'a> {
     requested_observation: RequestedObservation,
     observation: Option<ObservationJson>,
     capabilities: CapabilitiesJsonValue<'a>,
-    findings: Vec<crate::analysis::CpuFinding>,
+    findings: Vec<crate::analysis::Finding>,
     qualifiers: Vec<QualifierJson<'a>>,
 }
 
@@ -427,10 +798,19 @@ struct ObservationJson {
     process_collection_issues: Option<crate::cpu::ProcessCollectionIssues>,
     scheduler_delay_candidates: Option<Vec<crate::cpu::ProcessSchedulerDelayInterval>>,
     schedstat_collection_issues: Option<crate::cpu::SchedstatCollectionIssues>,
+    memory_psi_duration_us: Option<u128>,
+    memory_psi: Option<MemoryPsiJson>,
+    memory_context_duration_us: Option<u128>,
+    memory_context: Option<MemoryContextObservation>,
 }
 
 impl ObservationJson {
-    fn from_parts(psi: Option<CpuPsiObservation>, cpu: Option<CpuProcessObservation>) -> Self {
+    fn from_parts(
+        psi: Option<CpuPsiObservation>,
+        cpu: Option<CpuProcessObservation>,
+        memory_psi: Option<MemoryPsiObservation>,
+        memory_context: Option<MemoryContextObservation>,
+    ) -> Self {
         let (psi_duration_us, cpu_psi) = match psi {
             Some(observation) => (
                 Some(observation.interval.elapsed.as_micros()),
@@ -445,6 +825,48 @@ impl ObservationJson {
             ),
             None => (None, None),
         };
+        let (memory_psi_duration_us, memory_psi) = match memory_psi {
+            Some(observation) => {
+                let (full_fraction, full_total_delta_us, full_state) = match observation
+                    .interval
+                    .full
+                {
+                    MemoryPsiFullInterval::Available(interval) => (
+                        Some(interval.fraction),
+                        Some(interval.total_delta_us),
+                        "available",
+                    ),
+                    MemoryPsiFullInterval::Missing => (None, None, "missing"),
+                    MemoryPsiFullInterval::CounterRegressed => (None, None, "counter_regressed"),
+                    MemoryPsiFullInterval::DeltaExceedsElapsed => {
+                        (None, None, "delta_exceeds_elapsed")
+                    }
+                    MemoryPsiFullInterval::ExceedsSome => (None, None, "exceeds_some"),
+                };
+                (
+                    Some(observation.interval.elapsed.as_micros()),
+                    Some(MemoryPsiJson {
+                        some_fraction: observation.interval.some.fraction,
+                        some_percent: observation.interval.some.fraction * 100.0,
+                        some_total_delta_us: observation.interval.some.total_delta_us,
+                        full_fraction,
+                        full_percent: full_fraction.map(|fraction| fraction * 100.0),
+                        full_total_delta_us,
+                        full_state,
+                        some_avg10_percent: observation.end.some.avg10_percent,
+                        some_avg60_percent: observation.end.some.avg60_percent,
+                        some_avg300_percent: observation.end.some.avg300_percent,
+                        full_avg10_percent: observation.end.full.map(|line| line.avg10_percent),
+                        full_avg60_percent: observation.end.full.map(|line| line.avg60_percent),
+                        full_avg300_percent: observation.end.full.map(|line| line.avg300_percent),
+                    }),
+                )
+            }
+            None => (None, None),
+        };
+        let memory_context_duration_us = memory_context
+            .as_ref()
+            .map(|context| context.elapsed.as_micros());
         match cpu {
             Some(cpu) => Self {
                 psi_duration_us,
@@ -458,6 +880,10 @@ impl ObservationJson {
                 process_collection_issues: Some(cpu.collection_issues),
                 scheduler_delay_candidates: Some(cpu.scheduler_delay_candidates),
                 schedstat_collection_issues: Some(cpu.schedstat_collection_issues),
+                memory_psi_duration_us,
+                memory_psi,
+                memory_context_duration_us,
+                memory_context,
             },
             None => Self {
                 psi_duration_us,
@@ -471,6 +897,10 @@ impl ObservationJson {
                 process_collection_issues: None,
                 scheduler_delay_candidates: None,
                 schedstat_collection_issues: None,
+                memory_psi_duration_us,
+                memory_psi,
+                memory_context_duration_us,
+                memory_context,
             },
         }
     }
@@ -487,11 +917,31 @@ struct CpuPsiJson {
 }
 
 #[derive(Serialize)]
+struct MemoryPsiJson {
+    some_fraction: f64,
+    some_percent: f64,
+    some_total_delta_us: u64,
+    full_fraction: Option<f64>,
+    full_percent: Option<f64>,
+    full_total_delta_us: Option<u64>,
+    full_state: &'static str,
+    some_avg10_percent: f64,
+    some_avg60_percent: f64,
+    some_avg300_percent: f64,
+    full_avg10_percent: Option<f64>,
+    full_avg60_percent: Option<f64>,
+    full_avg300_percent: Option<f64>,
+}
+
+#[derive(Serialize)]
 struct CapabilitiesJsonValue<'a> {
     cpu_psi: CapabilityJson<'a>,
     host_cpu: &'a str,
     process_stat: &'a str,
     process_schedstat: CapabilityJson<'a>,
+    memory_psi: CapabilityJson<'a>,
+    meminfo: &'a str,
+    vmstat: &'a str,
 }
 
 #[derive(Serialize)]
@@ -560,7 +1010,11 @@ mod tests {
         CpuProcessObservation, HostCpuInterval, LoadAverageAvailability, LoadAverageRaw,
         ProcessCollectionIssues, ProcessCpuInterval, ProcessKey, ProcessSchedulerDelayInterval,
     };
-    use crate::psi::{CpuPsiInterval, CpuPsiRaw};
+    use crate::memory::{MeminfoRaw, VmstatIntervalIssues};
+    use crate::psi::{
+        CpuPsiInterval, CpuPsiRaw, MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval,
+        MemoryPsiRaw,
+    };
 
     fn observation() -> CpuPsiObservation {
         CpuPsiObservation {
@@ -622,6 +1076,81 @@ mod tests {
                 schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
                 schedstat_capability: crate::cpu::SchedstatCapability::Unsupported,
             }),
+            memory: None,
+        }
+    }
+
+    fn memory_hunt_observation(
+        some_fraction: f64,
+        full_fraction: Option<f64>,
+        context_available: bool,
+    ) -> MemoryHuntObservation {
+        let elapsed = Duration::from_secs(10);
+        let elapsed_us = elapsed.as_micros() as f64;
+        let some_delta = (some_fraction * elapsed_us) as u64;
+        let full_delta = full_fraction.map(|fraction| (fraction * elapsed_us) as u64);
+        let line = MemoryPsiLine {
+            avg10_percent: 0.0,
+            avg60_percent: 0.0,
+            avg300_percent: 0.0,
+            total_us: 0,
+        };
+        let psi = MemoryPsiObservation {
+            requested: elapsed,
+            interval: MemoryPsiInterval {
+                elapsed,
+                some: MemoryPsiLineInterval {
+                    total_delta_us: some_delta,
+                    fraction: some_fraction,
+                },
+                full: full_delta.map_or(MemoryPsiFullInterval::Missing, |total_delta_us| {
+                    MemoryPsiFullInterval::Available(MemoryPsiLineInterval {
+                        total_delta_us,
+                        fraction: full_fraction.unwrap(),
+                    })
+                }),
+            },
+            start: MemoryPsiRaw {
+                some: line,
+                full: full_delta.map(|_| line),
+            },
+            end: MemoryPsiRaw {
+                some: MemoryPsiLine {
+                    total_us: some_delta,
+                    ..line
+                },
+                full: full_delta.map(|total_us| MemoryPsiLine { total_us, ..line }),
+            },
+        };
+        let context = if context_available {
+            let mut deltas = std::collections::BTreeMap::new();
+            for counter in VmstatCounter::ALL {
+                deltas.insert(counter, 0);
+            }
+            deltas.insert(VmstatCounter::ScanDirect, 100);
+            deltas.insert(VmstatCounter::StealDirect, 80);
+            Ok(MemoryContextObservation {
+                elapsed,
+                end_meminfo: Some(MeminfoRaw {
+                    mem_total_bytes: 1_000_000,
+                    mem_available_bytes: 50_000,
+                    swap_total_bytes: 100_000,
+                    swap_free_bytes: 100_000,
+                    cached_bytes: Some(300_000),
+                    sreclaimable_bytes: Some(10_000),
+                    anon_pages_bytes: Some(500_000),
+                }),
+                meminfo_capability: MemoryContextCapability::Available,
+                vmstat_capability: MemoryContextCapability::Available,
+                vmstat_deltas: deltas,
+                vmstat_issues: VmstatIntervalIssues::default(),
+            })
+        } else {
+            Err(crate::memory::MemoryContextError::Unreadable)
+        };
+        MemoryHuntObservation {
+            psi: Ok(psi),
+            context,
         }
     }
 
@@ -676,6 +1205,7 @@ mod tests {
             |_| HuntObservation {
                 psi: Ok(observation()),
                 cpu: Err(crate::cpu::CpuError::Unreadable),
+                memory: None,
             },
         ))
         .unwrap();
@@ -692,6 +1222,7 @@ mod tests {
             |_| HuntObservation {
                 psi: Ok(observation()),
                 cpu: Err(crate::cpu::CpuError::Unreadable),
+                memory: None,
             },
         );
         assert!(partial_text.contains("CPU interval context is unavailable"));
@@ -717,6 +1248,126 @@ mod tests {
     }
 
     #[test]
+    fn memory_finding_is_ranked_and_rendered_with_host_wide_limits() {
+        let mut observation = hunt_observation();
+        let cpu_psi = observation.psi.as_mut().unwrap();
+        cpu_psi.interval.some_fraction = 0.005;
+        cpu_psi.interval.total_delta_us = 50_000;
+        observation.memory = Some(memory_hunt_observation(0.08, Some(0.01), true));
+        let text = hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+            },
+            |_| observation,
+        );
+        assert!(
+            text.starts_with("Memory pressure observed with correlated direct reclaim activity")
+        );
+        assert!(text.contains("Verdict: reclaim pressure · severity moderate"));
+        assert!(text.contains("Attribution: unavailable (host-wide evidence only)"));
+        assert!(text.contains("occupancy is context and is not itself evidence"));
+
+        let mut observation = hunt_observation();
+        let cpu_psi = observation.psi.as_mut().unwrap();
+        cpu_psi.interval.some_fraction = 0.005;
+        cpu_psi.interval.total_delta_us = 50_000;
+        observation.memory = Some(memory_hunt_observation(0.08, Some(0.01), true));
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| observation,
+        ))
+        .unwrap();
+        assert_eq!(json["findings"][0]["resource"], "memory");
+        assert_eq!(json["findings"][0]["kind"], "memory_reclaim_pressure");
+        assert_eq!(json["observation"]["memory_psi"]["full_state"], "available");
+        assert_eq!(json["capabilities"]["memory_psi"]["state"], "available");
+        assert!(json["observation"]["memory_context"]["elapsed"].is_null());
+    }
+
+    #[test]
+    fn memory_partial_and_missing_telemetry_never_create_a_false_negative() {
+        let mut partial = hunt_observation();
+        partial.memory = Some(memory_hunt_observation(0.08, None, false));
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| partial,
+        ))
+        .unwrap();
+        let memory_finding = json["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["resource"] == "memory")
+            .unwrap();
+        assert_eq!(memory_finding["kind"], "memory_pressure");
+        assert_eq!(json["capabilities"]["memory_psi"]["state"], "partial");
+        assert_eq!(json["status"], "incomplete");
+
+        let mut missing = hunt_observation();
+        missing.memory = Some(MemoryHuntObservation {
+            psi: Err(crate::psi::MemoryPsiError::PermissionDenied),
+            context: memory_hunt_observation(0.0, Some(0.0), true).context,
+        });
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| missing,
+        ))
+        .unwrap();
+        assert!(
+            json["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|finding| finding["resource"] != "memory")
+        );
+        assert_eq!(
+            json["capabilities"]["memory_psi"]["state"],
+            "permission_denied"
+        );
+        assert_eq!(json["status"], "incomplete");
+    }
+
+    #[test]
+    fn memory_partial_capability_message_describes_an_invalid_full_interval() {
+        let mut observation = hunt_observation();
+        let mut memory = memory_hunt_observation(0.08, Some(0.01), true);
+        memory.psi.as_mut().unwrap().interval.full = MemoryPsiFullInterval::CounterRegressed;
+        observation.memory = Some(memory);
+
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| observation,
+        ))
+        .unwrap();
+
+        assert_eq!(json["capabilities"]["memory_psi"]["state"], "partial");
+        assert!(
+            json["capabilities"]["memory_psi"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("cumulative total decreased")
+        );
+        assert!(json["observation"]["memory_psi"]["some_fraction"].is_number());
+        assert_eq!(
+            json["observation"]["memory_psi"]["full_state"],
+            "counter_regressed"
+        );
+    }
+
+    #[test]
     fn hunt_reports_unavailable_cpu_psi_explicitly() {
         let output = hunt(
             &HuntOptions {
@@ -726,6 +1377,7 @@ mod tests {
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
                 cpu: Err(crate::cpu::CpuError::Malformed),
+                memory: None,
             },
         );
         assert!(output.contains("Capability: CPU PSI failed"));
@@ -742,6 +1394,7 @@ mod tests {
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
                 cpu: hunt_observation().cpu,
+                memory: None,
             },
         );
         assert!(output.contains("CPU assessment unavailable"));
@@ -983,6 +1636,7 @@ mod tests {
             |_| HuntObservation {
                 psi: Ok(observation),
                 cpu: Ok(cpu),
+                memory: None,
             },
         );
         assert_eq!(
@@ -1010,6 +1664,11 @@ mod tests {
                     host_cpu: crate::cpu::CollectorCapability::Available,
                     process_stat: crate::cpu::CollectorCapability::Available,
                     process_schedstat: crate::cpu::SchedstatCapability::Unsupported,
+                },
+                MemoryPsiCapability::Available,
+                MemoryContextCapabilities {
+                    meminfo: MemoryContextCapability::Available,
+                    vmstat: MemoryContextCapability::Available,
                 },
             );
             assert!(output.contains(&format!("CPU PSI: {}", capability.as_str())));

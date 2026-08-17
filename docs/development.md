@@ -2,7 +2,8 @@
 
 ## Current state
 
-The repository contains the completed Milestone 1 CPU contention slice.
+The repository contains the completed Milestone 1 CPU slice and an in-progress
+M2 host-memory slice.
 
 Build and run it from the repository root:
 
@@ -12,7 +13,16 @@ cargo run -- hunt --duration 1s
 cargo run -- capabilities --json
 ```
 
-`hunt` performs a bounded two-snapshot CPU PSI, host CPU/load, process CPU, and
+`hunt` performs bounded CPU PSI, host CPU/load, process CPU, scheduler-accounting,
+memory PSI, meminfo, and vmstat observations around one requested sleep. CPU
+and memory collectors each retain their own measured interval because the reads
+are sequential. The memory analyzer uses exact memory PSI `some` for its
+verdict; `full` is non-additive subset context, while meminfo/vmstat only
+classify/contextualize the result. Memory findings are host-wide and make no
+process attribution. M2 deterministic fixtures and a healthy live smoke pass,
+but controlled harmful-pressure validation remains required.
+
+The CPU analyzer uses a bounded two-snapshot CPU PSI, host CPU/load, process CPU, and
 task scheduler-accounting observation. The pure CPU analyzer uses only a valid
 exact-interval CPU PSI `some` value for its resource verdict. The effective
 diagnostic and resource-confidence window is the shorter of requested and

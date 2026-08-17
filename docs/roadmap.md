@@ -117,7 +117,9 @@ On a controlled CPU-saturation scenario, the tool identifies CPU contention and 
 
 ## Milestone 2 — Memory pressure
 
-Status: next.
+Status: in progress. The first host-memory collector/analyzer/output slice and
+deterministic fixtures exist; safe controlled harmful-pressure validation is
+still required.
 
 Goal:
 
