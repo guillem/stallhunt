@@ -9,7 +9,7 @@ The model must support:
 - evidence-backed findings,
 - explicit confidence,
 - process lifetime safety,
-- future recording/replay,
+- recording/replay,
 - human and JSON rendering.
 
 ## Time model
@@ -379,7 +379,9 @@ resource. Healthy and insufficient observations do not create identities.
 Missing data leaves an active identity persistent and unconfirmed. A cgroup
 lifecycle `kind` names the scoped resource and any reclaim, swap, possible-
 thrashing, or CPU quota-throttle label; changing that label does not create a
-new identity.
+new identity. Host memory lifecycle kinds likewise distinguish generic,
+reclaim, swap, and possible-thrashing pressure while preserving the single host
+memory identity. The complete pressure-kind catalog is in `cli-ux.md`.
 
 Watch JSON `kind` is `bottleneck.watch_window`. It is not replayable as a
 recording and does not carry full evidence.

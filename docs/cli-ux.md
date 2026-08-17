@@ -186,6 +186,21 @@ a mechanism change stays `persistent`. Use
 `hunt --json` or `record` when the full evidence payload is required. Invalid
 `--count` still exits 2.
 
+Tracked watch pressure kinds are:
+
+- host: `cpu_scheduling_contention`, `memory_pressure`,
+  `memory_reclaim_pressure`, `memory_swap_pressure`,
+  `memory_possible_thrashing`, and `io_pressure`;
+- cgroup: `cgroup_cpu_pressure`, `cgroup_cpu_quota_throttle_pressure`,
+  `cgroup_memory_pressure`, `cgroup_memory_reclaim_pressure`,
+  `cgroup_memory_swap_pressure`, `cgroup_memory_possible_thrashing`, and
+  `cgroup_io_pressure`.
+
+Healthy, unavailable, and insufficient kinds can appear in the compact current
+window summary but do not create tracked identities. A mechanism change updates
+the lifecycle row's `kind` while preserving host-resource identity or cgroup
+path-plus-resource identity.
+
 ## Human output structure
 
 Current `hunt` text output is concise and finding-first. It shows the CPU

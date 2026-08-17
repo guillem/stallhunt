@@ -4,7 +4,10 @@
 
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
 block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, and the
-first two Milestone 8 evidence-chain slices.
+first two Milestone 8 evidence-chain slices. Scoped cgroup findings can also
+carry reclaim, swap, possible-thrashing, or quota-throttle context labels. The
+repository is currently parked pending selection of another concrete diagnostic
+question; see `status.md`.
 
 Build and run it from the repository root:
 
@@ -63,27 +66,30 @@ When a minimum supported Rust version is chosen, record it here and potentially 
 
 ## Default quality gates
 
-Once Rust code exists:
+After dependencies are available in the local Cargo cache:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
 ```
 
 Add targeted commands as the project evolves.
 
-The executable integration tests are in `tests/cli.rs`; the opt-in rootless
-host-workload tests are `tests/cpu_acceptance.rs`, `tests/io_acceptance.rs`, and
-`tests/memory_acceptance.rs`; parser and renderer unit tests live beside their
-implementations. Acceptance tests serialize their host workloads and should run
-only when intentionally creating bounded pressure:
+The executable integration tests are in `tests/cli.rs`; opt-in Linux acceptance
+tests are `tests/cpu_acceptance.rs`, `tests/io_acceptance.rs`,
+`tests/memory_acceptance.rs`, and `tests/cgroup_acceptance.rs`; parser and
+renderer unit tests live beside their implementations. Host-pressure acceptance
+tests serialize their workloads and should run only when intentionally creating
+bounded pressure:
 
 ```bash
 cargo test --test cpu_acceptance -- --ignored
 cargo test --test io_acceptance -- --ignored
 BOTTLENECK_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
   cargo test --locked --offline --test memory_acceptance -- --ignored --nocapture
+BOTTLENECK_CGROUP_ACCEPTANCE_PATH=/absolute/cgroup/path \
+  cargo test --locked --offline --test cgroup_acceptance -- --ignored --nocapture
 ```
 
 The memory acceptance path must be a caller-owned, writable delegated cgroup-v2
@@ -223,27 +229,14 @@ When code depends on a kernel field definition, include a concise source/referen
 
 ## Unsafe code
 
-Unsafe Rust is not prohibited, but requires justification.
-
-Before adding unsafe:
-
-- identify why safe APIs are insufficient,
-- localize the unsafe boundary,
-- document invariants,
-- test boundary conditions.
-
-An ADR is appropriate if unsafe/FFI becomes a significant architectural mechanism.
+The current package forbids unsafe Rust through `Cargo.toml`. Introducing any
+unsafe or FFI boundary requires an explicit project decision before changing
+that lint. The decision must identify why safe APIs are insufficient, localize
+and document the invariants, and define boundary tests. A significant unsafe or
+FFI mechanism requires an ADR.
 
 ## Generated code
 
 Avoid build-time code generation unless it removes meaningful maintenance burden.
-
-The current local validation commands are:
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
-cargo test --locked --offline --workspace --all-features
-```
 
 If future eBPF bindings/BTF tooling generates artifacts, document exactly what is generated, from what source, and whether generated files are committed.

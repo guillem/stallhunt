@@ -42,6 +42,11 @@ Neither is a rolling lifecycle document.
   `--count`, the process runs until interrupted; SIGINT uses default
   termination.
 
+Later additive mechanism labels refine the lifecycle row's `kind` without
+changing identity: host identity remains resource, and cgroup identity remains
+path plus resource. The current pressure-kind catalog is maintained in
+`docs/cli-ux.md`.
+
 ## Consequences
 
 Positive:

@@ -355,7 +355,7 @@ Do not sum unrelated short-lived processes solely by command name without making
 
 ## Cgroup design
 
-M4 will use cgroup v2 only (ADR-0006). It will discover the mounted hierarchy rather
+M4 uses cgroup v2 only (ADR-0006). It discovers the mounted hierarchy rather
 than assuming `/sys/fs/cgroup`, uses the unified `0::` membership entry, and
 reads selected mapped cgroups plus ancestors rather than an arbitrary tree.
 

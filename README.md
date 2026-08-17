@@ -10,6 +10,48 @@ Traditional tools such as `top`, `htop`, `iotop`, `vmstat`, and `iostat` expose 
 
 Bottleneck Finder aims to automate that reasoning.
 
+## Quickstart
+
+Requirements:
+
+- Linux with procfs mounted; readable PSI files under `/proc/pressure` are
+  required for pressure verdicts,
+- a stable Rust toolchain with Cargo.
+
+Baseline collection is designed to run as an ordinary user. There is no
+packaged installation yet, so run it through Cargo from a clone:
+
+```bash
+cargo run --locked -- capabilities
+cargo run --locked -- hunt --duration 10s
+```
+
+Use JSON when the complete structured evidence is needed:
+
+```bash
+cargo run --locked -- hunt --duration 10s --json
+```
+
+Capture and replay a normalized observation:
+
+```bash
+cargo run --locked -- record --duration 10s --output incident.json
+cargo run --locked -- replay incident.json
+cargo run --locked -- redact incident.json --output incident.redacted.json
+```
+
+Follow finding lifecycle for a bounded number of rolling windows:
+
+```bash
+cargo run --locked -- watch --interval 2s --count 3
+```
+
+Recording output paths are not overwritten unless `--force` is supplied.
+Ten-second hunts are the normal diagnostic path; sub-second observations are
+telemetry smoke tests and do not receive healthy or pressure verdicts. See
+[`docs/development.md`](docs/development.md) for validation and opt-in
+acceptance commands.
+
 ## Core idea
 
 The primary abstraction is **lost time**, not utilization.
@@ -23,7 +65,7 @@ High utilization is not automatically a problem. A machine using 95% of its RAM 
 - network-related waits,
 - eventually deeper blocking chains.
 
-A future invocation might look like:
+The long-term installed-binary output target looks like:
 
 ```text
 $ bottleneck hunt --duration 10s
@@ -75,7 +117,7 @@ The first useful release targets Linux and focuses on:
 - per-process attribution where Linux exposes enough evidence,
 - cgroup/systemd-aware grouping when practical,
 - human-readable terminal output,
-- stable machine-readable JSON,
+- versioned machine-readable JSON (the pre-1.0 shape may evolve),
 - bounded observation windows,
 - deterministic offline fixture/replay analysis.
 
@@ -97,8 +139,10 @@ Later releases may add:
 ├── README.md
 ├── src/
 │   ├── analysis.rs
+│   ├── cgroup.rs
 │   ├── cli.rs
 │   ├── cpu.rs
+│   ├── duration_us.rs
 │   ├── io.rs
 │   ├── main.rs
 │   ├── memory.rs
@@ -108,7 +152,11 @@ Later releases may add:
 │   ├── render.rs
 │   └── watch.rs
 ├── tests/
+│   ├── cgroup_acceptance.rs
 │   ├── cli.rs
+│   ├── cpu_acceptance.rs
+│   ├── io_acceptance.rs
+│   ├── memory_acceptance.rs
 │   └── fixtures/
 │       ├── cpu/
 │       └── proc-*
@@ -153,16 +201,6 @@ including provisional severity and explicit no-meaningful-contention results.
 It ranks scheduler-delay victim candidates and same-window CPU-consumer suspect
 candidates with qualifiers; neither role is a causal claim. `capabilities` also
 reports scheduler accounting state.
-
-Run the current binary with:
-
-```bash
-cargo run -- hunt --duration 1s
-cargo run -- capabilities
-cargo run -- record --duration 1s --output /tmp/incident.json
-cargo run -- replay /tmp/incident.json
-cargo run -- watch --interval 1s --count 2
-```
 
 CPU inference remains conservative: only exact-interval CPU PSI `some`
 determines whether contention exists. A valid interval below 1% reports no
@@ -224,16 +262,16 @@ and process keys.
 M6 adds `watch`. Rolling windows reuse the previous endpoint snapshot. The
 command tracks host CPU/memory/I/O and a bounded set of cgroup pressure
 findings as new, persistent, or resolved. Scoped cgroup `kind` values name the
-resource and any reclaim, swap, possible-thrashing, or quota-throttle label. TTY text refreshes the
-screen; JSON emits one compact `bottleneck.watch_window` object per window.
-Watch is not a
-TUI and is not a recording. Full evidence remains on `hunt --json` and
-`record`.
+resource and any reclaim, swap, possible-thrashing, or quota-throttle label.
+TTY text refreshes the screen; JSON emits one compact
+`bottleneck.watch_window` object per window. Watch is not a TUI and is not a
+recording. Full evidence remains on `hunt --json` and `record`.
 
 M8 adds a conservative evidence chain: when memory reclaim, swap, or possible
 thrashing coexists with I/O pressure, hunt text and JSON may report that the
 memory finding is consistent with the I/O finding. The same relation may also
 join same-cgroup memory and I/O pressure when that cgroup's `memory.events`
-show a high or max delta or `memory.stat` shows direct reclaim or swap-in. Coincident PSI without that independent mechanism is
-not a chain. The relation is not a causal claim, does not join host findings to
-cgroup findings, and is not tracked by watch.
+show a high or max delta or `memory.stat` shows direct reclaim or swap-in.
+Coincident PSI without that independent mechanism is not a chain. The relation
+is not a causal claim, does not join host findings to cgroup findings, and is
+not tracked by watch.

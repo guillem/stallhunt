@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-08-17
+- Extended by: ADR-0011, which additionally permits selected `memory.stat`
+  direct-reclaim and swap-in deltas as the independent mechanism gate
 
 ## Context
 
@@ -28,13 +30,18 @@ already-produced findings when all of the following hold:
 - one finding is memory and the other is I/O,
 - that memory finding has a positive `memory.events` `high` or `max` delta.
 
+ADR-0011 later extends the final gate with selected `memory.stat` page deltas.
+The same-path, pressure-verdict, confidence, output, and non-causality rules in
+this ADR remain in force.
+
 The relation vocabulary remains `consistent_with`. Confidence is always `low`
 and never `high`. Hunt text and hunt/replay JSON expose these chains beside the
 host chain. Watch still does not track chain identities.
 
 The chain must not:
 
-- form from coincident cgroup PSI without a high/max event delta,
+- form from coincident cgroup PSI without a high/max event delta or the
+  additional independent mechanism evidence accepted by ADR-0011,
 - link a host finding to a cgroup finding,
 - link two different cgroup paths, including ancestor and child,
 - relate CPU pressure to I/O pressure,

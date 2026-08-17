@@ -41,8 +41,10 @@ M4 reads only from the caller-visible cgroup2 mount and procfs membership files;
 it does not create, move, configure, or delete cgroups. Mount namespaces and
 delegation may intentionally hide ancestors or controller files. Such absence is
 reported as partial capability/context rather than worked around with privilege
-escalation. Bounded membership-first reads (1,024 PIDs, 2,048 groups plus depth,
-path, and file-byte limits) protect against a large or adversarial hierarchy.
+escalation. The implementation bounds membership-first reads to 256 PIDs and
+512 groups, plus depth, path, file-byte, snapshot-byte, and read-attempt limits.
+These are more conservative than ADR-0006's 1,024-PID/2,048-group ceilings and
+protect against a large or adversarial hierarchy.
 
 Cgroup paths and inferred unit names can disclose service, user, or container
 structure. They are sensitive collection output alongside process names and

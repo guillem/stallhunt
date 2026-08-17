@@ -183,9 +183,11 @@ Make findings useful on modern service/container hosts.
 Deliver:
 
 - cgroup-v2 mount discovery using mountinfo and `0::` unified membership only;
-- stat-cgroup-stat stable mapping for at most 1,024 selected PIDs;
-- mapped cgroups plus ancestors only, capped at 2,048 groups with depth/path/
-  file-byte budgets;
+- stat-cgroup-stat stable mapping under ADR-0006's 1,024-PID ceiling; the
+  implementation currently selects at most 256 PIDs;
+- mapped cgroups plus ancestors only under ADR-0006's 2,048-group ceiling; the
+  implementation currently retains at most 512 groups with depth/path/
+  file-byte, snapshot-byte, and read-attempt budgets;
 - scoped per-cgroup PSI verdicts plus CPU/memory/I/O controller context where
   readable;
 - additive pre-1.0 JSON and explicit partial-permission/controller qualifiers;
@@ -249,12 +251,14 @@ Potential Rust ecosystem: Aya, subject to a current technical evaluation and ADR
 
 ## Milestone 8 — Evidence graph / multi-resource chains
 
-Status: two conservative slices complete. The implemented path relates a
+Status: two conservative chain slices complete. The implemented path relates a
 memory mechanism finding to host I/O pressure, and same-cgroup memory plus I/O
-pressure, as `consistent_with` (ADR-0009, ADR-0010, ADR-0011). It does not claim
-causality, does not map processes to devices, does not link host and cgroup
-findings, and does not track chains in watch. CPU–I/O and host–cgroup chains
-remain unimplemented.
+pressure, as `consistent_with` (ADR-0009, ADR-0010, ADR-0011). Already-pressured
+cgroup findings can also carry reclaim, swap, possible-thrashing, or CPU
+quota-throttle mechanism labels from scoped counters; those labels are context,
+not additional chains. The implementation does not claim causality, map
+processes to devices, link host and cgroup findings, or track chains in watch.
+CPU–I/O and host–cgroup chains remain unimplemented.
 
 Goal:
 

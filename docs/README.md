@@ -4,9 +4,12 @@ This directory is the durable design and project-memory layer.
 
 Milestones 1–6 are functionally complete. Milestone 8's first two conservative
 evidence-chain slices relate memory mechanism pressure to I/O pressure, first
-host-wide and then same-cgroup, without claiming causality. `status.md` is the
-authoritative current-state record, while
-`experiments.md` retains the controlled validation and overhead evidence.
+host-wide and then same-cgroup, without claiming causality. Scoped cgroup
+findings can also carry reclaim, swap, possible-thrashing, or quota-throttle
+context labels without creating pressure. The repository is currently parked;
+`status.md` is the authoritative record of implemented behavior, pending work,
+and the gate for selecting a future slice. `experiments.md` retains controlled
+validation and overhead evidence.
 
 ## Read this first
 

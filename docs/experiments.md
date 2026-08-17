@@ -67,13 +67,12 @@ What durable design conclusion follows?
 Tests, threshold changes, missing telemetry, or open questions.
 ```
 
-## Planned CPU experiments
+## CPU experiment status
 
 ### CPU-1: idle/healthy
 
-Goal:
-
-Ensure low CPU activity produces no contention finding.
+Complete through the clean rootless acceptance path in EXP-0001 plus
+deterministic healthy fixtures.
 
 ### CPU-2: busy but not meaningfully pressured
 
@@ -81,35 +80,25 @@ Goal:
 
 Demonstrate that high utilization alone does not necessarily trigger a severe finding.
 
-Exact workload will depend on CPU topology and scheduler behavior.
+Deterministic busy-but-not-pressured coverage passes. A controlled live workload
+that is busy while remaining below the PSI threshold has not been recorded.
 
 ### CPU-3: oversubscribed CPU
 
-Setup concept:
-
-- determine available logical CPUs,
-- run more CPU-bound workers than CPUs,
-- observe sustained CPU PSI,
-- include at least one identifiable victim process.
-
-Expected:
-
-- CPU contention found,
-- elevated severity,
-- major CPU consumers appear as suspects,
-- schedstat-capable victims show runnable delay.
+Complete through the bounded rootless oversubscription path in EXP-0001.
 
 ### CPU-4: missing schedstat
 
-Goal:
-
-Verify CPU resource diagnosis remains possible while victim attribution confidence decreases.
+Deterministic missing-schedstat fixture coverage verifies that the resource
+diagnosis remains while victim attribution is omitted or reduced.
 
 ### CPU-5: short transient spike
 
 Goal:
 
 Determine how observation duration and transient PSI should affect severity/confidence.
+
+Still open as a controlled transient host experiment.
 
 ## Planned memory experiments
 
@@ -437,6 +426,47 @@ Python many_pids helper is the supported path. Measuring the 4,096-PID or
 16,384-task caps would require a dedicated, quota-aware setup and is not
 justified by this workstation result.
 
+## EXP-0008: Deterministic scoped possible-thrashing validation
+
+Date: 2026-08-17. Commit: `9583404`.
+
+### Question
+
+Can already-collected cgroup PSI and `memory.stat` counters label an existing
+scoped memory-pressure verdict as possible thrashing without creating pressure
+or claiming causality?
+
+### Setup
+
+Deterministic analyzer inputs supplied high or severe cgroup PSI `some`, valid
+`full` of at least 1%, a PSI window of at least five seconds, and direct-scan,
+direct-steal, swap-in, and swap-out deltas at or above 1,024 pages/second over
+the independent cgroup observation interval. Negative cases varied the
+observation rate, PSI duration/severity, `full` validity, reclaim conjunction,
+and presence of a PSI-backed pressure verdict.
+
+### Result
+
+Pass. Analyzer coverage accepted only the full conjunction, assigned medium
+mechanism confidence, retained `CgroupAssessmentKind::Pressure`, and rejected
+short, moderate, missing/invalid-`full`, scan-without-steal, and no-pressure
+cases. Hunt text/JSON and watch kind
+`cgroup_memory_possible_thrashing` were also validated. The full deterministic
+gate then contained 148 unit tests and ten CLI tests; five Linux acceptance
+tests remained ignored by default.
+
+### Conclusion
+
+The scoped label is a fixture-validated heuristic using existing telemetry. It
+is not a causal claim, a new verdict, or a new evidence chain. Page rates use
+the cgroup observation interval rather than the PSI interval.
+
+### Follow-up
+
+No controlled live scoped-thrashing result exists. Do not substitute
+unconstrained host pressure; any live follow-up requires a caller-owned,
+bounded delegated cgroup setup.
+
 ## Deterministic negative coverage
 
 Busy-but-not-pressured avoidance is deterministic normalized analyzer coverage,
@@ -455,6 +485,7 @@ were not reached.
 M2 now has both a healthy-host smoke (EXP-0003) and a delegated-cgroup
 harmful-pressure acceptance (EXP-0006). The latter produced high-severity
 `memory_swap_pressure` from exact host PSI `some` without unconstrained
-host-wide allocation. Reclaim-only and possible-thrashing labels remain
-fixture-validated. M3's competing-I/O acceptance (EXP-0004) remains the
-block-I/O exit evidence.
+host-wide allocation. Host reclaim-only and host possible-thrashing labels
+remain fixture-validated. EXP-0008 records deterministic scoped possible-
+thrashing validation, not a live pressure run. M3's competing-I/O acceptance
+(EXP-0004) remains the block-I/O exit evidence.

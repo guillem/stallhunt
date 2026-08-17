@@ -37,15 +37,18 @@ Milestones 1–6 are implemented. The current recommended Codex session is:
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Do not start Milestone 7 merely because eBPF is interesting. Add a probe only
-to resolve a concrete diagnostic uncertainty that the current collectors cannot
-answer. If no such question is ready, the next product work is Milestone 8
-evidence chains, still without treating correlation as certainty.
+The repository is parked after two conservative Milestone 8 evidence-chain
+slices and scoped memory/CPU mechanism labels. Read the Pending work and Current
+recommended next task sections in docs/status.md. Do not begin implementation
+until one concrete diagnostic question and its required independent evidence
+have been written down.
 
-M6 `watch` is available as a finding-lifecycle command. If no eBPF question is
-ready, continue Milestone 8 only when another independent path is defensible.
-Do not treat same-window PSI coincidence as a chain. Update docs/status.md
-and any affected design docs.
+Do not start Milestone 7 merely because eBPF is interesting. Add a probe only
+when current `/proc`, PSI, and cgroup collectors cannot answer the selected
+question. Continue Milestone 8 only when another independent linking path is
+defensible. Do not treat same-window PSI coincidence as a chain, link host
+findings to cgroup findings, or add CPU–I/O without linking evidence. Update
+docs/status.md and affected design docs with any resumed slice.
 ```
 
 ## Session discipline

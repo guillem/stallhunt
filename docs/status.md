@@ -63,7 +63,8 @@ the test process and does not mutate the hierarchy.
 
 - A single stable-Rust package builds the `bottleneck` binary.
 - The package forbids unsafe Rust.
-- Real `hunt`, `watch`, `capabilities`, help, and version command structure exists.
+- Real `hunt`, `watch`, `record`, `replay`, `redact`, `capabilities`, help, and
+  version command structure exists.
 - `hunt` accepts `--duration` values from 100 ms through 5 minutes, including
   exact-millisecond decimal values, and defaults to 10 seconds.
 - `hunt` and `capabilities` support separate text and JSON render paths.
@@ -230,9 +231,9 @@ the test process and does not mutate the hierarchy.
   (high or severe `some`, at least 1% valid `full`, a 5s PSI window, and
   material bidirectional swap plus direct-reclaim rates over the cgroup
   observation interval) and has medium mechanism confidence. `memory.events`
-  high/max do not label the finding. Scan without steal is unlabeled reclaim.
-  Page counters without PSI do not create pressure. Watch still keys off
-  `Pressure`.
+  high/max do not label the finding. Scan without steal does not produce a
+  reclaim label. Page counters without PSI do not create pressure. Watch still
+  keys off `Pressure`.
 - Scoped CPU pressure findings may be labeled quota-throttle from an already
   collected `cpu.stat` `throttled_usec` delta. PSI still creates the verdict;
   `CgroupAssessmentKind` remains `Pressure`. Mechanism confidence is low.
@@ -258,7 +259,6 @@ the test process and does not mutate the hierarchy.
   110--210 ms PSI-window skew on a one-second hunt. The 4,096-PID and 16,384-task
   caps were not reached.
 - No CI workflow or packaging configuration exists; validation is local.
-- No CI workflow or packaging configuration exists; validation is local.
 - M2's live harmful-pressure run used a delegated 128/256 MiB child and an
   owned 192 MiB `stress-ng --vm` allocator. It produced 21–24% host memory PSI
   `some` and `memory_swap_pressure` over a ~2.15 s window. That swap label is
@@ -278,9 +278,6 @@ the test process and does not mutate the hierarchy.
   reusing the existing CPU or process-I/O selection. EXP-0007 found that walk
   already at its 256-PID cap on a 370-PID host (94 groups, partial completeness).
   Extra high-numbered helper PIDs did not increase the selected cgroup set.
-- JSON serialization now succeeds for cgroup I/O device maps, but the generic
-  serializer fallback still suppresses the underlying error and emits only
-  `{"status":"serialization_failed"}` if a future shape cannot serialize.
 - M5 recordings are pre-1.0 and may become unreadable after a schema change.
   Identifier redaction is not cryptographic anonymization: PIDs, start times,
   major/minor keys, and path shape remain. Duration replay uses integer
@@ -307,17 +304,76 @@ the test process and does not mutate the hierarchy.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
-  contention threshold is still listed as planned in `docs/experiments.md`.
+  contention threshold remains an open experiment in `docs/experiments.md`.
 - CPU thresholds are provisional and event telemetry is still required for
   stronger causal attribution.
 
+## Pending work
+
+The repository is intentionally parked after the scoped possible-thrashing
+slice. No additional M8 chain or M7 probe is approved.
+
+Diagnostic and attribution gaps:
+
+- host memory findings still have no process attribution;
+- I/O findings still have no affected-workload attribution or process-to-device
+  mapping;
+- event-level scheduler, off-CPU, block-request, lock, and network evidence is
+  absent because M7 has not started;
+- CPU–I/O, host–cgroup, cross-cgroup, and process-device chains remain
+  unsupported; coincident PSI is not evidence for any of them;
+- watch does not track evidence chains, retain full evidence, or produce a
+  multi-window recording.
+
+Validation gaps:
+
+- scoped reclaim, swap, possible-thrashing, and quota-throttle labels are
+  deterministic-test validated but do not have a controlled live scoped-
+  pressure acceptance result;
+- the cgroup acceptance test is opt-in observational coverage and requires a
+  caller-owned delegated subtree;
+- host reclaim-only and possible-thrashing remain fixture-validated, while the
+  live memory acceptance exercised swap pressure;
+- a controlled live busy-but-not-pressured CPU workload remains unrecorded;
+- severity thresholds are provisional rather than portable guarantees;
+- deterministic coverage does not yet exercise the 16-chain truncation order,
+  schema-1 recording decode without `memory_stat`, host-memory watch kind
+  transitions, or invalid host `full` blocking possible-thrashing.
+
+Operational and delivery gaps:
+
+- cgroup collection reaches its 256-PID selection cap on the measured
+  workstation, so scoped context is partial and can omit higher-PID groups;
+- unlimited watch has no graceful SIGINT drain;
+- recordings are single-window, pre-1.0, and have no compatibility promise;
+- CI, packaging, a license, a minimum Rust version, and a minimum supported
+  Linux baseline are undecided or absent.
+
+## Known bugs
+
+- `watch` can report an active cgroup finding as `resolved` when that scope is
+  still pressured but falls below the current window's top-16 cgroup ranking.
+  The path remains in `observed_cgroup_paths`, while the capped pressure map
+  omits its identity, so lifecycle classification mistakes ranking omission for
+  an observed healthy result.
+- The generic hunt JSON serialization fallback suppresses the underlying error
+  and emits only `{"status":"serialization_failed"}` if a future serializable
+  shape fails.
+
 ## Current recommended next task
 
-Do not start Milestone 7 unless a concrete diagnostic question cannot be
-answered with the current `/proc`, PSI, and cgroup collectors. If that bar is
-not met, add another Milestone 8 chain only when independent linking evidence
-already exists; do not treat coincident PSI as a path, and do not link host
-findings to cgroup findings.
+Fix the watch top-16 false-resolution bug before implementing another
+diagnostic slice. Add a deterministic regression in which an already-tracked
+cgroup remains pressured but drops below the top-16 ranking; it must stay
+persistent and unconfirmed rather than resolve. Preserve the 16-identity bound.
+
+After that bug is fixed, write down one concrete diagnostic question and the
+independent evidence needed to answer it before selecting another feature. No
+such question is currently selected. Do not start Milestone 7 unless the
+question cannot be answered with current `/proc`, PSI, and cgroup collectors.
+Do not add another M8 chain unless independent linking evidence already exists;
+do not treat coincident PSI as a path, and do not link host findings to cgroup
+findings.
 
 Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 4,096-PID or 16,384-task caps without a quota-aware setup.
@@ -377,16 +433,19 @@ Mitigation:
 - keep `schema_version` explicit,
 - do not promise pre-1.0 compatibility yet.
 
-### R7: Cgroup partial-data misclassification
+### R7: Cgroup bounded-selection blind spots
 
-The M4 collector correctly retains detailed issue counters, but the hunt
-summary can currently call a partial snapshot `available`. This can overstate
-the completeness of service/container context.
+The deterministic lowest-256-PID cgroup selection is already capped on the
+measured workstation. Relevant higher-PID cgroups can be omitted even though
+the retained scoped findings are valid.
 
 Mitigation:
-- derive one typed cgroup capability from observation state;
-- include cgroup completeness in hunt status;
-- test every partial-data path deterministically.
+- report the cgroup capability and hunt status as partial whenever a cap or
+  collection issue is present;
+- never interpret missing scoped findings as evidence that no omitted cgroup is
+  pressured;
+- consider staged or target-aware selection only after a quota-aware
+  measurement demonstrates the need.
 
 ## Known open decisions
 
@@ -409,12 +468,14 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, scoped cgroup possible-thrashing labels were validated with
-deterministic analyzer coverage (positive conjunction, slower observation-
-interval rates, short PSI window, moderate `some`, missing `full`, invalid
-`full`, scan-without-steal, page counters without PSI) plus hunt text/JSON
-rendering of the label and watch `kind` `cgroup_memory_possible_thrashing`.
-Formatting and locked-offline Clippy passed:
+On 2026-08-17, a project-wide implementation/documentation consistency audit
+verified current milestone, causality, recording, scoped-mechanism, and watch-
+identity claims. The audit refreshed the README quickstart, pending-work
+handoff, cgroup budgets, watch-kind catalog, acceptance instructions, ADR
+cross-references, and experiment state. It also identified and recorded the
+watch top-16 false-resolution bug as the next task. The documented quickstart
+CLI syntax was checked against the current binary. Formatting, locked-offline
+Clippy, and all default tests passed:
 
 ```bash
 cargo fmt --all -- --check
@@ -422,8 +483,14 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Default-gate coverage is 148 unit tests, ten CLI tests, and five ignored
-host-workload tests.
+Default-gate coverage is 148 unit tests, ten CLI tests, and five ignored Linux
+acceptance tests.
+
+Earlier the same day, scoped cgroup possible-thrashing labels were validated with
+deterministic analyzer coverage (positive conjunction, slower observation-
+interval rates, short PSI window, moderate `some`, missing `full`, invalid
+`full`, scan-without-steal, page counters without PSI) plus hunt text/JSON
+rendering of the label and watch `kind` `cgroup_memory_possible_thrashing`.
 
 Earlier the same day, watch cgroup lifecycle `kind` strings were validated for reclaim,
 swap, quota-throttle, unlabeled CPU/I/O, and a mechanism change that stays
