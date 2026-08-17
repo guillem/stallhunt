@@ -235,7 +235,7 @@ severity boundaries.
 ### Follow-up
 
 Reclaim-only and possible-thrashing remain fixture-covered rather than
-live-validated. High-visible-PID observer overhead is still unmeasured.
+live-validated. Workstation-scale collector overhead is recorded in EXP-0007.
 
 ## Planned I/O experiments
 
@@ -275,16 +275,16 @@ measurement and owned cleanup passed.
 This establishes the M3 controlled PSI/resource and qualified-candidate exit.
 It does not validate I/O victims, a process-to-device mapping, or causality.
 The release baseline short run reported wall 1.00s, max RSS 2592 KiB, PSI skew
-1.231 ms, and user/system time displayed as 0.00s; high-visible-PID overhead
-remains unvalidated.
+1.231 ms, and user/system time displayed as 0.00s. Workstation-scale PID/task
+overhead is in EXP-0007.
 
 ## Overhead experiments
 
 At minimum measure:
 
 - idle host,
-- typical developer workstation,
-- many-process host,
+- typical developer workstation (EXP-0007: ~370 PIDs / ~1,600 tasks),
+- many-process host (caps still unreached),
 - rapid process churn,
 - already CPU-stressed host.
 
@@ -359,7 +359,83 @@ machines, kernels, workloads, or namespaces.
 resolution. This means the cost was below that resolution, not zero CPU cost.
 The small-process results show low observed RSS and sub-5-ms PSI skew, but do
 not validate overhead on hosts with a high visible PID/task count. The harness
-is opt-in and has no CI timing gate.
+is opt-in and has no CI timing gate. EXP-0007 records that follow-up on this
+workstation.
+
+## EXP-0007: Workstation-scale visible PID/task collector overhead
+
+Date: 2026-08-17. Host/kernel: Linux 7.1.5-ogc5.1.fc44.x86_64 with 8 logical
+CPUs. A current release binary (cgroup + evidence-chain inference) was
+measured with `tools/measure-overhead.sh` for three one-second repetitions.
+The host already exposed about 370 `/proc` PIDs and about 1,587 stable tasks.
+No root, affinity, or cgroup mutation was used. `many_pids` now spawns
+sleepers from a Python helper so a fork `EAGAIN` stops the batch; bash
+background `sleep` is not used for that scenario because it retries failed
+forks.
+
+### Question
+
+On a workstation with hundreds of visible PIDs and thousands of tasks, how
+large is collector wall time, CPU time, RSS, and PSI-window skew relative to
+the small-process EXP-0002 profiles?
+
+### Setup
+
+```bash
+cargo build --release --locked --offline
+tools/measure-overhead.sh --binary target/release/bottleneck --duration 1 --repetitions 3 --scenario baseline
+tools/measure-overhead.sh --binary target/release/bottleneck --duration 1 --repetitions 3 --scenario many_pids --sleepers 64
+tools/measure-overhead.sh --binary target/release/bottleneck --duration 1 --repetitions 3 --scenario many_tasks --tasks 512
+```
+
+Helpers were owned and cleaned up. CPU PID (4,096), schedstat task (16,384),
+and process-I/O (1,024) caps were not reached. The cgroup collector's 256-PID
+selection cap was already active on the baseline host.
+
+### Expected behavior
+
+RSS and skew should rise versus EXP-0002. Caps should remain explicit. The
+observer must stay cheap enough for a 10-second hunt. A one-second hunt may
+show collection skew as a substantial fraction of the window.
+
+### Observed telemetry
+
+| Scenario | Peak RSS | PSI skew | Wall | user+system | Visible PIDs | CPU intervals | `tasks_read` | Stable tasks | Process I/O | Cgroup PID cap |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| baseline | 5960--6384 KiB | 112--188 ms | 1.13--1.20 s | 0.13--0.19 s | 372 | 371 | 3172--3174 | 1586--1587 | 129 | reached (94 groups) |
+| +64 sleepers | 6180--6624 KiB | 155--205 ms | 1.17--1.22 s | 0.16--0.21 s | 437 | 372--436 | 3238--3302 | 1587--1651 | 130--194 | reached (94 groups) |
+| +512 tasks | 6192--6448 KiB | 206--214 ms | 1.22--1.23 s | 0.19--0.22 s | 373 | 372 | 3742--4198 | 1643--2099 | 130 | reached (94 groups) |
+
+CPU PSI `some` was 1.7--2.8% (low) on baseline and +64 PIDs. The +512-task
+runs were 4.4--5.3% `some`; the last repetition crossed the 5% moderate
+boundary. That is observer-plus-workload effect on a one-second window, not a
+host saturation scenario. Extra high PIDs did not increase cgroup groups
+because that collector selects the lowest 256 PIDs.
+
+EXP-0002's small-process baseline was 2440--2472 KiB RSS, 0.856--0.903 ms
+skew, and `tasks_read` 10, with user/system displayed as `0.00s`.
+
+### Result
+
+Pass for workstation-scale overhead. The 4,096-PID and 16,384-task caps remain
+unexercised. A one-second hunt on this host spends roughly 110--210 ms of the
+PSI window in sequential collection.
+
+### Conclusion
+
+Hundreds of visible PIDs and ~1,600--2,100 stable tasks keep peak RSS around
+6 MiB and CPU time around 0.13--0.22 s per one-second hunt. That is acceptable
+for the default 10-second hunt (about 2% window skew) and visible on 1-second
+smoke hunts (about 11--21% skew). Cgroup completeness is already partial on
+this host because of the 256-PID selection cap. Extra schedstat task walks can
+raise short-window CPU PSI enough to cross a provisional boundary.
+
+### Follow-up
+
+Do not spawn thousands of helper PIDs with bash background `sleep`; the
+Python many_pids helper is the supported path. Measuring the 4,096-PID or
+16,384-task caps would require a dedicated, quota-aware setup and is not
+justified by this workstation result.
 
 ## Deterministic negative coverage
 
@@ -372,8 +448,9 @@ create a CPU contention finding when exact-interval PSI remains below threshold.
 M1.6 validates the concise renderer, serialized bounded rootless acceptance
 path, and controlled collector-overhead scenarios. The controlled runs exercise
 the provisional none/low/moderate/high/severe bands, while thresholds remain
-provisional rather than portable universal boundaries. High-visible-PID/task
-overhead remains open follow-up work across collectors.
+provisional rather than portable universal boundaries. EXP-0007 records
+workstation-scale PID/task collector cost; the 4,096-PID and 16,384-task caps
+were not reached.
 
 M2 now has both a healthy-host smoke (EXP-0003) and a delegated-cgroup
 harmful-pressure acceptance (EXP-0006). The latter produced high-severity

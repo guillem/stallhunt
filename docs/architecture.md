@@ -176,7 +176,7 @@ tests/
   cpu_acceptance.rs     # ignored bounded rootless live-pressure acceptance test
   fixtures/             # deterministic procfs and renderer fixtures
 tools/
-  measure-overhead.sh   # opt-in scenario-based release-binary harness
+  measure-overhead.sh   # opt-in release-binary harness, including many_pids/many_tasks
 ```
 
 There is no generic telemetry framework. `cpu.rs` keeps the narrow procfs

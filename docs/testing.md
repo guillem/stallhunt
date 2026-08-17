@@ -259,10 +259,14 @@ Track:
 Use `tools/measure-overhead.sh` only with a pre-built binary, preferably a
 release binary. It measures baseline, one bounded sleeper/process scenario,
 process churn, and CPU stress separately; `stress-ng` is used only when already
-installed and is never installed by the harness. Results are recorded as ranges,
-not CI pass/fail timing gates. In constrained sandboxes, helper-heavy runs may
-hit fork limits; use the smallest safe process/churn setup and isolate the
-optional CPU scenario instead of treating that limit as a product result.
+installed and is never installed by the harness. Opt-in `many_pids` and
+`many_tasks` (or `high`) add bounded extra PIDs/threads; they are not part of
+`all`, so constrained sandboxes do not fork hundreds of helpers. `many_pids`
+spawns from Python so a failed fork stops the batch. Results are recorded as
+ranges, not CI pass/fail timing gates. In constrained sandboxes, helper-heavy
+runs may hit fork limits; use the smallest safe process/churn setup and isolate
+the optional CPU or high-PID scenarios instead of treating that limit as a
+product result.
 
 ## Fixture architecture
 

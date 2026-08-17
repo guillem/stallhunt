@@ -178,7 +178,9 @@ eight-logical-CPU safety gate before oversubscription and RAII cleanup), and an
 opt-in scenario-based overhead harness. JSON remains the full
 structured-evidence interface. The
 controlled results exercise the provisional none/low/moderate/high/severe bands,
-but do not prove portable exact boundaries or high-visible-PID overhead.
+but do not prove portable exact boundaries. EXP-0007 records workstation-scale
+PID/task collector overhead; the 4,096-PID and 16,384-task caps were not
+reached.
 
 `hunt` also takes bounded host-memory PSI, `/proc/meminfo`, and selected
 `/proc/vmstat` snapshots around the same requested sleep. Exact-interval memory

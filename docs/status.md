@@ -133,8 +133,10 @@ the hierarchy.
   oversubscription only on Linux with readable CPU PSI and at most eight logical
   CPUs. It owns busy workers with RAII cleanup and bounds the hunt with a timeout.
 - `tools/measure-overhead.sh` is an opt-in, scenario-specific release-binary
-  harness for baseline, process, churn, and CPU-stress measurements. It may use
-  an already-installed `stress-ng`, never installs it, and has no CI timing gate.
+  harness for baseline, process, churn, CPU-stress, many_pids, and many_tasks
+  measurements. `all` keeps the small helper set. `many_pids` uses a Python
+  sleeper helper. It may use an already-installed `stress-ng`, never installs
+  it, and has no CI timing gate. EXP-0007 records workstation-scale results.
 - M2 reads bounded host `/proc/pressure/memory`, `/proc/meminfo`, and selected
   `/proc/vmstat` snapshots around the existing one requested sleep. Each
   resource pair uses its own completed monotonic interval because collection is
@@ -224,9 +226,11 @@ the hierarchy.
   user-visible harm. Tasks whose entire lifetime falls between snapshots are
   not observable.
 - Scheduler identity validation can require three procfs file reads for each of
-  up to 16,384 selected tasks per endpoint. M1.6 exercised a representative
-  73 stable tasks / 146 endpoint reads in the clean sleeping-thread acceptance
-  case, but high-visible-PID/task overhead remains unvalidated.
+  up to 16,384 selected tasks per endpoint. EXP-0007 measured a workstation
+  with 370 visible PIDs and ~1,587--2,099 stable tasks: about 6 MiB RSS and
+  110--210 ms PSI-window skew on a one-second hunt. The 4,096-PID and 16,384-task
+  caps were not reached.
+- No CI workflow or packaging configuration exists; validation is local.
 - No CI workflow or packaging configuration exists; validation is local.
 - M2's live harmful-pressure run used a delegated 128/256 MiB child and an
   owned 192 MiB `stress-ng --vm` allocator. It produced 21–24% host memory PSI
@@ -238,13 +242,15 @@ the hierarchy.
   absent.
 - M3's controlled PSI/resource and same-window-candidate exit is validated,
   but it has not validated I/O victims, process-device mapping, or causality.
-  High-visible-PID observer overhead also remains unvalidated.
+  EXP-0007 measured process-I/O collection at 129--194 intervals on that
+  workstation, still below the 1,024-PID cap.
 - The ignored cgroup acceptance test requires a caller-provided, uniquely owned
   delegated subtree. It safely skips when that prerequisite is absent, so an
   arbitrary host does not yet provide controlled per-cgroup pressure evidence.
 - The cgroup collector adds a second independent procfs PID walk rather than
-  reusing the existing CPU or process-I/O selection. It is bounded, but its
-  high-visible-PID overhead and total observation skew have not been measured.
+  reusing the existing CPU or process-I/O selection. EXP-0007 found that walk
+  already at its 256-PID cap on a 370-PID host (94 groups, partial completeness).
+  Extra high-numbered helper PIDs did not increase the selected cgroup set.
 - JSON serialization now succeeds for cgroup I/O device maps, but the generic
   serializer fallback still suppresses the underlying error and emits only
   `{"status":"serialization_failed"}` if a future shape cannot serialize.
@@ -276,11 +282,11 @@ the hierarchy.
 Do not start Milestone 7 unless a concrete diagnostic question cannot be
 answered with the current `/proc`, PSI, and cgroup collectors. If that bar is
 not met, add another Milestone 8 chain only when independent linking evidence
-already exists; do not treat coincident PSI as a path.
+already exists; do not treat coincident PSI as a path. Same-cgroup memory plus
+I/O pressure is the next defensible chain if one is added.
 
-The implemented memory-mechanism-to-I/O chain is available on `hunt` and
-`replay`. M6 watch remains a lifecycle view of separate resource identities.
-M5 recording/replay remains the offline evidence path.
+Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
+4,096-PID or 16,384-task caps without a quota-aware setup.
 
 ## Current design risks
 
@@ -307,9 +313,10 @@ Mitigation:
 Naive per-process sampling can become expensive on large hosts.
 
 Mitigation:
-- measure early,
+- measure early (EXP-0002 small-process, EXP-0007 workstation-scale),
+- treat 1-second hunts as smoke when collection skew is tens to hundreds of milliseconds,
 - optimize based on evidence,
-- consider staged collection later.
+- consider staged collection later if a host approaches the PID/task caps.
 
 ### R4: Kernel/configuration variability
 
@@ -368,9 +375,15 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, M8's first evidence-chain slice was validated with deterministic
-analyzer coverage (reclaim/swap/thrashing positives; coincident PSI, healthy,
-missing, and short-window negatives) plus a checked-in related-evidence text
+On 2026-08-17, EXP-0007 measured a current release binary on Linux 7.1.5 with
+about 370 visible PIDs and ~1,587 stable tasks. Three one-second hunts used
+about 6 MiB RSS and 110--210 ms PSI-window skew; cgroup collection was already
+at its 256-PID cap. Adding 64 sleepers or 512 sleeping threads stayed under
+the CPU and process-I/O caps. `many_pids` now uses a Python helper so failed
+forks cannot retry into a sleeper leak.
+
+Earlier the same day, M8's first evidence-chain slice was validated with
+deterministic analyzer coverage plus a checked-in related-evidence text
 fixture and structural hunt JSON. Formatting and locked-offline Clippy passed:
 
 ```bash
@@ -399,5 +412,4 @@ child-cgroup drain-before-rmdir, left no leftover directory. Details are in
 EXP-0006.
 
 Earlier 2026-08-17 CPU, I/O, overhead, and M4 serialization evidence remains in
-`docs/experiments.md` (EXP-0001 through EXP-0005). High-visible-PID overhead is
-still unmeasured.
+`docs/experiments.md` (EXP-0001 through EXP-0005).
