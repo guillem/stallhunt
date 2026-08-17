@@ -1329,10 +1329,10 @@ pub fn analyze_cgroups(observation: Option<&CgroupObservation>) -> CgroupAnalysi
         .cloned()
         .collect();
     findings.truncate(64);
-    if findings.is_empty()
-        && let Some(summary) = all_findings.into_iter().next()
-    {
-        findings.push(summary);
+    if findings.is_empty() {
+        if let Some(summary) = all_findings.into_iter().next() {
+            findings.push(summary);
+        }
     }
     CgroupAnalysisResult {
         findings,

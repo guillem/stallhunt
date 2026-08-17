@@ -361,10 +361,10 @@ fn status_for(
     if ranking_omitted_cgroup_ids.contains(id) {
         return ObservationStatus::Unconfirmed;
     }
-    if let FindingId::Cgroup { path, .. } = id
-        && observed_cgroup_paths.contains(path)
-    {
-        return ObservationStatus::Healthy;
+    if let FindingId::Cgroup { path, .. } = id {
+        if observed_cgroup_paths.contains(path) {
+            return ObservationStatus::Healthy;
+        }
     }
     ObservationStatus::Unconfirmed
 }

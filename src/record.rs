@@ -306,18 +306,18 @@ pub fn redact_recording(recording: &mut Recording) {
             candidate.name = process_placeholder(candidate.key.pid);
         }
     }
-    if let Some(io) = recording.observation.io.as_mut()
-        && let Collected::Observed { value } = &mut io.diskstats
-    {
-        for device in &mut value.observation.devices {
-            device.name = device_placeholder(device.key.major, device.key.minor);
+    if let Some(io) = recording.observation.io.as_mut() {
+        if let Collected::Observed { value } = &mut io.diskstats {
+            for device in &mut value.observation.devices {
+                device.name = device_placeholder(device.key.major, device.key.minor);
+            }
         }
     }
-    if let Some(io) = recording.observation.io.as_mut()
-        && let Collected::Observed { value } = &mut io.processes
-    {
-        for process in &mut value.observation.processes {
-            process.name = process_placeholder(process.key.pid);
+    if let Some(io) = recording.observation.io.as_mut() {
+        if let Collected::Observed { value } = &mut io.processes {
+            for process in &mut value.observation.processes {
+                process.name = process_placeholder(process.key.pid);
+            }
         }
     }
     if let Some(Collected::Observed { value }) = recording.observation.cgroup.as_mut() {
