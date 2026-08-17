@@ -19,7 +19,7 @@ A fresh coding agent can understand what to build without external chat history.
 
 ## Milestone 1 — CPU contention vertical slice
 
-Status: in progress. M1.1 through M1.5 are complete; M1.6 validation is next.
+Status: complete.
 
 Goal:
 
@@ -88,6 +88,8 @@ Deliver:
 
 ### M1.6 CPU validation and overhead measurement
 
+Status: complete.
+
 Deliver:
 
 - concise default finding-first renderer and structural/golden output fixtures,
@@ -99,11 +101,23 @@ Deliver:
 - documented experiment results and any resulting threshold or collection
   changes.
 
+Completed scope:
+
+- concise finding-first renderer with structural JSON assertions and a checked-in
+  golden text fixture;
+- ignored, rootless, bounded CPU-pressure acceptance coverage with an at-most-
+  eight-logical-CPU safety gate, timeout, and RAII cleanup;
+- opt-in release-binary overhead harness with baseline, process, churn, and
+  CPU-stress scenarios; optional existing `stress-ng` is never installed;
+- controlled 2026-08-17 evidence recorded in `experiments.md`.
+
 Milestone exit condition:
 
 On a controlled CPU-saturation scenario, the tool identifies CPU contention and useful suspects/victims. On a busy-but-not-pressured scenario, it avoids a false bottleneck diagnosis.
 
 ## Milestone 2 — Memory pressure
+
+Status: next.
 
 Goal:
 

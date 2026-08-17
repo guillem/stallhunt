@@ -2,6 +2,11 @@
 
 This directory is the durable design and project-memory layer.
 
+Milestone 1's CPU vertical slice is complete; Milestone 2 memory pressure is
+next. `status.md` is the authoritative current-state record, while
+`experiments.md` retains the controlled validation and overhead evidence behind
+the CPU heuristics.
+
 ## Read this first
 
 | Document | Purpose |

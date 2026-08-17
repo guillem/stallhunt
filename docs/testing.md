@@ -96,6 +96,12 @@ Avoid brittle tests for every whitespace character unless formatting is intentio
 
 JSON output can be validated structurally.
 
+M1.6 adds a checked-in concise CPU renderer text fixture driven by a fixed
+in-memory observation. It verifies the finding-first layout, bounded ranked
+roles, same-window/non-causal language, context/limitation wording, timing,
+and terminal-safe process names. Renderer tests also assert JSON finding shape structurally, without
+comparing host-collected or wall-clock-dependent output.
+
 ### 5. Host integration tests
 
 Run against real procfs/sysfs where safe.
@@ -140,6 +146,21 @@ Synthetic tests must be safe and bounded.
 
 Never assume destructive access to production disks.
 
+The CPU-pressure acceptance test is deliberately ignored and opt-in:
+
+```bash
+cargo test --test cpu_acceptance -- --ignored
+```
+
+Both cases run only on Linux with readable CPU PSI. The clean sleeping-thread
+and oversubscribed busy-worker scenarios each use a timeout around the one-second
+JSON hunt; the latter additionally skips hosts with more than eight available
+logical CPUs before starting one more owned busy-loop worker than available
+CPUs. Host-mutating workloads are
+serialized, and owned children have RAII cleanup even on assertion failure.
+Skipping due to unsupported conditions or resource-launch limits is expected;
+this is rootless acceptance coverage, not a default CI workload.
+
 ### 7. Overhead benchmarks
 
 Measure observer effect.
@@ -159,18 +180,29 @@ Track:
 - bytes read from procfs,
 - observation latency/skew.
 
+Use `tools/measure-overhead.sh` only with a pre-built binary, preferably a
+release binary. It measures baseline, one bounded sleeper/process scenario,
+process churn, and CPU stress separately; `stress-ng` is used only when already
+installed and is never installed by the harness. Results are recorded as ranges,
+not CI pass/fail timing gates. In constrained sandboxes, helper-heavy runs may
+hit fork limits; use the smallest safe process/churn setup and isolate the
+optional CPU scenario instead of treating that limit as a product result.
+
 ## Fixture architecture
 
 Recommended directory:
 
 ```text
 tests/
+  cpu_acceptance.rs       # ignored rootless synthetic CPU-pressure coverage
   fixtures/
     cpu/
       healthy.json
       saturated.json
       saturated_no_schedstat.json
       busy_but_not_pressured.json
+    render/
+      cpu-contention.txt
     proc-loadavg-valid
     proc-pid-stat-unusual-name
     proc-pressure-cpu-valid

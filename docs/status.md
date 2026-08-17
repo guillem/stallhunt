@@ -4,9 +4,10 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 1 — CPU contention vertical slice**
+**Milestone 2 — Memory pressure**
 
-Milestones 1.1 through 1.5 are complete. M1.5 adds conservative CPU inference.
+Milestone 1 — the CPU contention vertical slice, including M1.6 validation and
+overhead measurement — is complete. Milestone 2 memory pressure is next.
 
 ## Implemented
 
@@ -77,6 +78,17 @@ Milestones 1.1 through 1.5 are complete. M1.5 adds conservative CPU inference.
   and scheduler-accounting-unavailable CPU analysis inputs.
 - Executable integration tests cover real host CPU PSI hunt/capability behavior
   and invalid invocation.
+- M1.6 makes default text output concise and finding-first. A fixed normalized
+  observation drives checked-in golden text coverage, and structural tests cover
+  JSON output. JSON intentionally remains the full structured-evidence surface:
+  complete observation, evidence, ranked roles, capabilities, and collection
+  qualifiers are retained even when text omits raw detail.
+- The opt-in `tests/cpu_acceptance.rs` rootless acceptance test creates bounded
+  oversubscription only on Linux with readable CPU PSI and at most eight logical
+  CPUs. It owns busy workers with RAII cleanup and bounds the hunt with a timeout.
+- `tools/measure-overhead.sh` is an opt-in, scenario-specific release-binary
+  harness for baseline, process, churn, and CPU-stress measurements. It may use
+  an already-installed `stress-ng`, never installs it, and has no CI timing gate.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -92,23 +104,25 @@ Milestones 1.1 through 1.5 are complete. M1.5 adds conservative CPU inference.
   user-visible harm. Tasks whose entire lifetime falls between snapshots are
   not observable.
 - Scheduler identity validation can require three procfs file reads for each of
-  up to 16,384 selected tasks per endpoint. The collector is bounded, but its
-  observer overhead still needs measurement in M1.6.
+  up to 16,384 selected tasks per endpoint. M1.6 exercised a representative
+  73 stable tasks / 146 endpoint reads in the clean sleeping-thread acceptance
+  case, but high-visible-PID/task overhead remains unvalidated.
 - No CI workflow or packaging configuration exists; validation is local.
 - CPU thresholds are provisional and event telemetry is still required for
   stronger causal attribution.
 
 ## Current recommended next task
 
-Implement **Milestone 1.6: CPU validation and overhead measurement**:
+Implement **Milestone 2: memory pressure** as the next small vertical slice:
 
-- measure collector overhead and validate provisional PSI thresholds with
-  controlled load experiments; add concise structural/golden output coverage and
-  safe bounded rootless CPU acceptance coverage; retain the current conservative
-  causal wording.
+- distinguish high memory occupancy from harmful pressure with bounded Linux
+  telemetry and normalized interval evidence;
+- begin with memory PSI and add supporting counters only for explicit diagnostic
+  ambiguities;
+- preserve concise finding-first text, full-evidence JSON, deterministic tests,
+  and conservative causal wording.
 
-Do not broaden into memory or I/O collection before M1.6 validates the CPU
-slice.
+Do not broaden this task into I/O, cgroups, or eBPF.
 
 ## Current design risks
 
@@ -184,7 +198,7 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M1.5 validation ran:
+On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M1.6 validation ran:
 
 ```bash
 cargo fmt --all -- --check
@@ -193,7 +207,7 @@ cargo test --locked --offline --workspace --all-features
 ```
 
 Validation uses the locked dependency graph from the local Cargo cache. The
-55 unit tests and 6 executable integration tests cover strict schedstat
+58 unit tests and 6 executable integration tests cover strict schedstat
 parsing, direct fixture-tree collection,
 stable task aggregation, TID reuse, thread churn, counter regression, bounded
 PID/TID selection, normalized CPU analyzer fixtures for healthy, saturated,
@@ -205,10 +219,19 @@ the Linux 7.1.5 validation host, the
 available. Live 100ms JSON remained an explicit insufficient observation, while
 a live 1s JSON observation produced a medium-confidence no-meaningful-contention
 finding on the otherwise idle validation host and retained stable scheduler
-intervals without collection issues.
+intervals without collection issues. Two ignored CPU acceptance tests are
+expected and serialize their host workloads. The clean sleeping-thread run
+reported controller wall time 1027 ms, PSI duration 1,006,184 us (6,184 us
+skew), PSI `some` 0.400920706%, 146 schedstat endpoint reads, 73 stable tasks,
+and no contention. The clean oversubscribed run with nine workers reported
+controller wall time 1025 ms, PSI duration 1,004,875 us (4,875 us skew), PSI
+`some` 28.466525687%, high severity, CPU duration 1,001,939 us, host-wide
+loadavg total tasks 986, 34 schedstat reads, five victim candidates, and three
+suspect candidates. Full controlled-load and release-harness ranges are in
+`docs/experiments.md`.
 
 ## Next milestone
 
-**Milestone 1.6 — CPU validation and overhead measurement.**
+**Milestone 2 — Memory pressure.**
 
 See `roadmap.md`.

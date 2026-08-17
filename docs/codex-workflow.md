@@ -31,29 +31,26 @@ them.
 
 ## Starting from the current implementation
 
-Milestones 1.1 through 1.5 are complete. The current recommended Codex session is:
+Milestone 1 is complete. The current recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Implement Milestone 1.6: CPU validation and overhead measurement.
+Implement Milestone 2: memory pressure as the next small vertical slice.
 
 Requirements:
-- validate the provisional exact-interval CPU PSI severity boundaries with
-  controlled load experiments,
-- measure bounded collector overhead on representative process/task counts and
-  under CPU pressure,
-- exercise a safe, bounded, rootless synthetic CPU acceptance scenario and add
-  structural/golden renderer coverage,
-- preserve the existing conservative causal wording unless new evidence
-  justifies a documented change,
-- add deterministic regression coverage for any revised threshold or
-  measurement behavior,
+- distinguish high memory occupancy from harmful pressure using bounded Linux
+  telemetry and normalized interval evidence,
+- begin with `/proc/pressure/memory` and only add supporting signals that
+  resolve a stated diagnostic ambiguity,
+- preserve finding-first text output and full structured JSON evidence,
+- add deterministic positive, negative, boundary, missing-data, and
+  contradictory-evidence coverage,
 - record validation methods, results, and remaining limits in project memory.
 
-Do not add another resource collector before the CPU slice has been validated.
-Update docs/status.md, docs/experiments.md, and any affected design docs.
+Do not broaden into I/O, cgroups, or eBPF during this milestone. Update
+docs/status.md, docs/experiments.md, and any affected design docs.
 ```
 
 ## Session discipline

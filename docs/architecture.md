@@ -153,8 +153,8 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 ## Current implementation layout
 
-Milestone 1.5 combines bounded CPU/process and scheduler-delay collection with
-the first CPU inference slice:
+Milestone 1 combines bounded CPU/process and scheduler-delay collection with
+the CPU inference slice and M1.6 validation/output boundaries:
 
 ```text
 src/
@@ -163,10 +163,13 @@ src/
   cli.rs        # command/options model and duration parsing
   cpu.rs        # procfs CPU/process snapshots and interval normalization
   psi.rs        # CPU PSI parsing, capabilities, and interval normalization
-  render.rs     # text and JSON rendering
+  render.rs     # concise finding-first text and full-evidence JSON rendering
 tests/
-  cli.rs        # executable-level behavior tests
-  fixtures/     # deterministic procfs parser fixtures
+  cli.rs                # executable-level behavior tests
+  cpu_acceptance.rs     # ignored bounded rootless live-pressure acceptance test
+  fixtures/             # deterministic procfs and renderer fixtures
+tools/
+  measure-overhead.sh   # opt-in scenario-based release-binary harness
 ```
 
 There is no generic telemetry framework. `cpu.rs` keeps the narrow procfs
@@ -177,7 +180,8 @@ PSI and CPU/process interval observations and emits typed serializable CPU
 findings. A valid PSI interval is sufficient for the CPU resource verdict;
 failed CPU/process context becomes qualification and removes attribution rather
 than invalidating PSI. Procfs remains outside analysis and renderers do not
-recompute rules.
+recompute rules. The text renderer is intentionally concise; JSON retains the
+complete structured observation, evidence, roles, and collection qualifiers.
 
 ## Observation lifecycle
 

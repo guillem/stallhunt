@@ -2,7 +2,7 @@
 
 ## Current state
 
-The repository contains the Milestone 1.5 CPU contention slice.
+The repository contains the completed Milestone 1 CPU contention slice.
 
 Build and run it from the repository root:
 
@@ -22,7 +22,8 @@ meaningful CPU scheduling contention or a provisional low, moderate, high, or
 severe finding. Host/process collection failure does not discard a valid PSI
 resource verdict, but leaves attribution empty and qualified. Runnable-delay
 victims and same-window CPU consumers are qualified attribution candidates, not
-proven causes.
+proven causes. M1.6 adds a concise finding-first text renderer; `--json`
+retains the complete structured evidence and collection context.
 
 ## Toolchain
 
@@ -49,8 +50,27 @@ cargo test --workspace --all-features
 
 Add targeted commands as the project evolves.
 
-The executable integration tests are in `tests/cli.rs`; parser and renderer
-unit tests live beside their implementations.
+The executable integration tests are in `tests/cli.rs`; the two opt-in rootless
+host-workload tests are `tests/cpu_acceptance.rs`; parser and renderer unit
+tests live beside their implementations. The acceptance tests serialize their
+host workloads and should run only when intentionally creating bounded CPU
+pressure:
+
+```bash
+cargo test --test cpu_acceptance -- --ignored
+```
+
+For manual collector-overhead measurements, build first and measure the release
+binary rather than Cargo or a debug build:
+
+```bash
+cargo build --release --locked --offline
+tools/measure-overhead.sh --binary target/release/bottleneck --duration 1 --repetitions 3
+```
+
+The harness is opt-in and scenario-specific. It may use an already-installed
+`stress-ng` for CPU stress but never installs it; timings are evidence ranges,
+not a CI gate.
 
 ## Repository hygiene
 

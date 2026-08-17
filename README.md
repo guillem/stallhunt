@@ -133,7 +133,7 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Milestones 1.1 through 1.5 are complete. The repository contains a Rust binary
+Milestone 1 is complete. The repository contains a Rust binary
 with real `hunt`, `capabilities`, help, version, duration parsing, and
 text/JSON output boundaries.
 
@@ -141,7 +141,7 @@ text/JSON output boundaries.
 bounded task scheduler-accounting snapshots before and after the requested
 interval. It reports PSI, host CPU
 counter deltas, capacity/load context, and CPU deltas for processes that
-persisted with the same PID and start time across both snapshots. M1.5 derives
+persisted with the same PID and start time across both snapshots. The CPU slice derives
 an evidence-backed CPU resource verdict from valid exact-interval CPU PSI,
 including provisional severity and explicit no-meaningful-contention results.
 It ranks scheduler-delay victim candidates and same-window CPU-consumer suspect
@@ -155,7 +155,7 @@ cargo run -- hunt --duration 1s
 cargo run -- capabilities
 ```
 
-M1.5 adds conservative CPU inference: only exact-interval CPU PSI `some`
+CPU inference remains conservative: only exact-interval CPU PSI `some`
 determines whether contention exists. A valid interval below 1% reports no
 meaningful CPU scheduling contention; 1/5/15/30% are the provisional low,
 moderate, high, and severe boundaries. Intervals below one second are telemetry
@@ -163,5 +163,12 @@ smoke observations and explicitly do not receive a healthy or contention verdict
 
 See [`docs/status.md`](docs/status.md) and [`docs/roadmap.md`](docs/roadmap.md).
 
-The next task is M1.6 validation and collector-overhead measurement; it does not
-add another resource collector.
+M1.6 adds a concise finding-first text renderer with deterministic golden
+coverage, serialized rootless ignored CPU acceptance tests (including an
+eight-logical-CPU safety gate before oversubscription and RAII cleanup), and an
+opt-in scenario-based overhead harness. JSON remains the full
+structured-evidence interface. The
+controlled results exercise the provisional none/low/moderate/high/severe bands,
+but do not prove portable exact boundaries or high-visible-PID overhead.
+
+The next task is **Milestone 2: memory pressure**.

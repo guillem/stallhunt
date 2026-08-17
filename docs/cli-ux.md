@@ -59,7 +59,7 @@ Delay `watch`, `record`, `replay`, `explain`, daemon mode, TUI, etc. until the c
 
 ## Current CPU diagnosis behavior
 
-Milestone 1.5 implements:
+Milestone 1 implements:
 
 ```text
 bottleneck hunt [--duration <DURATION>] [--json]
@@ -101,46 +101,34 @@ the nested capability state is authoritative and may still be `unsupported`,
 
 ## Human output structure
 
-Recommended ordering:
+Current `hunt` text output is concise and finding-first. It shows the CPU
+verdict, severity, and resource confidence; exact-interval PSI evidence;
+bounded ranked victim candidates (at most five) and suspect candidates (at
+most three), including role and confidence; relevant context and limitations;
+and requested and measured timings. Suspect output explicitly states that it
+is same-window correlation rather than proof of causality. Missing or partial
+attribution is rendered as unavailable or incomplete rather than as an observed
+empty result.
 
-1. one-line health summary,
-2. ranked findings,
-3. evidence per finding,
-4. negative findings / important non-problems,
-5. capability limitations if they materially affect confidence.
+Process names are terminal-safe and bounded in text output. The default text
+renderer does not dump raw host counters, rolling PSI averages, or a separate
+top-ten process list. `--json` remains the full structured-evidence interface:
+it retains the complete observation, typed evidence, ranked roles, capabilities,
+and collection qualifiers rather than mirroring the concise text summary.
 
 Example:
 
 ```text
-Observed 10.0s · 8 CPUs · 214 processes
-
-SYSTEM HEALTH: DEGRADED
-
-1. CPU scheduling contention                         HIGH
-   Severity:    severe
-   Confidence:  high
-   Impact:      CPU pressure during 23.4% of the observation
-
-   Most affected:
-     postgres [4812]     1.81s runnable delay
-     nginx [5120]        0.62s runnable delay
-
-   Likely contributors:
-     rustc [9231]        5.84 CPU-s (58% of host capacity)
-     ffmpeg [9401]       1.92 CPU-s (19%)
-
-   Evidence:
-     CPU PSI some        23.4%
-     CPU utilization     97.1%
-     runnable/total      14/623
-
-   Attribution note:
-     Contributor ranking is based on CPU consumption during
-     the same observation window; exact scheduler interference
-     is not traced in this release.
-
-Memory: no meaningful pressure detected.
-I/O:    no meaningful pressure detected.
+CPU scheduling contention observed
+Verdict: contention · severity high · CPU confidence high
+Evidence: CPU PSI some 23.40% over exact 10s interval (2.34s cumulative stalled time)
+Victim candidates (observed runnable delay; not confirmed harm):
+  1. postgres [4812] — 1.81s delay (high; observed runnable-delay candidate)
+Suspect candidates (same window only; not proven causal):
+  1. rustc [9231] — 58.0% of one CPU (medium; leading concurrent CPU consumer)
+Context and limitations:
+  Suspects consumed CPU in the same window; this correlation does not prove causality.
+Timing: requested 10s; PSI measured 10s; CPU/process measured 10s
 ```
 
 ## Negative results
@@ -234,7 +222,7 @@ Requirements:
 - evidence,
 - qualifiers.
 
-Representative M1.5 finding shape (optional context fields are omitted here):
+Representative Milestone 1 finding shape (optional context fields are omitted here):
 
 ```json
 {

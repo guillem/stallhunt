@@ -36,14 +36,13 @@ fn hunt_handles_every_cpu_psi_capability_state() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
-    if stdout.contains("CPU assessment: insufficient observation") {
-        assert!(stdout.contains("Requested observation duration: 100ms"));
-        assert!(stdout.contains("CPU PSI some during interval:"));
-        assert!(stdout.contains("Host CPU:"));
-        assert!(stdout.contains("CPU assessment: insufficient observation"));
+    if stdout.contains("Verdict: insufficient observation") {
+        assert!(stdout.contains("Verdict: insufficient observation"));
+        assert!(stdout.contains("CPU PSI some"));
+        assert!(stdout.contains("Timing: requested 100ms; PSI measured"));
     } else {
-        assert!(stdout.contains("CPU PSI observation unavailable"));
-        assert!(stdout.contains("No complete CPU PSI interval was observed"));
+        assert!(stdout.contains("CPU assessment unavailable"));
+        assert!(stdout.contains("no exact CPU PSI interval"));
     }
 }
 
