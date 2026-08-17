@@ -29,28 +29,14 @@ current data model and conventions unless there is a concrete reason to change
 them.
 ```
 
-## Starting from this bootstrap
+## Starting from the current implementation
 
-Recommended first Codex session:
-
-```text
-Read AGENTS.md, README.md, docs/README.md, docs/product.md,
-docs/architecture.md, docs/status.md, docs/roadmap.md, and all accepted ADRs.
-
-Implement Milestone 1.1 only: bootstrap the Rust CLI project. Keep it minimal.
-Create real `hunt` and `capabilities` command structure, but do not fabricate
-telemetry or findings.
-
-Choose current, well-maintained dependencies only when justified. If a choice is
-architecturally significant, record it. Add tests for CLI parsing/behavior where
-useful. Establish formatting, Clippy, and test quality gates.
-
-Update docs/development.md and docs/status.md before finishing.
-```
-
-Recommended second session:
+Milestone 1.1 is complete. The current recommended Codex session is:
 
 ```text
+Read AGENTS.md and all required project documentation. Inspect the existing
+Rust implementation before proposing new abstractions.
+
 Implement Milestone 1.2: CPU PSI collection and parsing.
 
 Requirements:

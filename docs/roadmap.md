@@ -4,7 +4,7 @@ The roadmap is ordered by learning value and useful vertical slices, not by coll
 
 ## Milestone 0 — Repository bootstrap
 
-Status: documentation prepared; code not started.
+Status: complete.
 
 Deliverables:
 
@@ -19,11 +19,15 @@ A fresh coding agent can understand what to build without external chat history.
 
 ## Milestone 1 — CPU contention vertical slice
 
+Status: in progress. M1.1 is complete; M1.2 is next.
+
 Goal:
 
 > Detect active CPU scheduling contention and identify likely contributors and victims using non-eBPF Linux telemetry.
 
 ### M1.1 Rust/CLI bootstrap
+
+Status: complete.
 
 Deliver:
 
@@ -35,6 +39,8 @@ Deliver:
 - CI or documented local quality gates.
 
 ### M1.2 PSI collector
+
+Status: next.
 
 Deliver:
 

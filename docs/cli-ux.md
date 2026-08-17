@@ -57,6 +57,25 @@ Standard version information.
 
 Delay `watch`, `record`, `replay`, `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
 
+## Bootstrap behavior
+
+Milestone 1.1 implements:
+
+```text
+bottleneck hunt [--duration <DURATION>] [--json]
+bottleneck capabilities [--json]
+bottleneck version
+```
+
+Until the CPU PSI collector exists, `hunt` does not sleep or claim to have
+observed the host. Text output says that the hunt is unavailable. JSON uses
+`status: "unavailable"`, `observation: null`, an empty `findings` array, and an
+`implementation_limit` qualifier. This prevents missing implementation from
+being confused with a healthy negative finding.
+
+`capabilities` similarly reports `not_checked`; it does not infer system
+support merely from the command existing.
+
 ## Human output structure
 
 Recommended ordering:
@@ -151,12 +170,15 @@ Do not overdesign terminal visuals before core output stabilizes.
 
 ## Exit codes
 
-Proposed semantics should be explicit before automation depends on them.
+Current bootstrap policy:
 
-Possible initial policy:
+- `0`: the requested command completed, including an explicitly unavailable
+  bootstrap `hunt`,
+- `2`: invalid command-line invocation.
 
-- `0`: diagnosis completed successfully, regardless of findings,
-- non-zero: tool failure / invalid invocation.
+Once collection exists, `0` will continue to mean that diagnosis completed
+successfully regardless of whether findings exist. Machine consumers must
+inspect the JSON `status` rather than interpret an empty findings array alone.
 
 Do **not** initially use non-zero merely because a bottleneck exists; that surprises shell users.
 
@@ -246,7 +268,13 @@ Accept ergonomic durations such as:
 1m
 ```
 
-Document minimum/maximum practical values.
+The current parser accepts integral or decimal durations that resolve exactly
+to milliseconds. Supported units are `ms`, `s`, and `m`; the inclusive range is
+100 ms through 5 minutes; the default is 10 seconds.
+
+These are initial bounded-hunt safety limits, not validated inference
+thresholds. Future analyzers must qualify windows that are too short for strong
+conclusions, and experiments may justify revising the limits.
 
 Warn or reduce confidence for observation windows too short to support robust inference.
 

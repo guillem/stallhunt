@@ -4,66 +4,59 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 0 — Repository bootstrap**
+**Milestone 1 — CPU contention vertical slice**
 
-The project is documentation-only. No Rust code has been created yet.
+Milestone 1.1 (Rust/CLI bootstrap) is complete. Milestone 1.2 (CPU PSI
+collection and normalization) is the current recommended work.
 
 ## Implemented
 
-- Product concept defined.
-- Linux-first scope defined.
-- Architectural layers defined.
-- Initial telemetry sources identified.
-- Evidence/confidence model defined conceptually.
-- CLI direction defined.
-- Testing strategy defined.
-- Initial ADRs written.
-- Git-as-project-memory workflow established.
+- A single stable-Rust package builds the `bottleneck` binary.
+- The bootstrap has no third-party dependencies and forbids unsafe Rust.
+- Real `hunt`, `capabilities`, help, and version command structure exists.
+- `hunt` accepts `--duration` values from 100 ms through 5 minutes, including
+  exact-millisecond decimal values, and defaults to 10 seconds.
+- `hunt` and `capabilities` support separate text and JSON render paths.
+- Bootstrap output explicitly distinguishes unavailable implementation from a
+  completed healthy diagnosis: no observation is claimed and no findings are
+  fabricated.
+- Invalid CLI invocations write to stderr and exit with status 2.
+- Unit tests cover command parsing, duration success/boundary/failure cases,
+  and renderer semantics.
+- Executable integration tests cover help, text/JSON placeholder behavior,
+  capability behavior, and invalid invocation.
+- Cargo formatting, Clippy, and test quality gates are documented.
 
-## Not implemented
+## Known limitations
 
-Everything executable, including:
-
-- Cargo project,
-- CLI,
-- collectors,
-- parsers,
-- observation model,
-- inference engine,
-- JSON schema,
-- tests,
-- CI,
-- packaging.
+- `hunt` does not yet read telemetry, wait for the requested duration, or
+  analyze the host. A valid placeholder invocation exits successfully but
+  carries an explicit unavailable status.
+- `capabilities` does not probe the host; it reports `not_checked`.
+- The JSON shape is bootstrap scaffolding and has no pre-1.0 compatibility
+  promise beyond its explicit `schema_version` field.
+- No collector, raw observation model, normalization, inference, or real
+  finding exists yet.
+- No CI workflow or packaging configuration exists; validation is local.
 
 ## Current recommended next task
 
-Implement **Milestone 1.1: Rust/CLI bootstrap** as the smallest coherent change.
+Implement **Milestone 1.2: CPU PSI collection and parsing** as one vertical
+slice:
 
-Suggested result:
+- parse `/proc/pressure/cpu` robustly,
+- represent raw cumulative `some` observations and rolling averages,
+- calculate pressure over the exact observation interval from the cumulative
+  `total` delta,
+- handle malformed, missing, unsupported, and unreadable PSI explicitly,
+- make `hunt` perform the bounded two-snapshot observation needed for CPU PSI,
+- make `capabilities` report actual CPU PSI availability,
+- add deterministic parser and normalization fixtures/tests,
+- extend text and JSON output without claiming full CPU causality or
+  per-process attribution.
 
-```text
-Cargo.toml
-src/
-  main.rs
-  cli.rs        # or equivalent simple structure
-tests/
-```
-
-With commands:
-
-```bash
-bottleneck hunt --duration 1s
-bottleneck capabilities
-```
-
-At this stage they may return a clearly marked placeholder result, but:
-
-- CLI structure should be real,
-- JSON/text rendering boundaries should be considered,
-- quality gates should be established,
-- no fake telemetry should be presented as diagnosis.
-
-Then proceed immediately to PSI parsing rather than overbuilding CLI infrastructure.
+Do not introduce a generic metric framework or implement the process collectors
+from M1.3 in this slice.
 
 ## Current design risks
 
@@ -109,6 +102,17 @@ eBPF could dominate the project before the inference model proves useful.
 Mitigation:
 - eBPF prohibited as MVP dependency by ADR-0003.
 
+### R6: Bootstrap JSON inertia
+
+The hand-written placeholder JSON is safe only while values are fixed and
+controlled. Extending it to arbitrary kernel/process text would create escaping
+and schema-maintenance risk.
+
+Mitigation:
+- reassess serialization dependencies when M1.2 introduces dynamic data,
+- keep `schema_version` explicit,
+- do not promise pre-1.0 compatibility yet.
+
 ## Known open decisions
 
 Not yet decided:
@@ -117,24 +121,31 @@ Not yet decided:
 - license,
 - minimum Rust version,
 - minimum Linux kernel/support baseline,
-- CLI argument parsing crate,
-- serialization crate/versioning policy,
-- error-handling approach,
+- long-term CLI argument parsing strategy,
+- serialization crate/versioning policy for dynamic JSON,
+- error-handling approach beyond the current small CLI,
 - color/terminal crate,
 - eventual eBPF framework,
 - CI provider/configuration,
 - packaging/distribution.
 
-These should be decided when implementation makes the tradeoff concrete, not all at bootstrap.
+These should be decided when implementation makes the tradeoff concrete, not
+all at bootstrap.
 
-## Validation status
+## Last meaningful validation
 
-No executable validation exists yet.
+On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1:
 
-Documentation has been prepared to be internally consistent, but implementation will reveal necessary revisions.
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+```
 
-## Next milestone after bootstrap
+The emitted `hunt --json` placeholder was also parsed successfully with `jq`.
 
-**Milestone 1 — CPU contention vertical slice.**
+## Next milestone after CPU PSI
+
+**Milestone 1.3 — CPU/process collector.**
 
 See `roadmap.md`.

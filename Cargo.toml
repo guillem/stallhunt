@@ -1,0 +1,18 @@
+[package]
+name = "bottleneck-finder"
+version = "0.1.0"
+edition = "2024"
+description = "Linux-first command-line performance triage"
+publish = false
+
+[[bin]]
+name = "bottleneck"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

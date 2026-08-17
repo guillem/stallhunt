@@ -151,6 +151,24 @@ src/
 
 If compile times, ownership boundaries, reuse or eBPF components justify it later, split into crates.
 
+## Current implementation layout
+
+Milestone 1.1 intentionally implements only the boundaries needed by the CLI
+bootstrap:
+
+```text
+src/
+  main.rs       # process entry point and exit behavior
+  cli.rs        # command/options model and duration parsing
+  render.rs     # text and JSON rendering
+tests/
+  cli.rs        # executable-level behavior tests
+```
+
+There is no collector, observation, normalization, or finding module yet.
+Those boundaries should be introduced by the telemetry vertical slices that
+need them, beginning with CPU PSI, rather than as empty framework modules.
+
 ## Observation lifecycle
 
 A bounded hunt might behave as follows:

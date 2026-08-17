@@ -95,7 +95,14 @@ Later releases may add:
 ```text
 .
 ├── AGENTS.md
+├── Cargo.toml
 ├── README.md
+├── src/
+│   ├── cli.rs
+│   ├── main.rs
+│   └── render.rs
+├── tests/
+│   └── cli.rs
 └── docs/
     ├── README.md
     ├── product.md
@@ -120,8 +127,23 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Documentation/bootstrap only. No implementation exists yet.
+Milestone 1.1 is complete. The repository contains a minimal dependency-free
+Rust binary with real `hunt`, `capabilities`, help, version, duration parsing,
+and text/JSON output boundaries.
 
-The recommended first vertical slice is CPU scheduling contention detection without eBPF.
+The bootstrap deliberately does not collect telemetry yet. `hunt` reports an
+explicit unavailable state, does not wait for the requested duration, and does
+not produce a healthy result or any fabricated finding. `capabilities` likewise
+reports that the host has not been probed.
+
+Run the current binary with:
+
+```bash
+cargo run -- hunt --duration 1s
+cargo run -- capabilities
+```
+
+The next task is CPU PSI collection and exact-interval pressure calculation,
+which begins the CPU scheduling contention vertical slice without eBPF.
 
 See [`docs/status.md`](docs/status.md) and [`docs/roadmap.md`](docs/roadmap.md).

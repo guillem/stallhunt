@@ -2,9 +2,18 @@
 
 ## Current state
 
-The repository initially contains documentation only.
+The repository contains the Milestone 1.1 Rust/CLI bootstrap.
 
-The first implementation task should bootstrap a minimal Rust project that preserves the architectural principles in this repository.
+Build and run it from the repository root:
+
+```bash
+cargo build
+cargo run -- hunt --duration 1s
+cargo run -- capabilities --json
+```
+
+`hunt` is currently an explicit placeholder: it performs no observation and
+returns no diagnosis. CPU PSI collection is the next implementation task.
 
 ## Toolchain
 
@@ -31,6 +40,9 @@ cargo test --workspace --all-features
 
 Add targeted commands as the project evolves.
 
+The executable integration tests are in `tests/cli.rs`; parser and renderer
+unit tests live beside their implementations.
+
 ## Repository hygiene
 
 Recommended root files once implementation starts:
@@ -51,6 +63,12 @@ tests/
 Do not add generated build output.
 
 ## Initial dependency philosophy
+
+The M1.1 bootstrap has no third-party dependencies. Its small command surface,
+duration parser, and fixed placeholder JSON can be implemented clearly with the
+standard library. Re-evaluate this when telemetry introduces genuinely dynamic
+structured data; do not preserve custom serialization merely to avoid a
+justified dependency.
 
 Likely useful categories:
 
