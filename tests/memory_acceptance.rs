@@ -51,7 +51,31 @@ impl OwnedCgroup {
 
 impl Drop for OwnedCgroup {
     fn drop(&mut self) {
+        // stress-ng workers may outlive the dispatcher. Kill only tasks still
+        // in this uniquely named child, then wait for the cgroup to empty.
+        terminate_cgroup_members(&self.path);
         let _ = fs::remove_dir(&self.path);
+    }
+}
+
+fn terminate_cgroup_members(path: &Path) {
+    let procs = path.join("cgroup.procs");
+    for _ in 0..100 {
+        let Ok(contents) = fs::read_to_string(&procs) else {
+            return;
+        };
+        let pids: Vec<&str> = contents.split_whitespace().collect();
+        if pids.is_empty() {
+            return;
+        }
+        for pid in pids {
+            let _ = Command::new("kill")
+                .args(["-KILL", "--", pid])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        }
+        thread::sleep(Duration::from_millis(20));
     }
 }
 

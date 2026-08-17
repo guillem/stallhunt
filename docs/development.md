@@ -2,9 +2,8 @@
 
 ## Current state
 
-The repository contains completed Milestone 1 CPU, M3 block-I/O, and M4 bounded
-cgroup/service slices. M2's host-memory slice is implemented but still needs
-controlled harmful-pressure validation.
+The repository contains completed Milestone 1 CPU, M2 host-memory, M3
+block-I/O, and M4 bounded cgroup/service slices.
 
 Build and run it from the repository root:
 
@@ -20,8 +19,9 @@ and memory collectors each retain their own measured interval because the reads
 are sequential. The memory analyzer uses exact memory PSI `some` for its
 verdict; `full` is non-additive subset context, while meminfo/vmstat only
 classify/contextualize the result. Memory findings are host-wide and make no
-process attribution. M2 deterministic fixtures and a healthy live smoke pass,
-but controlled harmful-pressure validation remains required.
+process attribution. M2 deterministic fixtures, a healthy live smoke, and a
+delegated-cgroup harmful-pressure acceptance are recorded. Reclaim-only and
+possible-thrashing remain fixture-validated.
 
 M3 similarly uses exact I/O PSI `some` as its resource verdict and retains
 diskstats/process-I/O as independently timed activity context. A disk candidate
@@ -86,7 +86,8 @@ The memory acceptance path must be a caller-owned, writable delegated cgroup-v2
 parent with the `memory` controller already enabled for children. The test
 creates and cleans up only a generated child cgroup, applies bounded `memory.max`
 and `memory.high` settings there, and moves its owned allocator before it starts
-allocating. It never changes the parent cgroup or runs an unconstrained
+allocating. Cleanup now drains remaining tasks in that uniquely named child
+before removing it. It never changes the parent cgroup or runs an unconstrained
 host-wide allocator.
 
 For manual collector-overhead measurements, build first and measure the release

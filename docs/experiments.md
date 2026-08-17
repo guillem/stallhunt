@@ -159,24 +159,83 @@ criterion safely.
 
 ### Follow-up
 
-`tests/memory_acceptance.rs` now supplies the bounded opt-in harness. It
-requires `BOTTLENECK_MEMORY_ACCEPTANCE_PATH` to identify a caller-owned,
-writable delegated cgroup-v2 parent whose `memory` controller is already
-enabled for children. It creates one generated child, applies `memory.max` and
-`memory.high` only to that child, moves an owned `stress-ng --vm` allocator
-before allocation, and performs RAII cleanup. Run it explicitly and record the
-result here:
+`tests/memory_acceptance.rs` supplied the bounded opt-in harness used by
+EXP-0006. That later run closed the M2 controlled harmful-pressure gap on this
+host.
 
-```bash
-BOTTLENECK_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
-  cargo test --locked --offline --test memory_acceptance -- --ignored --nocapture
-```
+## EXP-0006: M2 delegated-cgroup harmful-memory acceptance
 
-The run must produce an exact host-memory-PSI `some` fraction of at least 1%
-and a PSI-backed harmful-memory finding (generic, reclaim, swap, or
-possible-thrashing as its context supports). `full`, meminfo, and vmstat remain
-non-additive context. No successful controlled run is recorded yet, so this
-does not close M2.
+Date: 2026-08-17. Commit: `26f7321`. Host/kernel: Linux 7.1.5-ogc5.1.fc44.x86_64
+with 8 logical CPUs, 16,003,232 KiB RAM (~8.3 GiB MemAvailable during the
+runs), and 7.6 GiB unused zram swap. Privileges: ordinary uid 1000 with
+systemd user-delegation on `user@1000.service`.
+
+### Question
+
+Can a uniquely owned, memory-limited child under a caller-provided delegated
+cgroup produce exact host-memory PSI `some` of at least 1% and a PSI-backed
+harmful-memory finding without an unconstrained host-wide allocator?
+
+### Setup
+
+`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` named the already-delegated parent
+`/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice`, which
+already had `memory` in `cgroup.subtree_control`. The ignored test created one
+generated child, set `memory.max=256 MiB` and `memory.high=128 MiB` only on
+that child, moved an owned `stress-ng --vm 1 --vm-bytes 192MiB --vm-keep
+--vm-populate --timeout 8` allocator into it, and ran
+`bottleneck hunt --duration 2s --json` with a five-second hunt timeout.
+
+The first Drop implementation called `rmdir` immediately after killing the
+dispatcher, so it failed while `stress-ng` workers were still in the child; an
+empty leftover directory remained after those workers exited and was then
+removed. The harness now drains remaining members of that uniquely named child
+before `rmdir`. A second run left no leftover directory.
+
+### Expected behavior
+
+Exact-interval host memory PSI `some` at least 1%, and a finding of
+`memory_pressure`, `memory_reclaim_pressure`, `memory_swap_pressure`, or
+`memory_possible_thrashing`. `full`, meminfo, and vmstat remain non-additive
+context. No process or cgroup-causality claim.
+
+### Observed telemetry
+
+Two consecutive passing runs:
+
+| Run | PSI `some` fraction | PSI window | Finding |
+|---|---:|---:|---|
+| 1 | 0.2441984367166301 (24.4198%) | 2,148,171 µs | `memory_swap_pressure` |
+| 2 | 0.2127021436849555 (21.2702%) | 2,144,205 µs | `memory_swap_pressure` |
+
+After the first run, host swap remained unused (`SwapFree` equaled
+`SwapTotal`) and MemAvailable stayed about 8.3 GiB. Rolling PSI later decayed
+(`avg10` 3.98% immediately after run 1, 3.91% after run 2). The swap-pressure
+label therefore reflects same-window `pswpin`, not leftover host swap
+occupancy.
+
+### Tool finding
+
+Both hunts reported `memory_swap_pressure`. At 21–24% `some` over a ~2.15 s
+window that is high severity and medium resource confidence. The swap
+mechanism label remains low-confidence same-window correlation.
+
+### Result
+
+Pass. This satisfies the M2 controlled harmful-pressure exit on this host.
+
+### Conclusion
+
+A 192 MiB allocator inside a 128/256 MiB delegated child is enough to stall
+tasks and raise host memory PSI `some` above 1% without filling the 16 GiB
+host. The diagnosis stayed PSI-backed and host-wide. It does not validate a
+reclaim-only label, possible thrashing, process attribution, or portable
+severity boundaries.
+
+### Follow-up
+
+Reclaim-only and possible-thrashing remain fixture-covered rather than
+live-validated. High-visible-PID observer overhead is still unmeasured.
 
 ## Planned I/O experiments
 
@@ -314,5 +373,11 @@ M1.6 validates the concise renderer, serialized bounded rootless acceptance
 path, and controlled collector-overhead scenarios. The controlled runs exercise
 the provisional none/low/moderate/high/severe bands, while thresholds remain
 provisional rather than portable universal boundaries. High-visible-PID/task
-overhead remains open CPU follow-up work; it does not make M1.6 incomplete or
-block beginning Milestone 2 memory pressure.
+overhead remains open follow-up work across collectors.
+
+M2 now has both a healthy-host smoke (EXP-0003) and a delegated-cgroup
+harmful-pressure acceptance (EXP-0006). The latter produced high-severity
+`memory_swap_pressure` from exact host PSI `some` without unconstrained
+host-wide allocation. Reclaim-only and possible-thrashing labels remain
+fixture-validated. M3's competing-I/O acceptance (EXP-0004) remains the
+block-I/O exit evidence.

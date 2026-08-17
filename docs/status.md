@@ -4,27 +4,13 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 2 — harmful-memory-pressure validation (awaiting delegated live run)**
+**Milestone 5 — recording and replay (not started)**
 
-Milestone 1 — the CPU contention vertical slice, including M1.6 validation and
-overhead measurement — and M3 block-I/O pressure are functionally complete.
-M3's bounded controlled competing-I/O acceptance established a PSI-backed
-resource finding with qualified same-window candidates. It did not establish
-victim attribution, process-device mapping, or causality. M2's first
-host-memory collector/analyzer/output slice and an opt-in delegated-cgroup
-acceptance harness are implemented, but safely controlled harmful-memory-
-pressure validation remains open until that harness passes on a caller-provided
-delegated cgroup.
-
-M4 implements the cgroup-v2-only, membership-first collector, scoped PSI
-analysis, controller context, text/JSON output, and capability reporting. One
-assessment now derives `available` versus `partial` from the normalized
-observation, its collection issues, and per-file states; it is used by
-`capabilities`, hunt JSON, and top-level hunt status. Endpoint collector cost
-and truncation are merged correctly, text ranks scoped findings by severity and
-confidence, and controller deltas explain—but never establish—scoped PSI
-findings. The live acceptance test is intentionally opt-in: it needs a
-caller-owned delegated cgroup and does not mutate the hierarchy.
+Milestones 1–3 are functionally complete. M2's delegated-cgroup acceptance
+produced a PSI-backed `memory_swap_pressure` finding without unconstrained
+host-wide allocation. M4 remains implemented with opt-in live observational
+validation; that test still requires a caller-owned delegated subtree that
+already contains the test process and does not mutate the hierarchy.
 
 ## Verified milestone assessment
 
@@ -33,11 +19,12 @@ caller-owned delegated cgroup and does not mutate the hierarchy.
 - **M1 complete:** the CPU collector, scheduler-delay attribution, conservative
   inference, renderers, deterministic tests, bounded rootless acceptance tests,
   and overhead experiments satisfy the documented exit condition.
-- **M2 partial:** collection, normalization, host-wide inference, rendering,
-  deterministic fixtures, healthy-host smoke coverage, and an ignored bounded
-  delegated-cgroup acceptance harness exist. No safe controlled
-  harmful-memory-pressure experiment has yet satisfied the milestone exit
-  condition.
+- **M2 complete within its exit condition:** host-wide collection, inference,
+  rendering, deterministic fixtures, a healthy-host smoke, and a delegated-
+  cgroup harmful-pressure acceptance are recorded. The live run produced
+  high-severity `memory_swap_pressure` from exact host PSI `some`. Reclaim-only
+  and possible-thrashing labels remain fixture-validated; there is still no
+  process attribution.
 - **M3 complete within its deliberately limited exit condition:** PSI-backed
   block-I/O pressure and same-window activity candidates were validated by the
   recorded controlled run. Victim attribution, process-device mapping, and
@@ -143,7 +130,10 @@ caller-owned delegated cgroup and does not mutate the hierarchy.
   evidence is explicitly host-wide.
 - Deterministic memory parser/normalization/analyzer/renderer fixtures cover
   positive, negative, boundary, missing, and contradictory cases. A live healthy
-  memory smoke passed, including graceful capability behavior.
+  memory smoke passed, including graceful capability behavior. The ignored
+  delegated-cgroup acceptance then produced `memory_swap_pressure` from 21–24%
+  exact host PSI `some` (EXP-0006); RAII now drains the uniquely named child
+  before removing it.
 - M3 reads bounded host I/O PSI, `/proc/diskstats`, and `/proc/<pid>/io` around
   the same requested sleep. Each resource pair retains its own monotonic interval
   because collection is sequential. Diskstats is capped at 4,096 devices; process
@@ -198,17 +188,14 @@ caller-owned delegated cgroup and does not mutate the hierarchy.
   73 stable tasks / 146 endpoint reads in the clean sleeping-thread acceptance
   case, but high-visible-PID/task overhead remains unvalidated.
 - No CI workflow or packaging configuration exists; validation is local.
-- M2 has not yet demonstrated safely controlled real-host harmful memory
-  pressure. `tests/memory_acceptance.rs` needs
-  `BOTTLENECK_MEMORY_ACCEPTANCE_PATH` to identify a caller-owned writable
-  delegated cgroup-v2 parent with `memory` enabled for children; it creates
-  and cleans up only its own bounded child. The 2026-08-17 prerequisite check
-  found readable telemetry, zram swap, and `stress-ng`, but no such writable
-  current subtree; an unconstrained allocator would be unsafe. Reclaim and
-  swap labels have separate low mechanism confidence; possible thrashing
-  requires material direct-reclaim plus bidirectional-swap rates and is capped
-  at medium mechanism confidence. All remain implementation/fixture validated
-  rather than experimentally validated.
+- M2's live harmful-pressure run used a delegated 128/256 MiB child and an
+  owned 192 MiB `stress-ng --vm` allocator. It produced 21–24% host memory PSI
+  `some` and `memory_swap_pressure` over a ~2.15 s window. That swap label is
+  same-window `pswpin` correlation with low mechanism confidence; host swap
+  occupancy stayed unused afterward. Reclaim-only and possible-thrashing
+  remain fixture-validated. `tests/memory_acceptance.rs` still requires
+  `BOTTLENECK_MEMORY_ACCEPTANCE_PATH` and skips when that delegated parent is
+  absent.
 - M3's controlled PSI/resource and same-window-candidate exit is validated,
   but it has not validated I/O victims, process-device mapping, or causality.
   High-visible-PID observer overhead also remains unvalidated.
@@ -230,12 +217,11 @@ caller-owned delegated cgroup and does not mutate the hierarchy.
 
 ## Current recommended next task
 
-Do not begin M5 record/replay. Run `tests/memory_acceptance.rs` with a
-caller-provided delegated cgroup and record the result. The M2 acceptance
-requires exact memory PSI `some` as the verdict; `full`, meminfo, and vmstat
-remain non-additive context only.
+Begin Milestone 5 recording and replay. Create an ADR for the recording schema
+before promising format compatibility. Do not introduce eBPF as a prerequisite.
 
-Do not introduce eBPF as a prerequisite for M4.
+The opt-in M4 `tests/cgroup_acceptance.rs` observational run is now feasible on
+hosts with a delegated user tree, but it is not a blocker for starting M5.
 
 ## Current design risks
 
@@ -322,22 +308,16 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, the full deterministic gate
-passed: 121 unit tests, six CLI tests, and five ignored host-workload tests.
-The new `memory_acceptance` test compiled and correctly skipped when
-`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` was unset. Formatting and locked-offline
-Clippy also passed. The follow-up M2 prerequisite check confirmed readable
-memory PSI/meminfo/vmstat, zram swap, and an installed `stress-ng`, but no
-writable `cgroup.procs` or `cgroup.subtree_control`; `docs/experiments.md`
-records why a host-wide stressor was not run.
+On 2026-08-17, `tests/memory_acceptance.rs` ran twice on Linux 7.1.5 with
+`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` set to the user-delegated `app.slice`.
+Both runs passed: exact host memory PSI `some` was 24.4198% then 21.2702% over
+~2.15 s, and both reported `memory_swap_pressure`. The second run, after
+child-cgroup drain-before-rmdir, left no leftover directory. Details are in
+EXP-0006.
 
-Earlier on 2026-08-17, the interrupted M4 checkpoint
-initially failed `cargo fmt --check` and Clippy because `src/cgroup.rs` was
-unformatted and contained two non-test dead-code entry points. After those
-trivial integration repairs, the live CLI test exposed a cgroup I/O JSON map-key
-serialization failure that reduced every successful cgroup hunt JSON response
-to `{"status":"serialization_failed"}`. Cgroup device keys now serialize as
-`major:minor` strings, and the full deterministic gate passes:
+The same session's default gate passed: 121 unit tests, six CLI tests, and five
+ignored host-workload tests by default. Formatting and locked-offline Clippy
+also passed:
 
 ```bash
 cargo fmt --all -- --check
@@ -345,38 +325,6 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Validation uses the locked dependency graph from the local Cargo cache. The
-default gate now has 118 unit tests and six CLI tests, all passing; three
-host-workload tests remain ignored by default. Both ignored CPU tests were run
-and passed on Linux 7.1.5. The ignored I/O test was run twice and returned
-success by taking its documented skip path because process-I/O visibility was
-`partial`; it did not reproduce the controlled pressure assertion during this
-audit. The earlier successful controlled M3 result remains recorded below and
-in `docs/experiments.md`.
-
-The repository has one local/remote branch (`main`), ten commits, no tags,
-stashes, or extra worktrees, and `main` matched `origin/main` before this audit.
-`git fsck --full` reports only one harmless dangling blob. The handover snapshot
-files duplicated data already preserved by commit `4318fdc` and are removed by
-this audit.
-
-The earlier M3 controlled run used exactly two owned `stress-ng` HDD workers,
-64 MiB each with direct/sync/fsync I/O on a checkout-local temporary path under
-an eight-second coordinator bound. The two-second hunt found `io_pressure`:
-PSI `some` was 0.13602988901958982 (13.6029889%), with measured PSI,
-diskstats, and process-I/O windows of 2,002,876 us, 2,000,947 us, and
-2,000,534 us respectively; it reported three device candidates and two process
-suspects. The workload remained alive after measurement and owned cleanup
-passed. This validates neither a victim, process-device mapping, nor causality.
-
-The separate M3 live healthy smoke had all I/O capabilities available, six
-stable disk devices, and four stable process-I/O intervals. A release M3
-baseline short measurement reported wall 1.00s, max RSS 2592 KiB, PSI skew
-1.231 ms, and displayed user/system time of 0.00s. High-visible-PID overhead
-remains unvalidated. Full controlled-load and release-harness ranges are in
-`docs/experiments.md`.
-
-The current M2 slice also passed its deterministic memory parser, interval,
-analyzer, renderer, and executable healthy-host smoke coverage. That smoke
-observed a healthy host and validates capability/degradation behavior; it does
-not substitute for a controlled harmful-memory-pressure experiment.
+Earlier 2026-08-17 CPU, I/O, overhead, and M4 serialization evidence remains in
+`docs/experiments.md` (EXP-0001 through EXP-0005). High-visible-PID overhead is
+still unmeasured.

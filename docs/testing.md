@@ -122,8 +122,9 @@ conjunctions, full-as-subset validation, possible thrashing, short windows, and
 contradictory background-reclaim/swap-out context. The possible-thrashing tests
 also reject immaterial churn and verify that page rates use the independent
 vmstat interval rather than the PSI interval. A live healthy smoke only
-checks structural capability/degradation behavior; it is not controlled harmful
-memory-pressure validation.
+checks structural capability/degradation behavior. The ignored delegated-cgroup
+acceptance then produced a PSI-backed `memory_swap_pressure` finding from
+21–24% exact host PSI `some` without unconstrained host-wide allocation.
 
 M3 adds deterministic diskstats/process-I/O/PSI parser and interval coverage,
 normalized I/O fixtures for healthy high activity, pressure ranking, low
@@ -153,8 +154,8 @@ process. It observes that scope without mutating the hierarchy.
 
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 103 unit tests and six CLI
-tests. Three host-workload acceptance tests are ignored by default and run only
+The current normal deterministic gate contains 121 unit tests and six CLI
+tests. Five host-workload acceptance tests are ignored by default and run only
 when intentionally requested.
 
 ### 6. Synthetic load scenarios
@@ -177,9 +178,10 @@ uniquely owned, writable delegated cgroup-v2 parent. The test requires its
 `memory` controller to already be enabled for children. It creates one
 generated child only, applies bounded `memory.max` and `memory.high` limits,
 moves an owned allocator into that child before it allocates, and removes the
-child after RAII cleanup. It never changes the caller-provided parent's limits
+child after RAII cleanup, which now drains remaining tasks in that uniquely
+named child before `rmdir`. It never changes the caller-provided parent's limits
 or membership, and skips when the delegation, memory PSI, or `stress-ng` VM
-options are unavailable.
+options are unavailable. EXP-0006 recorded a passing delegated-cgroup run.
 
 ```bash
 BOTTLENECK_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
@@ -321,9 +323,10 @@ A new finding type should not be considered trustworthy until:
 4. at least one synthetic real-host experiment behaves as expected,
 5. documented limitations match observed behavior.
 
-M2 has satisfied deterministic and healthy-host smoke layers, but not item 4:
-do not call the memory diagnosis fully validated until a safe, controlled
-real-host harmful-pressure scenario is demonstrated.
+M2 has satisfied deterministic, healthy-host smoke, and controlled
+harmful-pressure layers. The live run validated a swap-pressure label from
+same-window `pswpin`; reclaim-only and possible-thrashing remain
+fixture-covered.
 
 # CPU analyzer fixtures
 

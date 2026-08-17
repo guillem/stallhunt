@@ -2,12 +2,10 @@
 
 This directory is the durable design and project-memory layer.
 
-Milestones 1 and 3 are functionally complete; M4 cgroup/service attribution is
-implemented with opt-in live validation, while M2 harmful-memory validation
-remains open. `status.md` is the
+Milestones 1–3 are functionally complete; M4 cgroup/service attribution is
+implemented with opt-in live validation. `status.md` is the
 authoritative current-state record, while
-`experiments.md` retains the controlled validation and overhead evidence behind
-the CPU heuristics.
+`experiments.md` retains the controlled validation and overhead evidence.
 
 ## Read this first
 

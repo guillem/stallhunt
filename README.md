@@ -136,10 +136,10 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Milestone 1 is complete and Milestone 2's first host-memory slice is implemented
-but not yet fully validated. The repository contains a Rust binary
-with real `hunt`, `capabilities`, help, version, duration parsing, and
-text/JSON output boundaries.
+Milestones 1–3 are functionally complete. Milestone 2's host-memory slice is
+implemented and has a recorded delegated-cgroup harmful-pressure acceptance.
+The repository contains a Rust binary with real `hunt`, `capabilities`, help,
+version, duration parsing, and text/JSON output boundaries.
 
 `hunt` reads CPU PSI, `/proc/stat`, `/proc/loadavg`, bounded process, and
 bounded task scheduler-accounting snapshots before and after the requested
@@ -182,9 +182,10 @@ non-additive subset for possible-thrashing context. That heuristic also
 requires material direct-reclaim and bidirectional-swap rates and carries a
 separate confidence ceiling. Meminfo and vmstat only
 classify/contextualize a PSI verdict, and this host-wide slice makes no process
-attribution. Deterministic fixtures and a live healthy smoke pass, but a safely
-controlled real-host harmful-memory-pressure experiment remains required before
-Milestone 2 can be complete.
+attribution. Deterministic fixtures, a live healthy smoke, and a delegated-
+cgroup harmful-pressure acceptance (21–24% host PSI `some`,
+`memory_swap_pressure`) are recorded. Reclaim-only and possible-thrashing
+labels remain fixture-validated.
 
 M3 block-I/O pressure is functionally complete after a bounded rootless
 competing-I/O acceptance run. It uses exact-interval I/O PSI `some` for the
@@ -200,5 +201,3 @@ deltas plus path-derived systemd candidates are qualified scoped context, never
 cross-cgroup causal proof. Capabilities consistently report partial cgroup
 collection when limits, permissions, lifecycle changes, or controller files
 make that context incomplete.
-
-M2 controlled harmful-memory-pressure validation remains outstanding.

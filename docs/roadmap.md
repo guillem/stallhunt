@@ -117,12 +117,10 @@ On a controlled CPU-saturation scenario, the tool identifies CPU contention and 
 
 ## Milestone 2 — Memory pressure
 
-Status: in progress. The first host-memory collector/analyzer/output slice and
-deterministic fixtures exist. `tests/memory_acceptance.rs` now provides a safe,
-opt-in controlled harmful-pressure harness, but a successful live run is still
-required. The 2026-08-17 prerequisite check found no writable delegated cgroup,
-so it recorded a safe block instead of running an unconstrained host-wide
-allocator.
+Status: complete. The delegated-cgroup acceptance produced a PSI-backed
+harmful-memory finding (`memory_swap_pressure`) without unconstrained host-wide
+allocation. Reclaim-only and possible-thrashing labels remain fixture-validated;
+the slice still makes no process attribution.
 
 Goal:
 
@@ -176,8 +174,7 @@ overclaiming victim or causal mapping.
 ## Milestone 4 — Cgroup/systemd awareness
 
 Status: implementation complete; live validation is opt-in because it requires
-a caller-owned delegated cgroup. M2's controlled harmful-memory-pressure
-validation remains an outstanding cross-cutting validation debt.
+a caller-owned delegated cgroup that already contains the test process.
 
 Goal:
 
@@ -197,6 +194,8 @@ Deliver:
 - no whole-tree scan, cgroup-v1 support, or cross-cgroup causal attribution.
 
 ## Milestone 5 — Recording and replay
+
+Status: not started. This is the next unimplemented product slice.
 
 Goal:
 

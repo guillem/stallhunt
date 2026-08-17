@@ -31,22 +31,20 @@ them.
 
 ## Starting from the current implementation
 
-Milestones 1, 3, and the bounded M4 cgroup slice are implemented; M2's first
-host-memory slice exists, but its controlled harmful-pressure validation debt
-remains. The current recommended Codex session is:
+Milestones 1, 2, 3, and the bounded M4 cgroup slice are implemented. The
+current recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Validate M2 harmful memory pressure safely. Use a uniquely owned delegated
-cgroup only when one is already available; do not mutate an arbitrary hierarchy.
-Exact memory PSI `some` remains the verdict and `full`, meminfo, and vmstat
-remain non-additive context. Record the real result, including a skipped result
-when safe prerequisites are absent.
+Begin Milestone 5 recording and replay as the next unimplemented product
+slice. Create an ADR for the recording schema before promising format
+compatibility. Do not introduce eBPF as a prerequisite.
 
-Do not introduce eBPF as a prerequisite. Update
-docs/status.md, docs/experiments.md, and any affected design docs.
+The opt-in M4 cgroup_acceptance observational run is feasible on hosts with a
+delegated user tree, but is not a blocker for starting M5. Update
+docs/status.md and any affected design docs.
 ```
 
 ## Session discipline
