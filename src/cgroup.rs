@@ -91,6 +91,17 @@ pub struct CgroupMemoryEventsRaw {
     pub oom_group_kill: Option<u64>,
 }
 
+/// Selected cgroup `memory.stat` counters. Unknown kernel keys are ignored.
+/// Direct scan/steal and swap-in/out are the scoped analogue of host vmstat
+/// mechanism counters; background kswapd aggregates are not collected here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CgroupMemoryStatRaw {
+    pub pgscan_direct: Option<u64>,
+    pub pgsteal_direct: Option<u64>,
+    pub pswpin: Option<u64>,
+    pub pswpout: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CgroupIoDevice {
     pub major: u32,
@@ -151,6 +162,7 @@ pub struct CgroupRaw {
     pub cpu: CgroupResource<CgroupCpuRaw>,
     pub memory_current: CgroupResource<u64>,
     pub memory_events: CgroupResource<CgroupMemoryEventsRaw>,
+    pub memory_stat: CgroupResource<CgroupMemoryStatRaw>,
     pub io: CgroupResource<BTreeMap<CgroupIoDevice, CgroupIoRaw>>,
     pub cpu_pressure: CgroupResource<CgroupPsiRaw>,
     pub memory_pressure: CgroupResource<CgroupPsiRaw>,
@@ -269,6 +281,7 @@ pub fn cgroup_capability_from_observation(observation: &CgroupObservation) -> Cg
                 group.cpu.state,
                 group.memory_current_end.state,
                 group.memory_events.state,
+                group.memory_stat.state,
                 group.io.state,
                 group.cpu_pressure.state,
                 group.memory_pressure.state,
@@ -318,6 +331,7 @@ fn all_group_resources_available(group: &CgroupRaw) -> bool {
         group.cpu.state,
         group.memory_current.state,
         group.memory_events.state,
+        group.memory_stat.state,
         group.io.state,
         group.cpu_pressure.state,
         group.memory_pressure.state,
@@ -605,6 +619,7 @@ fn read_group(
         cpu: read_resource(directory, "cpu.stat", parse_cpu_stat, budget),
         memory_current: read_resource(directory, "memory.current", parse_single_counter, budget),
         memory_events: read_resource(directory, "memory.events", parse_memory_events, budget),
+        memory_stat: read_resource(directory, "memory.stat", parse_memory_stat, budget),
         io: read_resource(directory, "io.stat", parse_io_stat, budget),
         cpu_pressure,
         memory_pressure,
@@ -679,6 +694,15 @@ pub fn parse_memory_events(input: &str) -> Result<CgroupMemoryEventsRaw, CgroupE
         oom: v.get("oom").copied(),
         oom_kill: v.get("oom_kill").copied(),
         oom_group_kill: v.get("oom_group_kill").copied(),
+    })
+}
+pub fn parse_memory_stat(input: &str) -> Result<CgroupMemoryStatRaw, CgroupError> {
+    let v = parse_key_values(input)?;
+    Ok(CgroupMemoryStatRaw {
+        pgscan_direct: v.get("pgscan_direct").copied(),
+        pgsteal_direct: v.get("pgsteal_direct").copied(),
+        pswpin: v.get("pswpin").copied(),
+        pswpout: v.get("pswpout").copied(),
     })
 }
 pub fn parse_io_stat(input: &str) -> Result<BTreeMap<CgroupIoDevice, CgroupIoRaw>, CgroupError> {
@@ -977,6 +1001,7 @@ pub struct CgroupInterval {
     pub cpu: CgroupResource<CgroupCpuInterval>,
     pub memory_current_end: CgroupResource<u64>,
     pub memory_events: CgroupResource<CgroupMemoryEventsRaw>,
+    pub memory_stat: CgroupResource<CgroupMemoryStatRaw>,
     pub io: CgroupResource<BTreeMap<CgroupIoDevice, CgroupIoRaw>>,
     pub cpu_pressure: CgroupResource<CgroupPsiInterval>,
     pub memory_pressure: CgroupResource<CgroupPsiInterval>,
@@ -1054,6 +1079,7 @@ pub fn cgroup_interval_from_snapshots(
             cpu: interval_cpu(&begin.cpu, &finish.cpu),
             memory_current_end: finish.memory_current.clone(),
             memory_events: interval_events(&begin.memory_events, &finish.memory_events),
+            memory_stat: interval_memory_stat(&begin.memory_stat, &finish.memory_stat),
             io: interval_io(&begin.io, &finish.io),
             cpu_pressure: interval_psi(
                 &begin.cpu_pressure,
@@ -1111,6 +1137,20 @@ fn interval_events(
             oom: opt_delta(a.oom, b.oom),
             oom_kill: opt_delta(a.oom_kill, b.oom_kill),
             oom_group_kill: opt_delta(a.oom_group_kill, b.oom_group_kill),
+        }),
+        _ => CgroupResource::failed(interval_missing_state(start, end)),
+    }
+}
+fn interval_memory_stat(
+    start: &CgroupResource<CgroupMemoryStatRaw>,
+    end: &CgroupResource<CgroupMemoryStatRaw>,
+) -> CgroupResource<CgroupMemoryStatRaw> {
+    match (&start.value, &end.value) {
+        (Some(a), Some(b)) => CgroupResource::available(CgroupMemoryStatRaw {
+            pgscan_direct: opt_delta(a.pgscan_direct, b.pgscan_direct),
+            pgsteal_direct: opt_delta(a.pgsteal_direct, b.pgsteal_direct),
+            pswpin: opt_delta(a.pswpin, b.pswpin),
+            pswpout: opt_delta(a.pswpout, b.pswpout),
         }),
         _ => CgroupResource::failed(interval_missing_state(start, end)),
     }
@@ -1305,6 +1345,7 @@ mod tests {
             cpu: CgroupResource::failed(CgroupFileState::Missing),
             memory_current: CgroupResource::failed(CgroupFileState::Missing),
             memory_events: CgroupResource::failed(CgroupFileState::Missing),
+            memory_stat: CgroupResource::failed(CgroupFileState::Missing),
             io: CgroupResource::failed(CgroupFileState::Missing),
             cpu_pressure: psi
                 .clone()
@@ -1387,6 +1428,12 @@ mod tests {
                 .high,
             Some(2)
         );
+        let stat =
+            parse_memory_stat(include_str!("../tests/fixtures/cgroup-memory-stat-valid")).unwrap();
+        assert_eq!(stat.pgscan_direct, Some(12));
+        assert_eq!(stat.pgsteal_direct, Some(8));
+        assert_eq!(stat.pswpin, Some(3));
+        assert_eq!(stat.pswpout, Some(4));
     }
     #[test]
     fn paths_collect_ancestors_and_bound_count() {
@@ -1422,6 +1469,7 @@ mod tests {
             }),
             memory_current: CgroupResource::failed(CgroupFileState::Missing),
             memory_events: CgroupResource::failed(CgroupFileState::Missing),
+            memory_stat: CgroupResource::failed(CgroupFileState::Missing),
             io: CgroupResource::failed(CgroupFileState::Missing),
             cpu_pressure: CgroupResource::failed(CgroupFileState::Missing),
             memory_pressure: CgroupResource::failed(CgroupFileState::Missing),
@@ -1612,6 +1660,21 @@ mod tests {
         );
         assert_eq!(
             interval_events(&events, &missing_events).state,
+            CgroupFileState::Partial
+        );
+        let missing_stat = CgroupResource::failed(CgroupFileState::Missing);
+        let stat = CgroupResource::available(CgroupMemoryStatRaw {
+            pgscan_direct: Some(1),
+            pgsteal_direct: Some(1),
+            pswpin: Some(0),
+            pswpout: Some(0),
+        });
+        assert_eq!(
+            interval_memory_stat(&missing_stat, &stat).state,
+            CgroupFileState::Partial
+        );
+        assert_eq!(
+            interval_memory_stat(&stat, &missing_stat).state,
             CgroupFileState::Partial
         );
         let missing_io = CgroupResource::failed(CgroupFileState::Missing);

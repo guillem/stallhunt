@@ -6,7 +6,8 @@ use serde::Serialize;
 
 use crate::cgroup::{
     CgroupCpuInterval, CgroupFileState, CgroupIoDevice, CgroupIoRaw, CgroupMemoryEventsRaw,
-    CgroupObservation, CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
+    CgroupMemoryStatRaw, CgroupObservation, CgroupPsiInterval, CgroupPsiIntervalState,
+    CgroupResource,
 };
 use crate::cpu::{
     self, CpuProcessObservation, ProcessKey, ProcessSchedulerDelayInterval, SchedstatCapability,
@@ -58,6 +59,7 @@ pub struct CgroupEvidence {
     pub cpu: CgroupResource<CgroupCpuInterval>,
     pub memory_current_end: CgroupResource<u64>,
     pub memory_events: CgroupResource<CgroupMemoryEventsRaw>,
+    pub memory_stat: CgroupResource<CgroupMemoryStatRaw>,
     pub io: CgroupResource<BTreeMap<CgroupIoDevice, CgroupIoRaw>>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -437,10 +439,27 @@ fn cgroup_memory_io_chain(memory: &CgroupFinding, io: &CgroupFinding) -> Option<
     if memory.path != io.path {
         return None;
     }
-    let events = memory.evidence.memory_events.value.as_ref()?;
-    let high_events = events.high.filter(|value| *value > 0);
-    let max_events = events.max.filter(|value| *value > 0);
-    if high_events.is_none() && max_events.is_none() {
+    let events = memory.evidence.memory_events.value.as_ref();
+    let high_events = events
+        .and_then(|events| events.high)
+        .filter(|value| *value > 0);
+    let max_events = events
+        .and_then(|events| events.max)
+        .filter(|value| *value > 0);
+    let stat = memory.evidence.memory_stat.value.as_ref();
+    let scan_direct_pages = stat
+        .and_then(|stat| stat.pgscan_direct)
+        .filter(|value| *value > 0);
+    let steal_direct_pages = stat
+        .and_then(|stat| stat.pgsteal_direct)
+        .filter(|value| *value > 0);
+    let swap_in_pages = stat.and_then(|stat| stat.pswpin).filter(|value| *value > 0);
+    let swap_out_pages = stat
+        .and_then(|stat| stat.pswpout)
+        .filter(|value| *value > 0);
+    let limit_reclaim = high_events.is_some() || max_events.is_some();
+    let direct_reclaim = scan_direct_pages.is_some() && steal_direct_pages.is_some();
+    if !limit_reclaim && !direct_reclaim && swap_in_pages.is_none() {
         return None;
     }
     let memory_psi_some_fraction = memory.evidence.psi_some_fraction?;
@@ -464,10 +483,10 @@ fn cgroup_memory_io_chain(memory: &CgroupFinding, io: &CgroupFinding) -> Option<
         evidence: ChainEvidence {
             memory_psi_some_fraction,
             io_psi_some_fraction,
-            swap_in_pages: None,
-            swap_out_pages: None,
-            scan_direct_pages: None,
-            steal_direct_pages: None,
+            swap_in_pages,
+            swap_out_pages,
+            scan_direct_pages,
+            steal_direct_pages,
             path: Some(memory.path.clone()),
             high_events,
             max_events,
@@ -475,15 +494,15 @@ fn cgroup_memory_io_chain(memory: &CgroupFinding, io: &CgroupFinding) -> Option<
         qualifiers: vec![
             Qualifier {
                 kind: "chain_not_causal",
-                message: "Independent same-cgroup PSI and memory.events evidence can support a related path; it does not prove that memory reclaim in this cgroup caused its I/O stalls.",
+                message: "Independent same-cgroup PSI plus memory.events or memory.stat evidence can support a related path; it does not prove that memory reclaim in this cgroup caused its I/O stalls.",
             },
             Qualifier {
                 kind: "same_cgroup_scope_only",
                 message: "The relation is limited to one cgroup path. It does not link host findings to cgroup findings or one cgroup to another, including ancestors and children.",
             },
             Qualifier {
-                kind: "cgroup_memory_events_not_vmstat",
-                message: "memory.events high/max counts are cgroup limit-reclaim signals, not host pgscan/pswpin proof, and may include descendant activity.",
+                kind: "cgroup_memory_mechanism_scoped",
+                message: "memory.events high/max and memory.stat direct-reclaim or swap-in deltas are cgroup-scoped signals, not host vmstat proof, and may include descendant activity.",
             },
             Qualifier {
                 kind: "no_process_device_mapping",
@@ -1486,6 +1505,7 @@ fn cgroup_finding(
             cpu: group.cpu.clone(),
             memory_current_end: group.memory_current_end.clone(),
             memory_events: group.memory_events.clone(),
+            memory_stat: group.memory_stat.clone(),
             io: group.io.clone(),
         },
         systemd_unit_candidate: group.systemd_unit_candidate.clone(),
@@ -1764,6 +1784,10 @@ mod tests {
                     state: CgroupFileState::Missing,
                     value: None,
                 },
+                memory_stat: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
                 io: CgroupResource {
                     state: CgroupFileState::Missing,
                     value: None,
@@ -1826,6 +1850,30 @@ mod tests {
         }
     }
 
+    fn cgroup_stat(
+        pgscan_direct: Option<u64>,
+        pgsteal_direct: Option<u64>,
+        pswpin: Option<u64>,
+        pswpout: Option<u64>,
+    ) -> CgroupResource<CgroupMemoryStatRaw> {
+        if pgscan_direct.is_none()
+            && pgsteal_direct.is_none()
+            && pswpin.is_none()
+            && pswpout.is_none()
+        {
+            return missing_cgroup_resource();
+        }
+        CgroupResource {
+            state: CgroupFileState::Available,
+            value: Some(CgroupMemoryStatRaw {
+                pgscan_direct,
+                pgsteal_direct,
+                pswpin,
+                pswpout,
+            }),
+        }
+    }
+
     fn scoped_memory_io_group(
         path: &str,
         memory_some_us: Option<u64>,
@@ -1839,12 +1887,21 @@ mod tests {
             cpu: missing_cgroup_resource(),
             memory_current_end: missing_cgroup_resource(),
             memory_events: events,
+            memory_stat: missing_cgroup_resource(),
             io: missing_cgroup_resource(),
             cpu_pressure: cgroup_psi(cpu_some_us, elapsed, CgroupPsiIntervalState::Available),
             memory_pressure: cgroup_psi(memory_some_us, elapsed, CgroupPsiIntervalState::Available),
             io_pressure: cgroup_psi(io_some_us, elapsed, CgroupPsiIntervalState::Available),
             systemd_unit_candidate: None,
         }
+    }
+
+    fn with_cgroup_stat(
+        mut group: CgroupInterval,
+        stat: CgroupResource<CgroupMemoryStatRaw>,
+    ) -> CgroupInterval {
+        group.memory_stat = stat;
+        group
     }
 
     fn scoped_memory_io_observation(
@@ -3083,6 +3140,51 @@ mod tests {
     }
 
     #[test]
+    fn cgroup_memory_stat_direct_reclaim_or_swap_in_forms_a_chain() {
+        let elapsed = Duration::from_secs(10);
+        let reclaim = scoped_memory_io_observation(
+            vec![with_cgroup_stat(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    Some(800_000),
+                    Some(800_000),
+                    None,
+                    cgroup_events(None, None),
+                    elapsed,
+                ),
+                cgroup_stat(Some(12), Some(8), Some(0), Some(0)),
+            )],
+            elapsed,
+        );
+        let chains = cgroup_chains_from(&reclaim);
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].kind, ChainKind::CgroupMemoryConsistentWithIo);
+        assert_eq!(chains[0].confidence, Confidence::Low);
+        assert_eq!(chains[0].evidence.scan_direct_pages, Some(12));
+        assert_eq!(chains[0].evidence.steal_direct_pages, Some(8));
+        assert_eq!(chains[0].evidence.high_events, None);
+
+        let swap = scoped_memory_io_observation(
+            vec![with_cgroup_stat(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    Some(800_000),
+                    Some(800_000),
+                    None,
+                    cgroup_events(Some(0), Some(0)),
+                    elapsed,
+                ),
+                cgroup_stat(Some(0), Some(0), Some(5), Some(2)),
+            )],
+            elapsed,
+        );
+        let swap_chains = cgroup_chains_from(&swap);
+        assert_eq!(swap_chains.len(), 1);
+        assert_eq!(swap_chains[0].evidence.swap_in_pages, Some(5));
+        assert_eq!(swap_chains[0].evidence.swap_out_pages, Some(2));
+    }
+
+    #[test]
     fn cgroup_coincident_or_cross_scope_pressure_does_not_form_a_chain() {
         let elapsed = Duration::from_secs(10);
         let coincident = scoped_memory_io_observation(
@@ -3098,7 +3200,26 @@ mod tests {
         );
         assert!(
             cgroup_chains_from(&coincident).is_empty(),
-            "same-cgroup PSI coincidence without memory.events high/max must not form a chain"
+            "same-cgroup PSI coincidence without memory.events high/max or memory.stat mechanism must not form a chain"
+        );
+
+        let scan_without_steal = scoped_memory_io_observation(
+            vec![with_cgroup_stat(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    Some(800_000),
+                    Some(800_000),
+                    None,
+                    cgroup_events(Some(0), Some(0)),
+                    elapsed,
+                ),
+                cgroup_stat(Some(12), Some(0), Some(0), Some(0)),
+            )],
+            elapsed,
+        );
+        assert!(
+            cgroup_chains_from(&scan_without_steal).is_empty(),
+            "direct scan without steal is not a reclaim mechanism"
         );
 
         let missing_events = scoped_memory_io_observation(

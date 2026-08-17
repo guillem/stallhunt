@@ -52,3 +52,4 @@ What credible options were rejected and why?
 - [`0008-watch-finding-lifecycle.md`](0008-watch-finding-lifecycle.md)
 - [`0009-evidence-chains.md`](0009-evidence-chains.md)
 - [`0010-same-cgroup-evidence-chains.md`](0010-same-cgroup-evidence-chains.md)
+- [`0011-cgroup-memory-stat-chains.md`](0011-cgroup-memory-stat-chains.md)

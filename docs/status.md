@@ -8,9 +8,10 @@ Last updated: 2026-08-17
 
 Milestones 1–6 are functionally complete. M8 relates a memory mechanism
 finding to host I/O pressure, and same-cgroup memory plus I/O pressure, as
-`consistent_with` when those findings already exist (ADR-0009, ADR-0010). It
-does not claim causality, does not merge the resource verdicts, does not link
-host findings to cgroup findings, and does not track chains in watch. Do not
+`consistent_with` when those findings already exist (ADR-0009, ADR-0010,
+ADR-0011). It does not claim causality, does not merge the resource verdicts,
+does not link host findings to cgroup findings, and does not track chains in
+watch. Do not
 start M7 merely because eBPF is interesting; add a probe only for a concrete
 diagnostic gap. Additional M8 chains should wait for independent linking
 evidence. M5 recording and replay remain available for offline re-analysis. M4
@@ -51,10 +52,11 @@ process and does not mutate the hierarchy.
   SIGINT uses default termination; `--count` bounds scripted runs.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
   reclaim, swap, or possible-thrashing finding to host I/O pressure, and can
-  relate same-cgroup memory plus I/O pressure when `memory.events` high or max
-  increased, as `consistent_with`. Coincident PSI without that independent
-  mechanism does not create a chain. Confidence is never high. Host findings
-  are not linked to cgroup findings. Watch does not track chain identities.
+  relate same-cgroup memory plus I/O pressure when `memory.events` high/max or
+  `memory.stat` direct-reclaim/swap-in increased, as `consistent_with`.
+  Coincident PSI without that independent mechanism does not create a chain.
+  Confidence is never high. Host findings are not linked to cgroup findings.
+  Watch does not track chain identities.
 - **M7 not started; remaining M8 chains not started:** no eBPF probe exists,
   and no CPU–I/O, host–cgroup, or process-device chain exists.
 
@@ -185,7 +187,8 @@ process and does not mutate the hierarchy.
   ancestors, capped at 512 groups, depth 64, 4,096 path bytes, 64 KiB per file,
   8 MiB per snapshot, and 4,096 attempted reads. These implementation limits
   are more conservative than the 1,024-PID/2,048-group ADR ceilings.
-- M4 collects cgroup CPU, memory, I/O, and PSI files best-effort; normalizes
+- M4 collects cgroup CPU, memory, I/O, PSI, and selected `memory.stat` files
+  best-effort; normalizes
   stable paths and stable memberships; treats exact per-cgroup PSI `some` as a
   verdict about that scope only; retains `full` as non-additive context; and
   emits inferred final-component `.service`, `.scope`, or `.slice` labels.
@@ -213,10 +216,11 @@ process and does not mutate the hierarchy.
 - M8 relates a memory reclaim, swap, or possible-thrashing finding to host I/O
   pressure as `consistent_with` when both exist. It also relates same-cgroup
   memory and I/O pressure when that path has a positive `memory.events` high or
-  max delta. Hunt text appends a related-evidence section; hunt JSON adds
-  `evidence_chains`. Coincidence without the independent mechanism is not a
-  chain, host findings are not linked to cgroup findings, and the relation is
-  never a causal claim.
+  max delta, or positive `memory.stat` direct-reclaim (`pgscan_direct` and
+  `pgsteal_direct`) or swap-in (`pswpin`) deltas. Hunt text appends a related-
+  evidence section; hunt JSON adds `evidence_chains`. Coincidence without the
+  independent mechanism is not a chain, host findings are not linked to cgroup
+  findings, and the relation is never a causal claim.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -272,12 +276,12 @@ process and does not mutate the hierarchy.
   does not drain the current window on SIGINT. Consecutive 100 ms windows remain
   smoke observations, same as hunt.
 - M8's chains are same-window correlation of independent PSI plus either host
-  VM counters or same-cgroup `memory.events` high/max deltas. They do not prove
-  reclaim or swap caused I/O stalls, do not map processes to devices, do not
-  link host and cgroup findings, and are not a watch identity. Generic memory
-  pressure coincident with I/O pressure remains two findings with no chain.
-  Same-cgroup chains also require a high or max event delta, so cgroups without
-  those limit-reclaim counts will not chain.
+  VM counters or same-cgroup `memory.events` high/max or `memory.stat`
+  direct-reclaim/swap-in deltas. They do not prove reclaim or swap caused I/O
+  stalls, do not map processes to devices, do not link host and cgroup
+  findings, and are not a watch identity. Generic memory pressure coincident
+  with I/O pressure remains two findings with no chain. Direct scan without
+  steal is not a cgroup reclaim mechanism.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -383,11 +387,10 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, M8's same-cgroup evidence-chain slice was validated with
-deterministic analyzer coverage (same-path positive, coincident PSI, missing
-events, parent/child split, CPU–I/O, and host-not-linked-to-cgroup) plus a
-checked-in related-evidence text fixture and structural hunt JSON. Formatting
-and locked-offline Clippy passed:
+On 2026-08-17, M8's cgroup `memory.stat` mechanism slice was validated with
+deterministic parser, interval, analyzer, and renderer coverage (direct
+reclaim, swap-in, scan-without-steal, events still sufficient, coincident PSI
+still insufficient). Formatting and locked-offline Clippy passed:
 
 ```bash
 cargo fmt --all -- --check
@@ -395,8 +398,13 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Default-gate coverage is 141 unit tests, ten CLI tests, and five ignored
+Default-gate coverage is 143 unit tests, ten CLI tests, and five ignored
 host-workload tests.
+
+Earlier the same day, M8's same-cgroup evidence-chain slice was validated with
+deterministic analyzer coverage (same-path positive, coincident PSI, missing
+events, parent/child split, CPU–I/O, and host-not-linked-to-cgroup) plus a
+checked-in related-evidence text fixture and structural hunt JSON.
 
 Earlier the same day, EXP-0007 measured a current release binary on Linux
 7.1.5 with about 370 visible PIDs and ~1,587 stable tasks. Three one-second

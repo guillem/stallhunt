@@ -227,6 +227,6 @@ M8 adds a conservative evidence chain: when memory reclaim, swap, or possible
 thrashing coexists with I/O pressure, hunt text and JSON may report that the
 memory finding is consistent with the I/O finding. The same relation may also
 join same-cgroup memory and I/O pressure when that cgroup's `memory.events`
-show a high or max delta. Coincident PSI without that independent mechanism is
+show a high or max delta or `memory.stat` shows direct reclaim or swap-in. Coincident PSI without that independent mechanism is
 not a chain. The relation is not a causal claim, does not join host findings to
 cgroup findings, and is not tracked by watch.

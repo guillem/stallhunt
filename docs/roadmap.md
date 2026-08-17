@@ -251,7 +251,7 @@ Potential Rust ecosystem: Aya, subject to a current technical evaluation and ADR
 
 Status: two conservative slices complete. The implemented path relates a
 memory mechanism finding to host I/O pressure, and same-cgroup memory plus I/O
-pressure, as `consistent_with` (ADR-0009, ADR-0010). It does not claim
+pressure, as `consistent_with` (ADR-0009, ADR-0010, ADR-0011). It does not claim
 causality, does not map processes to devices, does not link host and cgroup
 findings, and does not track chains in watch. CPU–I/O and host–cgroup chains
 remain unimplemented.

@@ -296,15 +296,18 @@ For retained cgroups, it collects best-effort:
 
 - CPU statistics,
 - memory events/current,
+- selected `memory.stat` page counters (`pgscan_direct`, `pgsteal_direct`,
+  `pswpin`, `pswpout`),
 - I/O statistics,
 - PSI files where available.
 
 Exact per-cgroup PSI `some` establishes a verdict for that scope only. `full`
 remains non-additive subset context, while `cpu.stat`, memory, and I/O
 controller deltas explain a scoped finding without creating it. A positive
-`memory.events` `high` or `max` delta can independently support a same-cgroup
-`consistent_with` relation to that cgroup's I/O pressure; it still does not
-create a memory verdict or a host/cgroup link. Membership and
+`memory.events` `high` or `max` delta, or positive `memory.stat` direct-reclaim
+or swap-in deltas, can independently support a same-cgroup `consistent_with`
+relation to that cgroup's I/O pressure; they still do not create a memory
+verdict or a host/cgroup link. Membership and
 counters cannot establish cross-cgroup causality. Recognizable systemd-looking
 path components may produce an explicitly inferred unit candidate; no D-Bus,
 libsystemd, or manager is required.

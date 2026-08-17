@@ -14,9 +14,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::cgroup::{
-    CgroupCollectionIssues, CgroupCpuInterval, CgroupError, CgroupInterval, CgroupIoDevice,
-    CgroupIoRaw, CgroupMemoryEventsRaw, CgroupObservation, CgroupProcessMember, CgroupPsiInterval,
-    CgroupPsiIntervalState, CgroupResource,
+    CgroupCollectionIssues, CgroupCpuInterval, CgroupError, CgroupFileState, CgroupInterval,
+    CgroupIoDevice, CgroupIoRaw, CgroupMemoryEventsRaw, CgroupMemoryStatRaw, CgroupObservation,
+    CgroupProcessMember, CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
 };
 use crate::cpu::{CpuError, CpuProcessObservation};
 use crate::io::{DiskstatsError, DiskstatsObservation, ProcessIoObservation};
@@ -121,11 +121,20 @@ pub struct RecordedCgroupInterval {
     pub cpu: CgroupResource<CgroupCpuInterval>,
     pub memory_current_end: CgroupResource<u64>,
     pub memory_events: CgroupResource<CgroupMemoryEventsRaw>,
+    #[serde(default = "missing_cgroup_memory_stat")]
+    pub memory_stat: CgroupResource<CgroupMemoryStatRaw>,
     pub io: CgroupResource<BTreeMap<CgroupIoDevice, CgroupIoRaw>>,
     pub cpu_pressure: CgroupResource<RecordedCgroupPsi>,
     pub memory_pressure: CgroupResource<RecordedCgroupPsi>,
     pub io_pressure: CgroupResource<RecordedCgroupPsi>,
     pub systemd_unit_candidate: Option<String>,
+}
+
+fn missing_cgroup_memory_stat() -> CgroupResource<CgroupMemoryStatRaw> {
+    CgroupResource {
+        state: CgroupFileState::Missing,
+        value: None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -404,6 +413,7 @@ fn record_cgroup_interval(group: &CgroupInterval) -> RecordedCgroupInterval {
         cpu: group.cpu.clone(),
         memory_current_end: group.memory_current_end.clone(),
         memory_events: group.memory_events.clone(),
+        memory_stat: group.memory_stat.clone(),
         io: group.io.clone(),
         cpu_pressure: map_resource(&group.cpu_pressure, record_cgroup_psi),
         memory_pressure: map_resource(&group.memory_pressure, record_cgroup_psi),
@@ -481,6 +491,7 @@ fn cgroup_interval_from_recorded(group: &RecordedCgroupInterval) -> CgroupInterv
         cpu: group.cpu.clone(),
         memory_current_end: group.memory_current_end.clone(),
         memory_events: group.memory_events.clone(),
+        memory_stat: group.memory_stat.clone(),
         io: group.io.clone(),
         cpu_pressure: map_resource(&group.cpu_pressure, cgroup_psi_from_recorded),
         memory_pressure: map_resource(&group.memory_pressure, cgroup_psi_from_recorded),
@@ -792,6 +803,10 @@ mod tests {
                             value: None,
                         },
                         memory_events: CgroupResource {
+                            state: CgroupFileState::Missing,
+                            value: None,
+                        },
+                        memory_stat: CgroupResource {
                             state: CgroupFileState::Missing,
                             value: None,
                         },

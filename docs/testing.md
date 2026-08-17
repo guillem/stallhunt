@@ -166,14 +166,15 @@ and JSON on a 100 ms window. Live watch does not assert host contention.
 
 M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus
-I/O pressure path gated by `memory.events` high/max, coincident PSI without a
-mechanism, cross-scope and CPU–I/O negatives, checked-in related-evidence text
+I/O pressure path gated by `memory.events` high/max or `memory.stat`
+direct-reclaim/swap-in, coincident PSI without a mechanism, scan-without-steal,
+cross-scope and CPU–I/O negatives, checked-in related-evidence text
 fixtures, and structural hunt JSON. Chains are not causal claims and are not
 watch identities.
 
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 141 unit tests and ten CLI
+The current normal deterministic gate contains 143 unit tests and ten CLI
 tests. Five host-workload acceptance tests are ignored by default and run only
 when intentionally requested.
 

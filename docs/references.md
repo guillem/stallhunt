@@ -73,6 +73,7 @@ Relevant to:
 - `cpu.stat`,
 - `memory.current`,
 - `memory.events`,
+- `memory.stat`,
 - `io.stat`,
 - per-cgroup pressure files.
 

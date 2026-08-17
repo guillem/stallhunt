@@ -1,0 +1,10 @@
+anon 4096
+file 2048
+pgscan_kswapd 99
+pgsteal_kswapd 80
+pgscan_direct 12
+pgsteal_direct 8
+pgscan 111
+pgsteal 88
+pswpin 3
+pswpout 4

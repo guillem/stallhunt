@@ -1772,7 +1772,8 @@ mod tests {
     use super::*;
     use crate::cgroup::{
         CgroupCollectionIssues, CgroupCpuInterval, CgroupFileState, CgroupInterval,
-        CgroupMemoryEventsRaw, CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
+        CgroupMemoryEventsRaw, CgroupMemoryStatRaw, CgroupPsiInterval, CgroupPsiIntervalState,
+        CgroupResource,
     };
     use crate::cpu::{
         CpuProcessObservation, HostCpuInterval, LoadAverageAvailability, LoadAverageRaw,
@@ -2032,6 +2033,7 @@ mod tests {
                     ),
                     memory_current_end: cgroup_resource(Some(4_096), CgroupFileState::Available),
                     memory_events: cgroup_resource(None, CgroupFileState::Missing),
+                    memory_stat: cgroup_resource(None, CgroupFileState::Missing),
                     io: cgroup_resource(None, CgroupFileState::Missing),
                     cpu_pressure: cgroup_resource(
                         Some(CgroupPsiInterval {
@@ -2477,6 +2479,7 @@ mod tests {
                         Some(value) => cgroup_resource(Some(value), CgroupFileState::Available),
                         None => cgroup_resource(None, CgroupFileState::Missing),
                     },
+                    memory_stat: cgroup_resource(None, CgroupFileState::Missing),
                     io: cgroup_resource(None, CgroupFileState::Missing),
                     cpu_pressure: cgroup_resource(None, CgroupFileState::Missing),
                     memory_pressure: memory_psi,
@@ -2605,6 +2608,76 @@ mod tests {
         assert_ne!(
             combined_chains[0]["from"]["resource"],
             combined_chains[1]["from"]["resource"]
+        );
+    }
+
+    #[test]
+    fn same_cgroup_memory_stat_chain_is_rendered_without_limit_events() {
+        let mut observation = hunt_observation();
+        observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+        observation.psi.as_mut().unwrap().interval.total_delta_us = 50_000;
+        let mut cgroup = scoped_memory_io_cgroup_observation(None, true);
+        if let Ok(value) = cgroup.observation.as_mut() {
+            value.groups[0].memory_stat = cgroup_resource(
+                Some(CgroupMemoryStatRaw {
+                    pgscan_direct: Some(12),
+                    pgsteal_direct: Some(8),
+                    pswpin: Some(0),
+                    pswpout: Some(0),
+                }),
+                CgroupFileState::Available,
+            );
+        }
+        observation.cgroup = Some(cgroup);
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| observation,
+        ))
+        .unwrap();
+        let chain = &json["evidence_chains"][0];
+        assert_eq!(chain["kind"], "cgroup_memory_consistent_with_io");
+        assert_eq!(chain["evidence"]["scan_direct_pages"], 12);
+        assert_eq!(chain["evidence"]["steal_direct_pages"], 8);
+        assert!(chain["evidence"].get("high_events").is_none());
+        let text = hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+            },
+            |_| {
+                let mut observation = hunt_observation();
+                observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+                observation.psi.as_mut().unwrap().interval.total_delta_us = 50_000;
+                let mut cgroup = scoped_memory_io_cgroup_observation(None, true);
+                if let Ok(value) = cgroup.observation.as_mut() {
+                    value.groups[0].memory_stat = cgroup_resource(
+                        Some(CgroupMemoryStatRaw {
+                            pgscan_direct: Some(12),
+                            pgsteal_direct: Some(8),
+                            pswpin: Some(0),
+                            pswpout: Some(0),
+                        }),
+                        CgroupFileState::Available,
+                    );
+                }
+                observation.cgroup = Some(cgroup);
+                observation
+            },
+        );
+        assert!(text.contains("12 direct-reclaim scan pages"));
+        assert!(
+            !text
+                .split_once("Related evidence\n")
+                .unwrap()
+                .1
+                .lines()
+                .next()
+                .unwrap()
+                .to_lowercase()
+                .contains("cause")
         );
     }
 

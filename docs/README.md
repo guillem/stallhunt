@@ -49,6 +49,7 @@ Accepted initial decisions:
 - ADR-0008: watch tracks finding lifecycle rather than providing a TUI monitor
 - ADR-0009: evidence chains require independent mechanism evidence and never claim causality
 - ADR-0010: same-cgroup memory plus I/O chains stay on one path and never join host findings
+- ADR-0011: same-cgroup chains may use memory.stat page deltas in addition to memory.events
 
 ## Documentation rules
 

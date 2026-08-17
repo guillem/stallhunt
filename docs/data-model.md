@@ -376,7 +376,7 @@ recording and does not carry full evidence.
 ## Evidence chains
 
 M8 adds an optional relation between already-produced findings (ADR-0009,
-ADR-0010).
+ADR-0010, ADR-0011).
 
 A chain is not a resource verdict. Two implemented paths exist:
 
@@ -385,7 +385,8 @@ A chain is not a resource verdict. Two implemented paths exist:
   is required
 - same-cgroup: `from`/`to` are memory and I/O pressure findings that share one
   cgroup path, and that memory finding has a positive `memory.events` `high` or
-  `max` delta
+  `max` delta, or positive `memory.stat` `pgscan_direct` and `pgsteal_direct`
+  deltas, or a positive `pswpin` delta
 
 In both cases:
 
