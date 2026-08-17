@@ -253,6 +253,22 @@ See `docs/testing.md`.
 
 Keep changes reviewable.
 
+### Milestone-boundary resumability
+
+At every milestone boundary, the repository must be resumable by a competent
+agent or engineer with no access to previous conversation history.
+
+Milestone completion requires:
+
+- implementation committed,
+- formatting, static checks, and tests passing,
+- `docs/status.md` updated,
+- `docs/roadmap.md` updated when milestone state or sequencing changed,
+- important architectural decisions captured in ADRs,
+- known bugs, limitations, validation gaps, and the precise next task recorded,
+- no essential project knowledge existing only in an agent conversation,
+- a clean working tree with no generated or debug artifacts.
+
 Prefer commits that are:
 
 - coherent,
