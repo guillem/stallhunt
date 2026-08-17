@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -9,7 +10,9 @@ use crate::cgroup::{
     CgroupCapability, CgroupObservation, cgroup_capability_explanation,
     cgroup_capability_from_observation,
 };
-use crate::cli::{CapabilitiesOptions, HelpTopic, HuntOptions, OutputFormat};
+use crate::cli::{
+    CapabilitiesOptions, HelpTopic, HuntOptions, OutputFormat, RedactOptions, ReplayOptions,
+};
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
 use crate::io::{DiskstatsError, IoCapabilities, IoCapability, ProcessIoObservation};
 use crate::memory::{
@@ -23,22 +26,66 @@ use crate::psi::{
     MemoryPsiCapability, MemoryPsiFullInterval, MemoryPsiObservation,
 };
 
-const ROOT_HELP: &str = "Linux performance triage that reports evidence-backed bottlenecks.\n\nUSAGE:\n    bottleneck <COMMAND>\n\nCOMMANDS:\n    hunt          Run a bounded diagnosis\n    capabilities  Report available telemetry\n    version       Print version information\n    help          Print this help or help for a command\n\nOPTIONS:\n    -h, --help     Print help\n    -V, --version  Print version information\n";
+const ROOT_HELP: &str = "Linux performance triage that reports evidence-backed bottlenecks.\n\nUSAGE:\n    bottleneck <COMMAND>\n\nCOMMANDS:\n    hunt          Run a bounded diagnosis\n    capabilities  Report available telemetry\n    record        Capture a normalized observation for later replay\n    replay        Re-analyze a recording without collecting live telemetry\n    redact        Replace identifiers in a recording for sharing\n    version       Print version information\n    help          Print this help or help for a command\n\nOPTIONS:\n    -h, --help     Print help\n    -V, --version  Print version information\n";
 
 const HUNT_HELP: &str = "Run a bounded bottleneck diagnosis.\n\nUSAGE:\n    bottleneck hunt [OPTIONS]\n\nOPTIONS:\n    --duration <DURATION>  Observation duration from 100ms to 5m [default: 10s]\n    --json                 Emit machine-readable JSON\n    -h, --help             Print help\n\nDURATION EXAMPLES:\n    500ms  2s  1.5s  1m\n";
 
 const CAPABILITIES_HELP: &str = "Report telemetry availability and permission limitations.\n\nUSAGE:\n    bottleneck capabilities [OPTIONS]\n\nOPTIONS:\n    --json      Emit machine-readable JSON\n    -h, --help  Print help\n";
+
+const RECORD_HELP: &str = "Capture a normalized observation recording.\n\nUSAGE:\n    bottleneck record --output <PATH> [OPTIONS]\n\nOPTIONS:\n    --output <PATH>        Recording file to create\n    --duration <DURATION>  Observation duration from 100ms to 5m [default: 10s]\n    --redact               Replace process names, device names, and cgroup paths\n    --force                Overwrite the output path if it already exists\n    -h, --help             Print help\n\nRecordings store analyzer input, not findings. Replay re-runs current inference.\nNew files are created with mode 0600. Pre-1.0 schema is not a compatibility promise.\n";
+
+const REPLAY_HELP: &str = "Re-analyze a recording with the current inference engine.\n\nUSAGE:\n    bottleneck replay [OPTIONS] <PATH>\n\nOPTIONS:\n    --json      Emit machine-readable JSON\n    -h, --help  Print help\n";
+
+const REDACT_HELP: &str = "Replace identifiers in an existing recording.\n\nUSAGE:\n    bottleneck redact --output <PATH> [OPTIONS] <PATH>\n\nOPTIONS:\n    --output <PATH>  Redacted recording to create\n    --force          Overwrite the output path if it already exists\n    -h, --help       Print help\n\nCounters, process keys, and path hierarchy are kept. Names and cgroup path\ncomponents are replaced. This is not cryptographic anonymization.\n";
 
 pub fn help(topic: HelpTopic) -> &'static str {
     match topic {
         HelpTopic::Root => ROOT_HELP,
         HelpTopic::Hunt => HUNT_HELP,
         HelpTopic::Capabilities => CAPABILITIES_HELP,
+        HelpTopic::Record => RECORD_HELP,
+        HelpTopic::Replay => REPLAY_HELP,
+        HelpTopic::Redact => REDACT_HELP,
     }
 }
 
 pub fn version() -> String {
     format!("bottleneck {}\n", env!("CARGO_PKG_VERSION"))
+}
+
+pub fn record_written(path: &Path, recording: &crate::record::Recording) -> String {
+    let redaction = match recording.redaction {
+        crate::record::Redaction::None => {
+            "redaction none; this file can contain process names, cgroup paths, and device names"
+        }
+        crate::record::Redaction::Identifiers => {
+            "redaction identifiers; names and paths were replaced, counters and process keys were kept"
+        }
+    };
+    format!(
+        "Wrote recording to {} (schema {}, {redaction}).\nReplay with: bottleneck replay {}\n",
+        path.display(),
+        recording.schema_version,
+        path.display()
+    )
+}
+
+pub fn replay(
+    options: &ReplayOptions,
+    recording: crate::record::Recording,
+) -> Result<String, crate::record::RecordError> {
+    let observation = crate::record::observation_from_recording(&recording)?;
+    Ok(hunt(
+        &HuntOptions {
+            duration_ms: recording.requested_duration_ms,
+            output: options.output,
+        },
+        |_| observation,
+    ))
+}
+
+pub fn redact_written(options: &RedactOptions, recording: &crate::record::Recording) -> String {
+    record_written(&options.output, recording)
 }
 
 pub fn hunt<F>(options: &HuntOptions, observe: F) -> String

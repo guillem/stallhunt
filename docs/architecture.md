@@ -153,9 +153,8 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 ## Current implementation layout
 
-Milestones 1, M2 host-memory, and the completed M3 I/O slice combine bounded
-CPU/process, memory-context, I/O-context, and PSI collection with typed
-inference/output boundaries:
+Milestones 1–5 combine bounded CPU/process, memory-context, I/O-context, PSI,
+cgroup, and recording/replay paths with typed inference/output boundaries:
 
 ```text
 src/
@@ -167,6 +166,7 @@ src/
   memory.rs     # bounded host meminfo/vmstat snapshots and intervals
   observe.rs    # sequential bounded multi-resource observation orchestration
   psi.rs        # CPU, memory, and I/O PSI parsing, capabilities, and intervals
+  record.rs     # versioned normalized-observation recordings and redaction
   render.rs     # concise finding-first text and full-evidence JSON rendering
 tests/
   cli.rs                # executable-level behavior tests
@@ -219,6 +219,12 @@ capabilities, hunt JSON, and hunt completeness, so partial controller files,
 permissions, budgets, and lifecycle loss cannot be presented as complete.
 Path-derived systemd names are optional inferred metadata, without D-Bus or a
 systemd runtime dependency.
+
+M5 adds a recording envelope distinct from hunt JSON (ADR-0007). `record.rs`
+serializes normalized interval observations with explicit microsecond
+durations, typed observed/unavailable resource slots, and optional identifier
+redaction. `replay` reconstructs `HuntObservation` and reuses the existing
+analyzer and renderers. Unknown `kind` or `schema_version` values are rejected.
 
 ## Observation lifecycle
 

@@ -2,7 +2,7 @@
 
 This directory is the durable design and project-memory layer.
 
-Milestones 1–3 are functionally complete; M4 cgroup/service attribution is
+Milestones 1–5 are functionally complete. M4 cgroup/service attribution is
 implemented with opt-in live validation. `status.md` is the
 authoritative current-state record, while
 `experiments.md` retains the controlled validation and overhead evidence.
@@ -43,6 +43,8 @@ Accepted initial decisions:
 - ADR-0003: procfs/sysfs/PSI first; eBPF later
 - ADR-0004: evidence and confidence instead of false certainty
 - ADR-0005: Git repository as project memory
+- ADR-0006: bounded cgroup-v2 scoped attribution
+- ADR-0007: versioned normalized-observation recordings without a compatibility promise
 
 ## Documentation rules
 

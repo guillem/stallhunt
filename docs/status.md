@@ -4,13 +4,15 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 5 — recording and replay (not started)**
+**Milestone 6 — continuous watch mode (not started)**
 
-Milestones 1–3 are functionally complete. M2's delegated-cgroup acceptance
-produced a PSI-backed `memory_swap_pressure` finding without unconstrained
-host-wide allocation. M4 remains implemented with opt-in live observational
-validation; that test still requires a caller-owned delegated subtree that
-already contains the test process and does not mutate the hierarchy.
+Milestones 1–5 are functionally complete. M5 recording and replay is
+implemented: `record` stores a versioned normalized observation, `replay`
+re-runs the current analyzer, and `redact` replaces identifiers for sharing.
+ADR-0007 defines the schema and explicitly withholds a pre-1.0 compatibility
+promise. M4 remains implemented with opt-in live observational validation; that
+test still requires a caller-owned delegated subtree that already contains the
+test process and does not mutate the hierarchy.
 
 ## Verified milestone assessment
 
@@ -33,7 +35,12 @@ already contains the test process and does not mutate the hierarchy.
   completeness semantics, controller context, and deterministic coverage are
   complete. Live delegated-scope validation is available opt-in and cannot be
   assumed on an arbitrary host.
-- **M5–M8 not started:** no user-facing record/replay, watch mode, eBPF probe, or
+- **M5 complete within its exit condition:** versioned normalized-observation
+  recordings, `record`/`replay`/`redact`, identifier redaction, 0600 file
+  creation, and deterministic re-analysis are implemented. Pre-1.0 recordings
+  have no compatibility promise (ADR-0007). There is still no watch mode or
+  multi-window recording.
+- **M6–M8 not started:** no user-facing watch mode, eBPF probe, or
   evidence-chain implementation exists.
 
 ## Implemented
@@ -169,6 +176,15 @@ already contains the test process and does not mutate the hierarchy.
   cgroup path lifetime, membership churn, partial collection, and the absence
   of cross-cgroup or host causality. Cgroup observations and findings are
   included in text and JSON output.
+- M5 records normalized hunt observations, not findings. `record --output PATH`
+  captures the same bounded observation as `hunt`, writes schema `kind`
+  `bottleneck.recording` version 1, and creates new files with mode 0600.
+  `replay` reconstructs the observation and re-runs current inference into the
+  existing text/JSON renderers. `redact` and `record --redact` replace process
+  names, disk names, cgroup path components, and inferred unit candidates while
+  keeping counters, process keys, and path hierarchy. Hunt JSON is not a
+  recording. Unknown kind or schema versions are rejected. Decode is bounded at
+  32 MiB. Existing paths are not overwritten unless `--force` is passed.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -208,6 +224,12 @@ already contains the test process and does not mutate the hierarchy.
 - JSON serialization now succeeds for cgroup I/O device maps, but the generic
   serializer fallback still suppresses the underlying error and emits only
   `{"status":"serialization_failed"}` if a future shape cannot serialize.
+- M5 recordings are pre-1.0 and may become unreadable after a schema change.
+  Identifier redaction is not cryptographic anonymization: PIDs, start times,
+  major/minor keys, and path shape remain. Duration replay uses integer
+  microseconds, which can differ slightly from a live nanosecond `Instant`
+  interval. Recordings do not include extra host identity such as hostname or
+  kernel version.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -217,11 +239,10 @@ already contains the test process and does not mutate the hierarchy.
 
 ## Current recommended next task
 
-Begin Milestone 5 recording and replay. Create an ADR for the recording schema
-before promising format compatibility. Do not introduce eBPF as a prerequisite.
+Begin Milestone 6 continuous watch mode. Keep it finding-lifecycle oriented
+rather than a generic TUI monitor. Do not introduce eBPF as a prerequisite.
 
-The opt-in M4 `tests/cgroup_acceptance.rs` observational run is now feasible on
-hosts with a delegated user tree, but it is not a blocker for starting M5.
+M5 recording/replay is available for offline re-analysis and support bundles.
 
 ## Current design risks
 
@@ -308,22 +329,24 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, `tests/memory_acceptance.rs` ran twice on Linux 7.1.5 with
-`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` set to the user-delegated `app.slice`.
-Both runs passed: exact host memory PSI `some` was 24.4198% then 21.2702% over
-~2.15 s, and both reported `memory_swap_pressure`. The second run, after
-child-cgroup drain-before-rmdir, left no leftover directory. Details are in
-EXP-0006.
-
-The same session's default gate passed: 121 unit tests, six CLI tests, and five
-ignored host-workload tests by default. Formatting and locked-offline Clippy
-also passed:
+On 2026-08-17, M5 recording/replay was validated with deterministic round-trip
+and redaction tests plus a live 100 ms `record` → `replay --json` → `redact`
+CLI path. Recordings reject hunt JSON and unknown schema versions. Default-gate
+coverage is 127 unit tests, nine CLI tests, and five ignored host-workload
+tests. Formatting and locked-offline Clippy passed:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --offline --workspace --all-features
 ```
+
+Earlier the same day, `tests/memory_acceptance.rs` ran twice on Linux 7.1.5 with
+`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` set to the user-delegated `app.slice`.
+Both runs passed: exact host memory PSI `some` was 24.4198% then 21.2702% over
+~2.15 s, and both reported `memory_swap_pressure`. The second run, after
+child-cgroup drain-before-rmdir, left no leftover directory. Details are in
+EXP-0006.
 
 Earlier 2026-08-17 CPU, I/O, overhead, and M4 serialization evidence remains in
 `docs/experiments.md` (EXP-0001 through EXP-0005). High-visible-PID overhead is

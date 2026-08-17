@@ -17,24 +17,24 @@ use crate::psi::{
     MemoryPsiObservation,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MemoryHuntObservation {
     pub psi: Result<MemoryPsiObservation, MemoryPsiError>,
     pub context: Result<MemoryContextObservation, MemoryContextError>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IoHuntObservation {
     pub psi: Result<IoPsiObservation, IoPsiError>,
     pub diskstats: Result<DiskstatsObservation, DiskstatsError>,
     pub processes: Result<ProcessIoObservation, DiskstatsError>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CgroupHuntObservation {
     pub observation: Result<CgroupObservation, CgroupError>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HuntObservation {
     pub psi: Result<CpuPsiObservation, CpuPsiError>,
     pub cpu: Result<CpuProcessObservation, CpuError>,

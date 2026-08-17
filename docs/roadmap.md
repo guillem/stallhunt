@@ -195,7 +195,9 @@ Deliver:
 
 ## Milestone 5 — Recording and replay
 
-Status: not started. This is the next unimplemented product slice.
+Status: complete. Normalized-observation recordings, `record`/`replay`/`redact`,
+identifier redaction, and deterministic re-analysis are implemented. ADR-0007
+withholds a pre-1.0 compatibility promise.
 
 Goal:
 
@@ -213,6 +215,8 @@ Deliver:
 Create ADR before promising format compatibility.
 
 ## Milestone 6 — Continuous watch mode
+
+Status: not started. This is the next unimplemented product slice.
 
 Goal:
 

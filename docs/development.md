@@ -3,7 +3,7 @@
 ## Current state
 
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
-block-I/O, and M4 bounded cgroup/service slices.
+block-I/O, M4 bounded cgroup/service, and M5 recording/replay slices.
 
 Build and run it from the repository root:
 
@@ -11,6 +11,8 @@ Build and run it from the repository root:
 cargo build
 cargo run -- hunt --duration 1s
 cargo run -- capabilities --json
+cargo run -- record --duration 1s --output /tmp/incident.json
+cargo run -- replay /tmp/incident.json
 ```
 
 `hunt` performs bounded CPU PSI, host CPU/load, process CPU, scheduler-accounting,

@@ -6,12 +6,14 @@ use std::time::Duration;
 #[cfg(test)]
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
+
 pub const CPU_PSI_PATH: &str = "/proc/pressure/cpu";
 pub const MEMORY_PSI_PATH: &str = "/proc/pressure/memory";
 pub const IO_PSI_PATH: &str = "/proc/pressure/io";
 
 /// A direct CPU PSI `some` reading. `total_us` is cumulative since boot.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CpuPsiRaw {
     pub avg10_percent: f64,
     pub avg60_percent: f64,
@@ -19,8 +21,9 @@ pub struct CpuPsiRaw {
     pub total_us: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CpuPsiInterval {
+    #[serde(with = "crate::duration_us")]
     pub elapsed: Duration,
     pub total_delta_us: u64,
     pub some_fraction: f64,
@@ -54,15 +57,17 @@ impl CpuPsiCapability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CpuPsiObservation {
+    #[serde(with = "crate::duration_us")]
     pub requested: Duration,
     pub interval: CpuPsiInterval,
     pub start: CpuPsiRaw,
     pub end: CpuPsiRaw,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CpuPsiError {
     Unsupported,
     PermissionDenied,
@@ -234,7 +239,7 @@ fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), CpuPsiError> {
 ///
 /// Memory PSI retains both `some` and `full`, unlike CPU PSI where host-level
 /// `full` has intentionally been treated as compatibility-only data.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MemoryPsiLine {
     pub avg10_percent: f64,
     pub avg60_percent: f64,
@@ -242,13 +247,13 @@ pub struct MemoryPsiLine {
     pub total_us: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MemoryPsiRaw {
     pub some: MemoryPsiLine,
     pub full: Option<MemoryPsiLine>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MemoryPsiLineInterval {
     pub total_delta_us: u64,
     pub fraction: f64,
@@ -257,7 +262,8 @@ pub struct MemoryPsiLineInterval {
 /// The `full` interval is independently qualified so valid `some` evidence
 /// remains available when a kernel exposes no `full` line or only that counter
 /// is inconsistent between endpoints.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MemoryPsiFullInterval {
     Available(MemoryPsiLineInterval),
     Missing,
@@ -288,15 +294,17 @@ impl MemoryPsiFullInterval {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MemoryPsiInterval {
+    #[serde(with = "crate::duration_us")]
     pub elapsed: Duration,
     pub some: MemoryPsiLineInterval,
     pub full: MemoryPsiFullInterval,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MemoryPsiObservation {
+    #[serde(with = "crate::duration_us")]
     pub requested: Duration,
     pub interval: MemoryPsiInterval,
     pub start: MemoryPsiRaw,
@@ -334,7 +342,8 @@ impl MemoryPsiCapability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MemoryPsiError {
     Unsupported,
     PermissionDenied,
@@ -520,7 +529,7 @@ fn memory_line_interval(
 }
 
 /// One fully parsed I/O PSI line. `total_us` is cumulative since boot.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct IoPsiLine {
     pub avg10_percent: f64,
     pub avg60_percent: f64,
@@ -528,13 +537,13 @@ pub struct IoPsiLine {
     pub total_us: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct IoPsiRaw {
     pub some: IoPsiLine,
     pub full: Option<IoPsiLine>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct IoPsiLineInterval {
     pub total_delta_us: u64,
     pub fraction: f64,
@@ -542,7 +551,8 @@ pub struct IoPsiLineInterval {
 
 /// An independently qualified `full` dimension preserves valid I/O PSI
 /// `some` evidence when only `full` is unavailable or inconsistent.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum IoPsiFullInterval {
     Available(IoPsiLineInterval),
     Missing,
@@ -571,15 +581,17 @@ impl IoPsiFullInterval {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct IoPsiInterval {
+    #[serde(with = "crate::duration_us")]
     pub elapsed: Duration,
     pub some: IoPsiLineInterval,
     pub full: IoPsiFullInterval,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct IoPsiObservation {
+    #[serde(with = "crate::duration_us")]
     pub requested: Duration,
     pub interval: IoPsiInterval,
     pub start: IoPsiRaw,
@@ -617,7 +629,8 @@ impl IoPsiCapability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum IoPsiError {
     Unsupported,
     PermissionDenied,

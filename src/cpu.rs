@@ -4,7 +4,7 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const MAX_PROCESSES: usize = 4_096;
 // Schedstat is thread-scoped. This global cap bounds selected task samples
@@ -13,7 +13,7 @@ const MAX_PROCESSES: usize = 4_096;
 const MAX_SCHEDSTAT_TASKS: usize = 16_384;
 const MAX_PROCESS_NAME_CHARS: usize = 80;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ProcessKey {
     pub pid: u32,
     pub start_time_ticks: u64,
@@ -56,7 +56,7 @@ pub struct HostCpuRaw {
     pub cpu_count: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoadAverageRaw {
     pub avg1: f64,
     pub avg5: f64,
@@ -66,7 +66,7 @@ pub struct LoadAverageRaw {
     pub last_pid: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoadAverageAvailability {
     Available,
@@ -74,7 +74,7 @@ pub enum LoadAverageAvailability {
     Malformed,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessCollectionIssues {
     pub enumeration_failed: bool,
     pub enumeration_errors: u32,
@@ -88,7 +88,7 @@ pub struct ProcessCollectionIssues {
     pub limit_reached: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SchedstatCollectionIssues {
     pub task_enumeration_failed: u32,
     pub task_enumeration_errors: u32,
@@ -117,7 +117,7 @@ pub struct CpuSnapshot {
     pub schedstat_issues: SchedstatCollectionIssues,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HostCpuInterval {
     pub total_ticks: u64,
     pub busy_ticks: u64,
@@ -126,7 +126,7 @@ pub struct HostCpuInterval {
     pub cpu_count: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessCpuInterval {
     pub key: ProcessKey,
     pub name: String,
@@ -135,7 +135,7 @@ pub struct ProcessCpuInterval {
     pub cpu_fraction_of_one: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessSchedulerDelayInterval {
     pub key: ProcessKey,
     pub name: String,
@@ -148,8 +148,9 @@ pub struct ProcessSchedulerDelayInterval {
     pub runnable_delay_fraction: f64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CpuProcessObservation {
+    #[serde(with = "crate::duration_us")]
     pub elapsed: Duration,
     pub clock_ticks_per_second: u64,
     pub host: HostCpuInterval,
@@ -162,7 +163,8 @@ pub struct CpuProcessObservation {
     pub schedstat_capability: SchedstatCapability,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CpuError {
     Unreadable,
     Malformed,
@@ -176,7 +178,7 @@ pub enum CollectorCapability {
     Partial,
     Failed,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SchedstatCapability {
     Available,

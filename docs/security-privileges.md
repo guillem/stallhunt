@@ -80,23 +80,30 @@ If a future verbose mode prints full command lines, document the risk.
 
 ## Recorded diagnostics
 
-Future recordings may contain:
+M5 recordings may contain:
 
 - process names,
-- command lines,
 - cgroup paths,
-- usernames/UIDs,
+- inferred systemd unit candidates,
 - device names,
-- container/service names.
+- PIDs and start-time identities,
+- resource counters.
 
 Treat recordings as potentially sensitive.
 
-Before implementing recording, define:
+Implemented privacy defaults:
 
-- default included fields,
-- optional redaction,
-- file permissions,
-- compatibility/security expectations.
+- new recording files are created with mode `0600`
+- existing paths are not overwritten unless `--force` is passed
+- default `record` retains identifiers for local diagnosis
+- `record --redact` and `redact` replace process names, disk names, cgroup path
+  components, and inferred unit candidates
+- PIDs, start times, major/minor keys, counters, and path hierarchy are kept
+- redaction is not cryptographic anonymization
+- hunt JSON is a report, not a recording, and is rejected by `replay`
+
+A support bundle is the recording file. Capture locally without redaction, then
+write a redacted copy before sharing.
 
 ## eBPF safety
 

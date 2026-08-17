@@ -326,30 +326,33 @@ These should survive JSON output.
 
 ## Snapshot/replay format
 
-Design the normalized model to be serializable from the beginning.
+M5 recordings are a distinct on-disk document from hunt JSON (ADR-0007).
 
-Do not promise a stable public recording format in v0.1.
+They store normalized interval observations so replay can re-run current
+inference. Findings are not stored. Hunt JSON remains a diagnostic report and
+is rejected if passed to `replay`.
 
-Recommended early approach:
-
-- internal serde representation,
-- fixture files checked into tests,
-- explicit schema version field.
-
-Example:
+Current recording envelope:
 
 ```json
 {
+  "kind": "bottleneck.recording",
   "schema_version": 1,
-  "window": {},
-  "capabilities": {},
-  "host": {},
-  "processes": [],
-  "devices": []
+  "tool_version": "0.1.0",
+  "recorded_at_unix_ms": 0,
+  "redaction": "none",
+  "requested_duration_ms": 10000,
+  "observation": {}
 }
 ```
 
-When record/replay becomes user-facing, create an ADR defining compatibility expectations.
+Durations are integer microseconds. Each resource is `observed` or
+`unavailable` with a typed error. Wall-clock `recorded_at_unix_ms` is metadata
+only.
+
+Pre-1.0 recordings have no compatibility promise. Unknown `kind` or
+`schema_version` values are rejected. A later ADR can define compatibility
+once the model is stable.
 
 ## Missing data
 

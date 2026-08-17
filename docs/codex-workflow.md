@@ -31,19 +31,18 @@ them.
 
 ## Starting from the current implementation
 
-Milestones 1, 2, 3, and the bounded M4 cgroup slice are implemented. The
-current recommended Codex session is:
+Milestones 1, 2, 3, the bounded M4 cgroup slice, and M5 recording/replay are
+implemented. The current recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Begin Milestone 5 recording and replay as the next unimplemented product
-slice. Create an ADR for the recording schema before promising format
-compatibility. Do not introduce eBPF as a prerequisite.
+Begin Milestone 6 continuous watch mode as the next unimplemented product
+slice. Keep it finding-lifecycle oriented rather than a generic TUI monitor.
+Do not introduce eBPF as a prerequisite.
 
-The opt-in M4 cgroup_acceptance observational run is feasible on hosts with a
-delegated user tree, but is not a blocker for starting M5. Update
+M5 recording/replay is available for offline re-analysis. Update
 docs/status.md and any affected design docs.
 ```
 

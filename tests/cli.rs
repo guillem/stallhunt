@@ -1,4 +1,7 @@
+use std::fs;
+use std::path::PathBuf;
 use std::process::{Command, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn bottleneck(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bottleneck"))
@@ -15,6 +18,9 @@ fn root_help_exposes_the_initial_command_set() {
     assert!(output.status.success());
     assert!(stdout.contains("hunt"));
     assert!(stdout.contains("capabilities"));
+    assert!(stdout.contains("record"));
+    assert!(stdout.contains("replay"));
+    assert!(stdout.contains("redact"));
     assert!(stdout.contains("version"));
 }
 
@@ -185,4 +191,120 @@ fn invalid_invocation_uses_a_nonzero_exit_and_stderr() {
     assert_eq!(output.status.code(), Some(2));
     assert!(stderr.contains("invalid duration '10'"));
     assert!(output.stdout.is_empty());
+}
+
+fn unique_temp_path(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "bottleneck-{label}-{}-{nanos}.json",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn record_replay_and_redact_round_trip() {
+    let path = unique_temp_path("record");
+    let redacted = unique_temp_path("redacted");
+    let _cleanup = Cleanup(vec![path.clone(), redacted.clone()]);
+
+    let recorded = bottleneck(&[
+        "record",
+        "--duration",
+        "100ms",
+        "--output",
+        path.to_str().expect("utf-8 path"),
+    ]);
+    let stdout = String::from_utf8(recorded.stdout).expect("stdout should be UTF-8");
+    assert!(
+        recorded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recorded.stderr)
+    );
+    assert!(stdout.contains("Wrote recording"));
+    assert!(stdout.contains("schema 1"));
+
+    let json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&path).expect("recording should be readable"))
+            .expect("recording JSON should parse");
+    assert_eq!(json["kind"], "bottleneck.recording");
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["redaction"], "none");
+    assert_eq!(json["requested_duration_ms"], 100);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    let replayed = bottleneck(&["replay", "--json", path.to_str().expect("utf-8 path")]);
+    let replay_stdout = String::from_utf8(replayed.stdout).expect("stdout should be UTF-8");
+    assert!(
+        replayed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replayed.stderr)
+    );
+    let replay_json: serde_json::Value =
+        serde_json::from_str(&replay_stdout).expect("replay JSON should parse");
+    assert_eq!(replay_json["schema_version"], 1);
+    assert!(replay_json["findings"].is_array());
+
+    let duplicate = bottleneck(&[
+        "record",
+        "--duration",
+        "100ms",
+        "--output",
+        path.to_str().expect("utf-8 path"),
+    ]);
+    assert_eq!(duplicate.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already exists"));
+
+    let redacted_out = bottleneck(&[
+        "redact",
+        path.to_str().expect("utf-8 path"),
+        "--output",
+        redacted.to_str().expect("utf-8 path"),
+    ]);
+    assert!(
+        redacted_out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&redacted_out.stderr)
+    );
+    let redacted_json: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&redacted).expect("redacted recording should be readable"),
+    )
+    .expect("redacted JSON should parse");
+    assert_eq!(redacted_json["redaction"], "identifiers");
+}
+
+#[test]
+fn record_without_output_is_invalid_invocation() {
+    let output = bottleneck(&["record"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("option '--output' is required"));
+}
+
+#[test]
+fn replay_rejects_hunt_json() {
+    let path = unique_temp_path("not-a-recording");
+    fs::write(&path, "{\"schema_version\":1,\"status\":\"observed\"}\n")
+        .expect("fixture should write");
+    let output = bottleneck(&["replay", path.to_str().expect("utf-8 path")]);
+    let _ = fs::remove_file(&path);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("recording JSON is invalid"));
+}
+
+struct Cleanup(Vec<PathBuf>);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = fs::remove_file(path);
+        }
+    }
 }

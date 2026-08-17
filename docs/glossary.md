@@ -106,3 +106,9 @@ A limitation or contextual statement attached to a finding.
 Example:
 
 > Process-level I/O attribution is incomplete because some `/proc/<pid>/io` files were not readable.
+
+## Recording
+
+A versioned JSON document of normalized interval observations captured by
+`record`. Replay re-runs current inference against that observation. Hunt JSON
+is a diagnostic report, not a recording.

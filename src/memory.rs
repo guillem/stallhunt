@@ -10,12 +10,12 @@ use std::io;
 use std::path::Path;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 const MEMINFO_PATH: &str = "meminfo";
 const VMSTAT_PATH: &str = "vmstat";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeminfoRaw {
     pub mem_total_bytes: u64,
     pub mem_available_bytes: u64,
@@ -29,7 +29,7 @@ pub struct MeminfoRaw {
     pub anon_pages_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VmstatCounter {
     PageFaults,
@@ -69,7 +69,7 @@ impl VmstatCounter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct VmstatRaw {
     /// Raw kernel page/event counters.  Page counts deliberately remain pages,
     /// rather than being presented as bytes without a page-size contract.
@@ -77,7 +77,7 @@ pub struct VmstatRaw {
     pub missing: Vec<VmstatCounter>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryContextCapability {
     Available,
@@ -99,7 +99,8 @@ impl MemoryContextCapability {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MemoryContextError {
     Unsupported,
     PermissionDenied,
@@ -132,13 +133,13 @@ pub struct MemoryContextCapabilities {
     pub vmstat: MemoryContextCapability,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct VmstatIntervalIssues {
     pub missing: Vec<VmstatCounter>,
     pub regressed: Vec<VmstatCounter>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryContextObservation {
     /// The exact time between the two snapshots supplied by the caller.
     #[serde(skip)]

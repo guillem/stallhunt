@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 
 pub const DEFAULT_HUNT_DURATION_MS: u64 = 10_000;
 pub const MIN_HUNT_DURATION_MS: u64 = 100;
@@ -26,12 +27,39 @@ pub enum HelpTopic {
     Root,
     Hunt,
     Capabilities,
+    Record,
+    Replay,
+    Redact,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordOptions {
+    pub duration_ms: u64,
+    pub output: PathBuf,
+    pub redaction: crate::record::Redaction,
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayOptions {
+    pub input: PathBuf,
+    pub output: OutputFormat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedactOptions {
+    pub input: PathBuf,
+    pub output: PathBuf,
+    pub force: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Hunt(HuntOptions),
     Capabilities(CapabilitiesOptions),
+    Record(RecordOptions),
+    Replay(ReplayOptions),
+    Redact(RedactOptions),
     Help(HelpTopic),
     Version,
 }
@@ -73,6 +101,9 @@ where
         "version" => reject_trailing_arguments(arguments, Command::Version),
         "hunt" => parse_hunt(arguments),
         "capabilities" => parse_capabilities(arguments),
+        "record" => parse_record(arguments),
+        "replay" => parse_replay(arguments),
+        "redact" => parse_redact(arguments),
         _ if command.starts_with('-') => Err(CliError::new(format!("unknown option '{command}'"))),
         _ => Err(CliError::new(format!("unknown command '{command}'"))),
     }
@@ -86,6 +117,9 @@ where
         None => HelpTopic::Root,
         Some("hunt") => HelpTopic::Hunt,
         Some("capabilities") => HelpTopic::Capabilities,
+        Some("record") => HelpTopic::Record,
+        Some("replay") => HelpTopic::Replay,
+        Some("redact") => HelpTopic::Redact,
         Some(other) => return Err(CliError::new(format!("unknown help topic '{other}'"))),
     };
 
@@ -174,6 +208,189 @@ where
     Ok(Command::Capabilities(CapabilitiesOptions { output }))
 }
 
+fn parse_record<I>(arguments: I) -> Result<Command, CliError>
+where
+    I: Iterator<Item = String>,
+{
+    let mut duration_ms = DEFAULT_HUNT_DURATION_MS;
+    let mut duration_seen = false;
+    let mut output = None;
+    let mut redaction = crate::record::Redaction::None;
+    let mut force = false;
+
+    let mut arguments = arguments.peekable();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "-h" | "--help" => {
+                return reject_trailing_arguments(arguments, Command::Help(HelpTopic::Record));
+            }
+            "--redact" => {
+                if redaction != crate::record::Redaction::None {
+                    return Err(CliError::new("option '--redact' may only be used once"));
+                }
+                redaction = crate::record::Redaction::Identifiers;
+            }
+            "--force" => set_flag(&mut force, "--force")?,
+            "--duration" => {
+                if duration_seen {
+                    return Err(CliError::new("option '--duration' may only be used once"));
+                }
+                let value = arguments
+                    .next()
+                    .ok_or_else(|| CliError::new("option '--duration' requires a value"))?;
+                duration_ms = parse_duration(&value)?;
+                duration_seen = true;
+            }
+            "--output" => {
+                if output.is_some() {
+                    return Err(CliError::new("option '--output' may only be used once"));
+                }
+                let value = arguments
+                    .next()
+                    .ok_or_else(|| CliError::new("option '--output' requires a value"))?;
+                output = Some(PathBuf::from(value));
+            }
+            _ if argument.starts_with("--duration=") => {
+                if duration_seen {
+                    return Err(CliError::new("option '--duration' may only be used once"));
+                }
+                let (_, value) = argument
+                    .split_once('=')
+                    .expect("prefix check guarantees an equals sign");
+                duration_ms = parse_duration(value)?;
+                duration_seen = true;
+            }
+            _ if argument.starts_with("--output=") => {
+                if output.is_some() {
+                    return Err(CliError::new("option '--output' may only be used once"));
+                }
+                let (_, value) = argument
+                    .split_once('=')
+                    .expect("prefix check guarantees an equals sign");
+                if value.is_empty() {
+                    return Err(CliError::new("option '--output' requires a value"));
+                }
+                output = Some(PathBuf::from(value));
+            }
+            _ if argument.starts_with('-') => {
+                return Err(CliError::new(format!(
+                    "unknown option '{argument}' for 'record'"
+                )));
+            }
+            _ => {
+                return Err(CliError::new(format!(
+                    "unexpected argument '{argument}' for 'record'"
+                )));
+            }
+        }
+    }
+
+    let output = output.ok_or_else(|| CliError::new("option '--output' is required"))?;
+    Ok(Command::Record(RecordOptions {
+        duration_ms,
+        output,
+        redaction,
+        force,
+    }))
+}
+
+fn parse_replay<I>(arguments: I) -> Result<Command, CliError>
+where
+    I: Iterator<Item = String>,
+{
+    let mut output = OutputFormat::Text;
+    let mut input = None;
+    let mut arguments = arguments.peekable();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "-h" | "--help" => {
+                return reject_trailing_arguments(arguments, Command::Help(HelpTopic::Replay));
+            }
+            "--json" => set_json_output(&mut output)?,
+            _ if argument.starts_with('-') => {
+                return Err(CliError::new(format!(
+                    "unknown option '{argument}' for 'replay'"
+                )));
+            }
+            _ if input.is_some() => {
+                return Err(CliError::new(format!(
+                    "unexpected argument '{argument}' for 'replay'"
+                )));
+            }
+            _ => input = Some(PathBuf::from(argument)),
+        }
+    }
+    let input = input.ok_or_else(|| CliError::new("replay requires a recording path"))?;
+    Ok(Command::Replay(ReplayOptions { input, output }))
+}
+
+fn parse_redact<I>(arguments: I) -> Result<Command, CliError>
+where
+    I: Iterator<Item = String>,
+{
+    let mut input = None;
+    let mut output = None;
+    let mut force = false;
+    let mut arguments = arguments.peekable();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "-h" | "--help" => {
+                return reject_trailing_arguments(arguments, Command::Help(HelpTopic::Redact));
+            }
+            "--force" => set_flag(&mut force, "--force")?,
+            "--output" => {
+                if output.is_some() {
+                    return Err(CliError::new("option '--output' may only be used once"));
+                }
+                let value = arguments
+                    .next()
+                    .ok_or_else(|| CliError::new("option '--output' requires a value"))?;
+                output = Some(PathBuf::from(value));
+            }
+            _ if argument.starts_with("--output=") => {
+                if output.is_some() {
+                    return Err(CliError::new("option '--output' may only be used once"));
+                }
+                let (_, value) = argument
+                    .split_once('=')
+                    .expect("prefix check guarantees an equals sign");
+                if value.is_empty() {
+                    return Err(CliError::new("option '--output' requires a value"));
+                }
+                output = Some(PathBuf::from(value));
+            }
+            _ if argument.starts_with('-') => {
+                return Err(CliError::new(format!(
+                    "unknown option '{argument}' for 'redact'"
+                )));
+            }
+            _ if input.is_some() => {
+                return Err(CliError::new(format!(
+                    "unexpected argument '{argument}' for 'redact'"
+                )));
+            }
+            _ => input = Some(PathBuf::from(argument)),
+        }
+    }
+    let input = input.ok_or_else(|| CliError::new("redact requires a recording path"))?;
+    let output = output.ok_or_else(|| CliError::new("option '--output' is required"))?;
+    Ok(Command::Redact(RedactOptions {
+        input,
+        output,
+        force,
+    }))
+}
+
+fn set_flag(flag: &mut bool, name: &str) -> Result<(), CliError> {
+    if *flag {
+        return Err(CliError::new(format!(
+            "option '{name}' may only be used once"
+        )));
+    }
+    *flag = true;
+    Ok(())
+}
+
 fn reject_trailing_arguments<I>(mut arguments: I, command: Command) -> Result<Command, CliError>
 where
     I: Iterator<Item = String>,
@@ -260,6 +477,7 @@ fn invalid_duration(value: &str) -> CliError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn no_arguments_shows_root_help() {
@@ -352,5 +570,46 @@ mod tests {
         assert!(parse(["watch"]).is_err());
         assert!(parse(["hunt", "--verbose"]).is_err());
         assert!(parse(["capabilities", "extra"]).is_err());
+    }
+
+    #[test]
+    fn record_requires_output_and_accepts_redact() {
+        assert!(parse(["record"]).is_err());
+        assert_eq!(
+            parse([
+                "record",
+                "--duration",
+                "500ms",
+                "--redact",
+                "--output",
+                "out.json"
+            ]),
+            Ok(Command::Record(RecordOptions {
+                duration_ms: 500,
+                output: PathBuf::from("out.json"),
+                redaction: crate::record::Redaction::Identifiers,
+                force: false,
+            }))
+        );
+    }
+
+    #[test]
+    fn replay_and_redact_require_paths() {
+        assert!(parse(["replay"]).is_err());
+        assert_eq!(
+            parse(["replay", "--json", "incident.json"]),
+            Ok(Command::Replay(ReplayOptions {
+                input: PathBuf::from("incident.json"),
+                output: OutputFormat::Json,
+            }))
+        );
+        assert_eq!(
+            parse(["redact", "in.json", "--output=out.json", "--force"]),
+            Ok(Command::Redact(RedactOptions {
+                input: PathBuf::from("in.json"),
+                output: PathBuf::from("out.json"),
+                force: true,
+            }))
+        );
     }
 }

@@ -55,7 +55,33 @@ Show available telemetry and permission limitations.
 
 Standard version information.
 
-Delay `watch`, `record`, `replay`, `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
+Delay `watch`, `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
+
+Implemented in Milestone 5:
+
+### `record`
+
+Capture a normalized observation to a file.
+
+```bash
+bottleneck record --output incident.json [--duration 10s] [--redact] [--force]
+```
+
+### `replay`
+
+Re-analyze a recording with the current inference engine.
+
+```bash
+bottleneck replay incident.json [--json]
+```
+
+### `redact`
+
+Replace identifiers in an existing recording for sharing.
+
+```bash
+bottleneck redact incident.json --output incident.redacted.json [--force]
+```
 
 ## Current CPU diagnosis behavior
 
@@ -119,6 +145,13 @@ only for that cgroup scope and displays CPU, memory, and I/O controller deltas
 as qualified context. Cgroup capability is `partial` whenever the bounded
 snapshot or controller files are incomplete; this also makes the top-level hunt
 status `incomplete`, without discarding valid host findings.
+
+M5 adds `record`, `replay`, and `redact`. Recordings are not hunt JSON: they
+store normalized observations under `kind` `bottleneck.recording` schema
+version 1. Replay uses the same text/JSON renderers as `hunt`, with the
+recorded requested duration. Invalid recordings exit 1. Missing `--output` or
+an invalid invocation still exits 2. New recording files are created mode
+0600 and are not overwritten unless `--force` is passed.
 
 ## Human output structure
 
@@ -205,7 +238,9 @@ Do not overdesign terminal visuals before core output stabilizes.
 Current bootstrap policy:
 
 - `0`: the requested command completed, including an explicitly unavailable
-  bootstrap `hunt`,
+  bootstrap `hunt` and a successful `record`/`replay`/`redact`,
+- `1`: a parsed command failed at runtime, such as a missing recording file,
+  an unreadable or unsupported recording, or a refused overwrite,
 - `2`: invalid command-line invocation.
 
 Once collection exists, `0` will continue to mean that diagnosis completed

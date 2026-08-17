@@ -207,7 +207,8 @@ Later milestone.
 
 Store normalized observations and re-run analysis offline.
 
-Design for this early even if the first release implements fixtures before a user-facing recording format.
+M5 implements `record`, `replay`, and `redact`. Recordings are versioned
+normalized observations, not findings. See ADR-0007.
 
 ## Severity vs confidence
 

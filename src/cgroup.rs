@@ -8,7 +8,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::cpu::{ProcessKey, ProcessRaw, parse_process_stat, sanitized_process_name};
 
@@ -29,7 +29,7 @@ pub struct Cgroup2Mount {
     pub mount_point: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CgroupError {
     Unsupported,
@@ -41,7 +41,7 @@ pub enum CgroupError {
     MountChanged,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CgroupFileState {
     Available,
@@ -53,7 +53,7 @@ pub enum CgroupFileState {
     Malformed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupResource<T> {
     pub state: CgroupFileState,
     pub value: Option<T>,
@@ -71,7 +71,7 @@ impl<T> CgroupResource<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupCpuRaw {
     pub usage_usec: u64,
     pub user_usec: Option<u64>,
@@ -81,7 +81,7 @@ pub struct CgroupCpuRaw {
     pub throttled_usec: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupMemoryEventsRaw {
     pub low: Option<u64>,
     pub high: Option<u64>,
@@ -106,7 +106,23 @@ impl Serialize for CgroupIoDevice {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+impl<'de> Deserialize<'de> for CgroupIoDevice {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let text = String::deserialize(deserializer)?;
+        let (major, minor) = text.split_once(':').ok_or_else(|| {
+            serde::de::Error::custom("cgroup I/O device identity must be major:minor")
+        })?;
+        Ok(Self {
+            major: major.parse().map_err(serde::de::Error::custom)?,
+            minor: minor.parse().map_err(serde::de::Error::custom)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupIoRaw {
     pub rbytes: Option<u64>,
     pub wbytes: Option<u64>,
@@ -119,7 +135,7 @@ pub struct CgroupPsiRaw {
     pub some_total_usec: u64,
     pub full_total_usec: Option<u64>,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CgroupPsiIntervalState {
     Available,
@@ -149,14 +165,14 @@ pub struct CgroupRaw {
     pub systemd_unit_candidate: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupProcessMember {
     pub key: ProcessKey,
     pub name: String,
     pub cgroup_path: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupCollectionIssues {
     pub process_enumeration_failed: bool,
     pub process_enumeration_errors: u32,
@@ -938,7 +954,7 @@ fn systemd_unit_candidate(path: &str) -> Option<String> {
     .then(|| component.to_owned())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupCpuInterval {
     pub usage_usec: Option<u64>,
     pub user_usec: Option<u64>,
@@ -947,7 +963,7 @@ pub struct CgroupCpuInterval {
     pub nr_throttled: Option<u64>,
     pub throttled_usec: Option<u64>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupPsiInterval {
     #[serde(skip)]
     pub elapsed: Option<Duration>,
@@ -955,7 +971,7 @@ pub struct CgroupPsiInterval {
     pub full_total_usec: Option<u64>,
     pub state: CgroupPsiIntervalState,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupInterval {
     pub path: String,
     pub cpu: CgroupResource<CgroupCpuInterval>,
@@ -967,7 +983,7 @@ pub struct CgroupInterval {
     pub io_pressure: CgroupResource<CgroupPsiInterval>,
     pub systemd_unit_candidate: Option<String>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CgroupObservation {
     #[serde(skip)]
     pub elapsed: Duration,

@@ -152,9 +152,15 @@ mutate an arbitrary host hierarchy when delegation is absent.
 caller-provided `BOTTLENECK_CGROUP_ACCEPTANCE_PATH` already containing the test
 process. It observes that scope without mutating the hierarchy.
 
+M5 recording tests cover encode/decode round-trip of a multi-resource
+observation, identifier redaction that preserves resource verdicts, rejection
+of unknown schema versions, and rejection of hunt JSON. Executable CLI tests
+cover `record`/`replay`/`redact` on a live 100 ms observation, 0600 file mode,
+overwrite refusal, and invalid invocations.
+
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 121 unit tests and six CLI
+The current normal deterministic gate contains 127 unit tests and nine CLI
 tests. Five host-workload acceptance tests are ignored by default and run only
 when intentionally requested.
 

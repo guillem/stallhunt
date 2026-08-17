@@ -7,7 +7,7 @@ use std::io::{self, Read};
 use std::path::Path;
 use std::time::Duration;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cpu::{ProcessKey, ProcessRaw, parse_process_stat, sanitized_process_name};
 
@@ -18,7 +18,7 @@ const MAX_PROCESSES: usize = 1_024;
 const MAX_DEVICES: usize = 4_096;
 const MAX_DISKSTATS_BYTES: u64 = 1_048_576;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct BlockDeviceKey {
     pub major: u32,
     pub minor: u32,
@@ -47,12 +47,12 @@ pub struct DiskstatsSnapshot {
     pub issues: DiskstatsCollectionIssues,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DiskstatsCollectionIssues {
     pub limit_reached: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum IoCapability {
     Available,
@@ -80,7 +80,7 @@ pub struct IoCapabilities {
     pub process_io: IoCapability,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiskstatsError {
     Unsupported,
@@ -100,7 +100,7 @@ impl DiskstatsError {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiskstatsInterval {
     pub key: BlockDeviceKey,
     pub name: String,
@@ -113,7 +113,7 @@ pub struct DiskstatsInterval {
     pub end_in_flight: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct DiskstatsIntervalIssues {
     pub start_error: Option<DiskstatsError>,
     pub end_error: Option<DiskstatsError>,
@@ -124,7 +124,7 @@ pub struct DiskstatsIntervalIssues {
     pub limit_reached: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiskstatsCounter {
     ReadsCompleted,
@@ -134,13 +134,13 @@ pub enum DiskstatsCounter {
     IoTicksMs,
     WeightedIoTicksMs,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiskstatsCounterRegression {
     pub key: BlockDeviceKey,
     pub counter: DiskstatsCounter,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiskstatsObservation {
     #[serde(skip)]
     pub elapsed: Duration,
@@ -175,7 +175,7 @@ pub struct ProcessIoSample {
     pub counters: ProcessIoRaw,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ProcessIoCollectionIssues {
     /// `/proc/<pid>/io` 64-bit counters may tear on 32-bit kernels/userspace.
     pub counter_width_unsupported: bool,
@@ -194,7 +194,7 @@ pub struct ProcessIoCollectionIssues {
     pub counter_regressed: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessIoCounter {
     ReadBytes,
@@ -204,13 +204,13 @@ pub enum ProcessIoCounter {
     Wchar,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessIoCounterRegression {
     pub key: ProcessKey,
     pub counter: ProcessIoCounter,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessIoInterval {
     pub key: ProcessKey,
     pub name: String,
@@ -223,7 +223,7 @@ pub struct ProcessIoInterval {
     pub wchar: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessIoObservation {
     #[serde(skip)]
     pub elapsed: Duration,

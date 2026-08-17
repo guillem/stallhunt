@@ -106,6 +106,7 @@ Later releases may add:
 │   ├── memory.rs
 │   ├── observe.rs
 │   ├── psi.rs
+│   ├── record.rs
 │   └── render.rs
 ├── tests/
 │   ├── cli.rs
@@ -136,10 +137,11 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Milestones 1–3 are functionally complete. Milestone 2's host-memory slice is
+Milestones 1–5 are functionally complete. Milestone 2's host-memory slice is
 implemented and has a recorded delegated-cgroup harmful-pressure acceptance.
-The repository contains a Rust binary with real `hunt`, `capabilities`, help,
-version, duration parsing, and text/JSON output boundaries.
+The repository contains a Rust binary with real `hunt`, `record`, `replay`,
+`redact`, `capabilities`, help, version, duration parsing, and text/JSON output
+boundaries.
 
 `hunt` reads CPU PSI, `/proc/stat`, `/proc/loadavg`, bounded process, and
 bounded task scheduler-accounting snapshots before and after the requested
@@ -157,6 +159,8 @@ Run the current binary with:
 ```bash
 cargo run -- hunt --duration 1s
 cargo run -- capabilities
+cargo run -- record --duration 1s --output /tmp/incident.json
+cargo run -- replay /tmp/incident.json
 ```
 
 CPU inference remains conservative: only exact-interval CPU PSI `some`
@@ -201,3 +205,10 @@ deltas plus path-derived systemd candidates are qualified scoped context, never
 cross-cgroup causal proof. Capabilities consistently report partial cgroup
 collection when limits, permissions, lifecycle changes, or controller files
 make that context incomplete.
+
+M5 adds `record`, `replay`, and `redact`. Recordings store normalized
+observations under `kind` `bottleneck.recording` schema version 1 so replay can
+re-run current inference. They are not hunt JSON and have no pre-1.0
+compatibility promise. New files are created mode 0600. `--redact` replaces
+process names, disk names, and cgroup path components while keeping counters
+and process keys.
