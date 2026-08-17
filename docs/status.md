@@ -6,9 +6,8 @@ Last updated: 2026-08-17
 
 **Milestone 1 — CPU contention vertical slice**
 
-Milestones 1.1 (Rust/CLI bootstrap), 1.2 (CPU PSI collection and
-normalization), and 1.3 (CPU/process collector) are complete. Milestone 1.4
-(scheduler-delay attribution) is next.
+Milestones 1.1 through 1.4 are complete. M1.4 adds bounded scheduler-delay
+evidence; Milestone 1.5 (CPU inference) is next.
 
 ## Implemented
 
@@ -53,6 +52,13 @@ normalization), and 1.3 (CPU/process collector) are complete. Milestone 1.4
 - `rustix` 1.x with only its `param` feature obtains `USER_HZ` safely for
   process CPU fractions; raw ticks remain in the observation and JSON output.
 - `serde` and `serde_json` safely serialize dynamic structured output.
+- M1.4 probes per-task scheduler accounting directly; the unrelated
+  `kernel.sched_schedstats` switch is not used as a capability gate. It retains
+  stable `(tid,starttime)` task counters, sums checked runnable-delay
+  deltas to stable process identities, and caps task samples at 16,384 per
+  endpoint after the existing PID cap. Direct task schedstat reads determine
+  availability; task churn, TID reuse, permissions, malformed data, and caps are
+  explicit JSON context. Candidate delay is raw summed-thread evidence.
 - Invalid CLI invocations write to stderr and exit with status 2.
 - Unit tests cover command parsing, PSI parsing/fixtures, boundary and invalid
   interval normalization, and renderer semantics.
@@ -70,22 +76,29 @@ normalization), and 1.3 (CPU/process collector) are complete. Milestone 1.4
   snapshots; this is reported as an explicit capability/observation limit.
 - The JSON shape is bootstrap scaffolding and has no pre-1.0 compatibility
   promise beyond its explicit `schema_version` field.
-- Scheduler delay (`/proc/<pid>/schedstat`) is not collected yet, so there is
-  no direct per-process evidence of runnable delay. No general telemetry
-  framework, inference engine, or real finding exists yet.
+- Scheduler delay is raw evidence only; there is no severity/confidence
+  inference, healthy result, victim conclusion, suspect ranking, or causality.
+  Tasks whose entire lifetime falls between snapshots are not observable. No
+  general telemetry framework, inference engine, or real finding exists yet.
+- Scheduler identity validation can require three procfs file reads for each of
+  up to 16,384 selected tasks per endpoint. The collector is bounded, but its
+  observer overhead still needs measurement in M1.6.
 - No CI workflow or packaging configuration exists; validation is local.
 
 ## Current recommended next task
 
-Implement **Milestone 1.4: scheduler-delay attribution**:
+Implement **Milestone 1.5: CPU inference**:
 
-- collect `/proc/<pid>/schedstat` with explicit availability and read-failure
-  behavior,
-- calculate runnable-delay deltas for stable process identities,
-- retain process churn and permission qualifiers,
-- add raw runnable-delay evidence without severity or causal inference.
+- establish contention from exact-interval CPU PSI and emit an explicit
+  no-meaningful-contention result when pressure is negligible,
+- centralize provisional severity thresholds and keep confidence independent,
+- rank runnable-delay victim candidates separately from same-window CPU
+  consumers, with suspect confidence capped by correlation-only evidence,
+- cover positive, negative, boundary, missing-data, and contradictory-evidence
+  cases with deterministic normalized fixtures.
 
-Do not add M1.5 CPU severity, confidence, victim, or suspect inference.
+Do not broaden into memory or I/O collection before M1.6 validates the CPU
+slice.
 
 ## Current design risks
 
@@ -161,7 +174,7 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M1.3 validation ran:
+On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M1.4 validation ran:
 
 ```bash
 cargo fmt --all -- --check
@@ -169,14 +182,17 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Validation uses the locked dependency graph from the local Cargo cache. Parser
-and delta tests cover guest accounting, decreasing iowait, malformed procfs,
-process appearance/exit, PID reuse, and regressing process counters. The
-emitted `hunt --json` output is structurally parsed in unit tests and
-host-independent executable integration tests only assert supported shapes.
+Validation uses the locked dependency graph from the local Cargo cache. The 45
+unit and 6 executable integration tests cover strict schedstat parsing, direct
+fixture-tree collection, stable task aggregation, TID reuse, thread churn,
+counter regression, bounded PID/TID selection, partial rendering, and earlier
+CPU/PSI behavior. On the Linux 7.1.5 validation host, the
+`kernel.sched_schedstats` sysctl was `0` while direct per-task schedstat remained
+available; host hunt JSON retained stable scheduler-delay intervals and
+reported no scheduler collection issues.
 
 ## Next milestone
 
-**Milestone 1.4 — Scheduler-delay attribution.**
+**Milestone 1.5 — CPU inference.**
 
 See `roadmap.md`.

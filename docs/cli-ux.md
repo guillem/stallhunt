@@ -67,8 +67,9 @@ bottleneck capabilities [--json]
 bottleneck version
 ```
 
-`hunt` takes CPU PSI, host CPU/load, and bounded per-process `stat` snapshots
-around the requested sleep. It reports `some.total` delta divided by the actual
+`hunt` takes CPU PSI, host CPU/load, bounded per-process `stat`, and bounded
+task scheduler-accounting snapshots around the requested sleep. It reports
+`some.total` delta divided by the actual
 monotonic elapsed interval, along with host CPU tick deltas, logical CPU count,
 load context, and process CPU deltas for stable `(pid, starttime)` identities.
 A successful observation uses JSON `status: "observed"`; unavailable or invalid
@@ -80,6 +81,8 @@ complete evidence is available.
 This is evidence collection, not a CPU bottleneck finding: the output must not
 claim severity, healthy/no-contention status, victims, suspects, or causality.
 Process CPU consumption is explicitly concurrent context, not a causal claim.
+Scheduler-delay candidates are summed stable-thread evidence, not confirmed
+victims.
 `capabilities` probes CPU PSI and reports `available`, `unsupported`,
 `permission_denied`, or `failed`.
 

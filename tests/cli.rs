@@ -62,6 +62,10 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
         .as_str()
         .expect("CPU PSI state should be a string");
     assert!(matches!(
+        json["capabilities"]["process_schedstat"]["state"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
         capability,
         "available" | "unsupported" | "permission_denied" | "failed"
     ));
@@ -69,6 +73,8 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
         Some("observed") => {
             assert_eq!(capability, "available");
             assert!(json["observation"]["cpu_psi"]["some_fraction"].is_number());
+            assert!(json["observation"]["scheduler_delay_candidates"].is_array());
+            assert!(json["observation"]["schedstat_collection_issues"].is_object());
         }
         Some("incomplete") => {
             assert!(json["observation"].is_null() || json["observation"].is_object());
@@ -96,6 +102,11 @@ fn capabilities_json_reports_the_actual_cpu_psi_probe_state() {
         Some("available" | "unsupported" | "permission_denied" | "failed")
     ));
     assert!(json["capabilities"]["cpu_psi"]["message"].is_string());
+    assert!(matches!(
+        json["capabilities"]["process_schedstat"]["state"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(json["capabilities"]["process_schedstat"]["message"].is_string());
 }
 
 #[test]

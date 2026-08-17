@@ -2,7 +2,7 @@
 
 ## Current state
 
-The repository contains the Milestone 1.3 CPU telemetry slice.
+The repository contains the Milestone 1.4 CPU telemetry slice.
 
 Build and run it from the repository root:
 
@@ -13,8 +13,8 @@ cargo run -- capabilities --json
 ```
 
 `hunt` performs a bounded two-snapshot CPU PSI, host CPU/load, and process CPU
-observation. It reports raw evidence only; CPU inference and scheduler-delay
-collection are still future work.
+observation. It reports raw evidence only, including bounded task-summed
+scheduler-delay candidates when enabled; CPU inference remains future work.
 
 ## Toolchain
 

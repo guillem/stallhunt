@@ -31,23 +31,27 @@ them.
 
 ## Starting from the current implementation
 
-Milestones 1.1 through 1.3 are complete. The current recommended Codex session is:
+Milestones 1.1 through 1.4 are complete. The current recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Implement Milestone 1.4: scheduler-delay attribution.
+Implement Milestone 1.5: CPU inference.
 
 Requirements:
-- collect `/proc/<pid>/schedstat` when available,
-- detect unavailable, unreadable, and malformed scheduler accounting,
-- calculate runnable-delay deltas only for stable process identities,
-- preserve process disappearance and partial permission behavior,
-- add victim evidence without CPU severity or suspect inference.
+- establish CPU contention only from exact-interval CPU PSI, never utilization
+  alone,
+- centralize and test provisional severity thresholds while keeping confidence
+  independent,
+- rank scheduler-delay victim candidates and same-window CPU consumers with
+  separate, qualified attribution confidence,
+- emit an explicit healthy/no-meaningful-contention result,
+- test positive, negative, boundary, missing-data, and contradictory-evidence
+  cases.
 
-Integrate only the smallest useful scheduler-delay evidence into the existing
-`hunt` observation and output.
+Integrate the smallest explicit CPU analyzer and typed findings into the
+existing `hunt` output. Do not broaden into memory or I/O collection yet.
 Update docs/status.md and any affected design docs.
 ```
 

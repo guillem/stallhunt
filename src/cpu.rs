@@ -10,6 +10,10 @@ use serde::Serialize;
 use crate::psi::{self, CpuPsiError, CpuPsiObservation};
 
 const MAX_PROCESSES: usize = 4_096;
+// Schedstat is thread-scoped. This global cap bounds selected task samples
+// while retaining deterministic lowest-PID/lowest-TID selection. A successful
+// sample brackets one schedstat read with two task-stat identity reads.
+const MAX_SCHEDSTAT_TASKS: usize = 16_384;
 const MAX_PROCESS_NAME_CHARS: usize = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -25,6 +29,20 @@ pub struct ProcessRaw {
     pub state: char,
     pub user_ticks: u64,
     pub system_ticks: u64,
+    pub schedstat: BTreeMap<ThreadKey, SchedstatRaw>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SchedstatRaw {
+    pub running_ns: u64,
+    pub runnable_wait_ns: u64,
+    pub timeslices: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ThreadKey {
+    pub tid: u32,
+    pub start_time_ticks: u64,
 }
 
 impl ProcessRaw {
@@ -73,6 +91,25 @@ pub struct ProcessCollectionIssues {
     pub limit_reached: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct SchedstatCollectionIssues {
+    pub task_enumeration_failed: u32,
+    pub task_enumeration_errors: u32,
+    pub task_disappeared: u32,
+    pub task_unsupported: u32,
+    pub task_appeared: u32,
+    pub task_exited: u32,
+    pub task_identity_changed: u32,
+    pub task_permission_denied: u32,
+    pub task_unreadable: u32,
+    pub task_malformed: u32,
+    pub aggregate_overflow: u32,
+    pub counter_regressed: u32,
+    pub task_limit_reached: bool,
+    pub tasks_read: u32,
+    pub stable_tasks: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CpuSnapshot {
     pub host: HostCpuRaw,
@@ -80,6 +117,7 @@ pub struct CpuSnapshot {
     pub load_availability: LoadAverageAvailability,
     pub processes: BTreeMap<ProcessKey, ProcessRaw>,
     pub issues: ProcessCollectionIssues,
+    pub schedstat_issues: SchedstatCollectionIssues,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -101,6 +139,19 @@ pub struct ProcessCpuInterval {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProcessSchedulerDelayInterval {
+    pub key: ProcessKey,
+    pub name: String,
+    pub task_count: u32,
+    pub running_ns: u64,
+    pub runnable_wait_ns: u64,
+    pub timeslices: u64,
+    // This is the sum of all sampled threads in the process and can exceed
+    // one wall-clock interval on a multi-threaded process.
+    pub runnable_delay_fraction: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CpuProcessObservation {
     pub elapsed: Duration,
     pub clock_ticks_per_second: u64,
@@ -109,6 +160,9 @@ pub struct CpuProcessObservation {
     pub load_availability: LoadAverageAvailability,
     pub processes: Vec<ProcessCpuInterval>,
     pub collection_issues: ProcessCollectionIssues,
+    pub scheduler_delay_candidates: Vec<ProcessSchedulerDelayInterval>,
+    pub schedstat_collection_issues: SchedstatCollectionIssues,
+    pub schedstat_capability: SchedstatCapability,
 }
 
 #[derive(Debug)]
@@ -131,6 +185,41 @@ pub enum CollectorCapability {
     Partial,
     Failed,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SchedstatCapability {
+    Available,
+    Partial,
+    Unsupported,
+    PermissionDenied,
+    Failed,
+}
+impl SchedstatCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Partial => "partial",
+            Self::Unsupported => "unsupported",
+            Self::PermissionDenied => "permission_denied",
+            Self::Failed => "failed",
+        }
+    }
+    pub fn explanation(self) -> &'static str {
+        match self {
+            Self::Available => {
+                "Task schedstat counters were read and aggregated to stable process identities."
+            }
+            Self::Partial => {
+                "Task schedstat collection was incomplete; any stable scheduler-delay evidence remains explicitly qualified."
+            }
+            Self::Unsupported => "Task schedstat counters were not available on this kernel.",
+            Self::PermissionDenied => {
+                "Task schedstat counters could not be read with the current permissions."
+            }
+            Self::Failed => "Task schedstat collection failed before usable evidence was obtained.",
+        }
+    }
+}
 impl CollectorCapability {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -144,6 +233,7 @@ impl CollectorCapability {
 pub struct CpuTelemetryCapabilities {
     pub host_cpu: CollectorCapability,
     pub process_stat: CollectorCapability,
+    pub process_schedstat: SchedstatCapability,
 }
 pub fn probe_cpu_telemetry() -> CpuTelemetryCapabilities {
     probe_cpu_telemetry_at(Path::new("/proc"))
@@ -158,6 +248,7 @@ fn telemetry_capabilities(snapshot: Result<CpuSnapshot, CpuError>) -> CpuTelemet
         Err(_) => CpuTelemetryCapabilities {
             host_cpu: CollectorCapability::Failed,
             process_stat: CollectorCapability::Failed,
+            process_schedstat: SchedstatCapability::Failed,
         },
         Ok(snapshot) => {
             let issues = snapshot.issues;
@@ -165,8 +256,58 @@ fn telemetry_capabilities(snapshot: Result<CpuSnapshot, CpuError>) -> CpuTelemet
             CpuTelemetryCapabilities {
                 host_cpu: CollectorCapability::Available,
                 process_stat,
+                process_schedstat: schedstat_capability(&snapshot.schedstat_issues, &issues),
             }
         }
+    }
+}
+
+pub fn schedstat_capability(
+    issues: &SchedstatCollectionIssues,
+    process_issues: &ProcessCollectionIssues,
+) -> SchedstatCapability {
+    if process_issues.enumeration_failed {
+        return SchedstatCapability::Failed;
+    }
+    if issues.counter_regressed != 0 || issues.aggregate_overflow != 0 {
+        return SchedstatCapability::Partial;
+    }
+    if issues.task_appeared != 0 || issues.task_exited != 0 || issues.task_identity_changed != 0 {
+        return SchedstatCapability::Partial;
+    }
+    if issues.tasks_read != 0 {
+        if issues.task_enumeration_failed != 0
+            || issues.task_enumeration_errors != 0
+            || issues.task_disappeared != 0
+            || issues.task_unsupported != 0
+            || issues.task_permission_denied != 0
+            || issues.task_unreadable != 0
+            || issues.task_malformed != 0
+            || issues.aggregate_overflow != 0
+            || issues.counter_regressed != 0
+            || issues.task_limit_reached
+            || issues.task_appeared != 0
+            || issues.task_exited != 0
+            || issues.task_identity_changed != 0
+            || process_issues.disappeared != 0
+            || process_issues.permission_denied != 0
+            || process_issues.unreadable != 0
+            || process_issues.malformed != 0
+            || process_issues.enumeration_errors != 0
+            || process_issues.limit_reached
+            || process_issues.appeared != 0
+            || process_issues.exited != 0
+        {
+            SchedstatCapability::Partial
+        } else {
+            SchedstatCapability::Available
+        }
+    } else if issues.task_permission_denied != 0 || process_issues.permission_denied != 0 {
+        SchedstatCapability::PermissionDenied
+    } else if issues.task_unsupported != 0 {
+        SchedstatCapability::Unsupported
+    } else {
+        SchedstatCapability::Failed
     }
 }
 
@@ -249,13 +390,14 @@ fn read_snapshot(proc_root: &Path) -> Result<CpuSnapshot, CpuError> {
         },
         Err(_) => (None, LoadAverageAvailability::Unreadable),
     };
-    let (processes, issues) = collect_processes(proc_root);
+    let (processes, issues, schedstat_issues) = collect_processes(proc_root);
     Ok(CpuSnapshot {
         host,
         load,
         load_availability,
         processes,
         issues,
+        schedstat_issues,
     })
 }
 
@@ -374,16 +516,34 @@ pub fn parse_process_stat(input: &str) -> Result<ProcessRaw, CpuError> {
         state: fields[0].chars().next().ok_or(CpuError::Malformed)?,
         user_ticks: fields[11].parse().map_err(|_| CpuError::Malformed)?,
         system_ticks: fields[12].parse().map_err(|_| CpuError::Malformed)?,
+        schedstat: BTreeMap::new(),
+    })
+}
+
+pub fn parse_schedstat(input: &str) -> Result<SchedstatRaw, CpuError> {
+    let fields: Vec<_> = input.split_ascii_whitespace().collect();
+    if fields.len() != 3 {
+        return Err(CpuError::Malformed);
+    }
+    Ok(SchedstatRaw {
+        running_ns: fields[0].parse().map_err(|_| CpuError::Malformed)?,
+        runnable_wait_ns: fields[1].parse().map_err(|_| CpuError::Malformed)?,
+        timeslices: fields[2].parse().map_err(|_| CpuError::Malformed)?,
     })
 }
 
 fn collect_processes(
     proc_root: &Path,
-) -> (BTreeMap<ProcessKey, ProcessRaw>, ProcessCollectionIssues) {
+) -> (
+    BTreeMap<ProcessKey, ProcessRaw>,
+    ProcessCollectionIssues,
+    SchedstatCollectionIssues,
+) {
     let mut issues = ProcessCollectionIssues::default();
+    let mut schedstat_issues = SchedstatCollectionIssues::default();
     let Ok(entries) = fs::read_dir(proc_root) else {
         issues.enumeration_failed = true;
-        return (BTreeMap::new(), issues);
+        return (BTreeMap::new(), issues, schedstat_issues);
     };
     let mut pids = BinaryHeap::with_capacity(MAX_PROCESSES);
     for entry in entries {
@@ -403,10 +563,17 @@ fn collect_processes(
     let mut pids = pids.into_vec();
     pids.sort_unstable();
     let mut processes = BTreeMap::new();
+    let mut remaining_tasks = MAX_SCHEDSTAT_TASKS;
     for pid in pids {
         match fs::read_to_string(proc_root.join(pid.to_string()).join("stat")) {
             Ok(contents) => match parse_process_stat(&contents) {
-                Ok(process) => {
+                Ok(mut process) => {
+                    process.schedstat = collect_process_schedstat(
+                        proc_root,
+                        pid,
+                        &mut remaining_tasks,
+                        &mut schedstat_issues,
+                    );
                     processes.insert(process.key, process);
                 }
                 Err(_) => issues.malformed += 1,
@@ -418,7 +585,138 @@ fn collect_processes(
             Err(_) => issues.unreadable += 1,
         }
     }
-    (processes, issues)
+    (processes, issues, schedstat_issues)
+}
+
+fn collect_process_schedstat(
+    proc_root: &Path,
+    pid: u32,
+    remaining_tasks: &mut usize,
+    issues: &mut SchedstatCollectionIssues,
+) -> BTreeMap<ThreadKey, SchedstatRaw> {
+    if *remaining_tasks == 0 {
+        issues.task_limit_reached = true;
+        return BTreeMap::new();
+    }
+    let task_root = proc_root.join(pid.to_string()).join("task");
+    let entries = match fs::read_dir(task_root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            issues.task_disappeared = issues.task_disappeared.saturating_add(1);
+            return BTreeMap::new();
+        }
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            issues.task_permission_denied = issues.task_permission_denied.saturating_add(1);
+            return BTreeMap::new();
+        }
+        Err(_) => {
+            issues.task_enumeration_failed = issues.task_enumeration_failed.saturating_add(1);
+            return BTreeMap::new();
+        }
+    };
+    let mut tids = BinaryHeap::new();
+    for entry in entries {
+        match entry {
+            Ok(entry) => match entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+            {
+                Some(tid) => {
+                    insert_lowest_task(&mut tids, tid, *remaining_tasks, issues);
+                }
+                None => {
+                    issues.task_enumeration_errors =
+                        issues.task_enumeration_errors.saturating_add(1)
+                }
+            },
+            Err(_) => {
+                issues.task_enumeration_errors = issues.task_enumeration_errors.saturating_add(1)
+            }
+        }
+    }
+    let mut tids = tids.into_vec();
+    tids.sort_unstable();
+    let mut result = BTreeMap::new();
+    for tid in tids {
+        *remaining_tasks -= 1;
+        let task_base = proc_root
+            .join(pid.to_string())
+            .join("task")
+            .join(tid.to_string());
+        let task_key = match fs::read_to_string(task_base.join("stat"))
+            .and_then(|value| parse_process_stat(&value).map_err(|_| io::Error::other("malformed")))
+        {
+            Ok(stat) if stat.key.pid == tid => ThreadKey {
+                tid,
+                start_time_ticks: stat.key.start_time_ticks,
+            },
+            Ok(_) => {
+                issues.task_identity_changed = issues.task_identity_changed.saturating_add(1);
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                issues.task_disappeared = issues.task_disappeared.saturating_add(1);
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                issues.task_permission_denied = issues.task_permission_denied.saturating_add(1);
+                continue;
+            }
+            Err(_) => {
+                issues.task_malformed = issues.task_malformed.saturating_add(1);
+                continue;
+            }
+        };
+        match fs::read_to_string(task_base.join("schedstat")) {
+            Ok(contents) => match parse_schedstat(&contents) {
+                Ok(raw) => {
+                    match fs::read_to_string(task_base.join("stat"))
+                        .ok()
+                        .and_then(|value| parse_process_stat(&value).ok())
+                    {
+                        Some(stat)
+                            if stat.key.pid == tid
+                                && stat.key.start_time_ticks == task_key.start_time_ticks =>
+                        {
+                            result.insert(task_key, raw);
+                            issues.tasks_read = issues.tasks_read.saturating_add(1);
+                        }
+                        _ => {
+                            issues.task_identity_changed =
+                                issues.task_identity_changed.saturating_add(1)
+                        }
+                    }
+                }
+                Err(_) => issues.task_malformed = issues.task_malformed.saturating_add(1),
+            },
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                issues.task_permission_denied = issues.task_permission_denied.saturating_add(1)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                match fs::read_to_string(task_base.join("stat"))
+                    .ok()
+                    .and_then(|value| parse_process_stat(&value).ok())
+                {
+                    Some(stat)
+                        if stat.key.start_time_ticks == task_key.start_time_ticks
+                            && stat.key.pid == tid =>
+                    {
+                        issues.task_unsupported = issues.task_unsupported.saturating_add(1);
+                    }
+                    Some(_) => {
+                        issues.task_identity_changed =
+                            issues.task_identity_changed.saturating_add(1);
+                    }
+                    None => {
+                        issues.task_disappeared = issues.task_disappeared.saturating_add(1);
+                    }
+                }
+            }
+            Err(_) => issues.task_unreadable = issues.task_unreadable.saturating_add(1),
+        }
+    }
+    result
 }
 
 fn insert_lowest_pid(pids: &mut BinaryHeap<u32>, pid: u32, issues: &mut ProcessCollectionIssues) {
@@ -430,6 +728,23 @@ fn insert_lowest_pid(pids: &mut BinaryHeap<u32>, pid: u32, issues: &mut ProcessC
         issues.limit_reached = true;
     } else {
         issues.limit_reached = true;
+    }
+}
+
+fn insert_lowest_task(
+    tids: &mut BinaryHeap<u32>,
+    tid: u32,
+    limit: usize,
+    issues: &mut SchedstatCollectionIssues,
+) {
+    if tids.len() < limit {
+        tids.push(tid);
+    } else if tids.peek().is_some_and(|largest| tid < *largest) {
+        tids.pop();
+        tids.push(tid);
+        issues.task_limit_reached = true;
+    } else {
+        issues.task_limit_reached = true;
     }
 }
 
@@ -483,29 +798,87 @@ pub fn interval_from_snapshots(
     )
     .unwrap_or(u32::MAX);
     let mut processes = Vec::new();
+    let mut scheduler_delay_candidates = Vec::new();
+    let mut schedstat_collection_issues =
+        merge_schedstat_issues(start.schedstat_issues, end.schedstat_issues);
     for (key, end_process) in &end.processes {
         let Some(start_process) = start.processes.get(key) else {
             continue;
         };
-        let Some(end_ticks) = end_process.cpu_ticks() else {
-            collection_issues.counter_regressed += 1;
-            continue;
+        if let (Some(start_ticks), Some(end_ticks)) =
+            (start_process.cpu_ticks(), end_process.cpu_ticks())
+        {
+            if let Some(ticks) = end_ticks.checked_sub(start_ticks) {
+                processes.push(ProcessCpuInterval {
+                    key: *key,
+                    name: sanitized_process_name(&end_process.comm),
+                    state: end_process.state,
+                    cpu_ticks: ticks,
+                    cpu_fraction_of_one: ticks as f64
+                        / clock_ticks_per_second as f64
+                        / elapsed_seconds,
+                });
+            } else {
+                collection_issues.counter_regressed =
+                    collection_issues.counter_regressed.saturating_add(1);
+            }
+        } else {
+            collection_issues.counter_regressed =
+                collection_issues.counter_regressed.saturating_add(1);
+        }
+        let mut total = SchedstatRaw {
+            running_ns: 0,
+            runnable_wait_ns: 0,
+            timeslices: 0,
         };
-        let Some(start_ticks) = start_process.cpu_ticks() else {
-            collection_issues.counter_regressed += 1;
-            continue;
-        };
-        let Some(ticks) = end_ticks.checked_sub(start_ticks) else {
-            collection_issues.counter_regressed += 1;
-            continue;
-        };
-        processes.push(ProcessCpuInterval {
-            key: *key,
-            name: sanitized_process_name(&end_process.comm),
-            state: end_process.state,
-            cpu_ticks: ticks,
-            cpu_fraction_of_one: ticks as f64 / clock_ticks_per_second as f64 / elapsed_seconds,
-        });
+        let mut stable_tasks = 0_u32;
+        for (thread, end_raw) in &end_process.schedstat {
+            let Some(start_raw) = start_process.schedstat.get(thread) else {
+                continue;
+            };
+            let (Some(running_ns), Some(runnable_wait_ns), Some(timeslices)) = (
+                end_raw.running_ns.checked_sub(start_raw.running_ns),
+                end_raw
+                    .runnable_wait_ns
+                    .checked_sub(start_raw.runnable_wait_ns),
+                end_raw.timeslices.checked_sub(start_raw.timeslices),
+            ) else {
+                schedstat_collection_issues.counter_regressed = schedstat_collection_issues
+                    .counter_regressed
+                    .saturating_add(1);
+                continue;
+            };
+            let (Some(next_running), Some(next_wait), Some(next_slices)) = (
+                total.running_ns.checked_add(running_ns),
+                total.runnable_wait_ns.checked_add(runnable_wait_ns),
+                total.timeslices.checked_add(timeslices),
+            ) else {
+                schedstat_collection_issues.aggregate_overflow = schedstat_collection_issues
+                    .aggregate_overflow
+                    .saturating_add(1);
+                continue;
+            };
+            total = SchedstatRaw {
+                running_ns: next_running,
+                runnable_wait_ns: next_wait,
+                timeslices: next_slices,
+            };
+            stable_tasks = stable_tasks.saturating_add(1);
+        }
+        schedstat_collection_issues.stable_tasks = schedstat_collection_issues
+            .stable_tasks
+            .saturating_add(stable_tasks);
+        if stable_tasks != 0 {
+            scheduler_delay_candidates.push(ProcessSchedulerDelayInterval {
+                key: *key,
+                name: sanitized_process_name(&end_process.comm),
+                task_count: stable_tasks,
+                running_ns: total.running_ns,
+                runnable_wait_ns: total.runnable_wait_ns,
+                timeslices: total.timeslices,
+                runnable_delay_fraction: total.runnable_wait_ns as f64 / elapsed.as_nanos() as f64,
+            });
+        }
     }
     processes.sort_unstable_by(|left, right| {
         right
@@ -513,6 +886,55 @@ pub fn interval_from_snapshots(
             .cmp(&left.cpu_ticks)
             .then_with(|| left.key.cmp(&right.key))
     });
+    scheduler_delay_candidates.sort_unstable_by(|left, right| {
+        right
+            .runnable_wait_ns
+            .cmp(&left.runnable_wait_ns)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    for (key, end_process) in &end.processes {
+        if let Some(start_process) = start.processes.get(key) {
+            for thread in end_process.schedstat.keys() {
+                if !start_process.schedstat.contains_key(thread) {
+                    schedstat_collection_issues.task_appeared =
+                        schedstat_collection_issues.task_appeared.saturating_add(1);
+                }
+                if start_process.schedstat.keys().any(|old| {
+                    old.tid == thread.tid && old.start_time_ticks != thread.start_time_ticks
+                }) {
+                    schedstat_collection_issues.task_identity_changed = schedstat_collection_issues
+                        .task_identity_changed
+                        .saturating_add(1);
+                }
+            }
+            for thread in start_process.schedstat.keys() {
+                if !end_process.schedstat.contains_key(thread) {
+                    schedstat_collection_issues.task_exited =
+                        schedstat_collection_issues.task_exited.saturating_add(1);
+                }
+            }
+        }
+    }
+    let mut schedstat_capability =
+        schedstat_capability(&schedstat_collection_issues, &collection_issues);
+    if schedstat_capability == SchedstatCapability::Available
+        && schedstat_collection_issues.tasks_read != 0
+        && schedstat_collection_issues.stable_tasks == 0
+    {
+        schedstat_capability = SchedstatCapability::Partial;
+    }
+    if schedstat_capability == SchedstatCapability::Unsupported
+        && start
+            .processes
+            .values()
+            .any(|process| !process.schedstat.is_empty())
+        && end
+            .processes
+            .values()
+            .any(|process| !process.schedstat.is_empty())
+    {
+        schedstat_capability = SchedstatCapability::Partial;
+    }
     Ok(CpuProcessObservation {
         elapsed,
         clock_ticks_per_second,
@@ -527,7 +949,45 @@ pub fn interval_from_snapshots(
         load_availability: end.load_availability,
         processes,
         collection_issues,
+        scheduler_delay_candidates,
+        schedstat_collection_issues,
+        schedstat_capability,
     })
+}
+
+fn merge_schedstat_issues(
+    start: SchedstatCollectionIssues,
+    end: SchedstatCollectionIssues,
+) -> SchedstatCollectionIssues {
+    SchedstatCollectionIssues {
+        task_enumeration_failed: start
+            .task_enumeration_failed
+            .saturating_add(end.task_enumeration_failed),
+        task_enumeration_errors: start
+            .task_enumeration_errors
+            .saturating_add(end.task_enumeration_errors),
+        task_disappeared: start.task_disappeared.saturating_add(end.task_disappeared),
+        task_unsupported: start.task_unsupported.saturating_add(end.task_unsupported),
+        task_appeared: 0,
+        task_exited: 0,
+        task_identity_changed: start
+            .task_identity_changed
+            .saturating_add(end.task_identity_changed),
+        task_permission_denied: start
+            .task_permission_denied
+            .saturating_add(end.task_permission_denied),
+        task_unreadable: start.task_unreadable.saturating_add(end.task_unreadable),
+        task_malformed: start.task_malformed.saturating_add(end.task_malformed),
+        aggregate_overflow: start
+            .aggregate_overflow
+            .saturating_add(end.aggregate_overflow),
+        counter_regressed: start
+            .counter_regressed
+            .saturating_add(end.counter_regressed),
+        task_limit_reached: start.task_limit_reached || end.task_limit_reached,
+        tasks_read: start.tasks_read.saturating_add(end.tasks_read),
+        stable_tasks: 0,
+    }
 }
 
 fn merge_issues(
@@ -576,6 +1036,28 @@ mod tests {
     const PROC_STAT: &str = include_str!("../tests/fixtures/proc-stat-valid");
     const LOADAVG: &str = include_str!("../tests/fixtures/proc-loadavg-valid");
     const PID_STAT: &str = include_str!("../tests/fixtures/proc-pid-stat-unusual-name");
+    const SCHEDSTAT: &str = include_str!("../tests/fixtures/proc-schedstat-valid");
+
+    fn proc_fixture(with_sysctl_zero: bool) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("bottleneck-proc-{}-{nonce}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("123/task/123")).unwrap();
+        fs::write(root.join("stat"), PROC_STAT).unwrap();
+        fs::write(root.join("loadavg"), LOADAVG).unwrap();
+        fs::write(root.join("123/stat"), PID_STAT).unwrap();
+        fs::write(root.join("123/task/123/stat"), PID_STAT).unwrap();
+        fs::write(root.join("123/task/123/schedstat"), SCHEDSTAT).unwrap();
+        if with_sysctl_zero {
+            fs::create_dir_all(root.join("sys/kernel")).unwrap();
+            fs::write(root.join("sys/kernel/sched_schedstats"), "0\n").unwrap();
+        }
+        root
+    }
 
     #[test]
     fn parses_host_stat_without_double_counting_guest_ticks() {
@@ -593,6 +1075,39 @@ mod tests {
         assert_eq!(process.comm, "a weird ) name");
         assert_eq!(process.key.start_time_ticks, 987);
         assert_eq!(process.user_ticks, 42);
+    }
+
+    #[test]
+    fn parses_exactly_three_schedstat_counters() {
+        assert_eq!(
+            parse_schedstat(SCHEDSTAT).unwrap(),
+            SchedstatRaw {
+                running_ns: 100,
+                runnable_wait_ns: 200,
+                timeslices: 3
+            }
+        );
+        for input in [
+            "10 20",
+            "10 20 30 40",
+            "10 nope 30",
+            "18446744073709551616 1 1",
+        ] {
+            assert_eq!(parse_schedstat(input), Err(CpuError::Malformed));
+        }
+    }
+
+    #[test]
+    fn direct_schedstat_reads_ignore_sysctl_zero_or_absence() {
+        for with_sysctl_zero in [false, true] {
+            let root = proc_fixture(with_sysctl_zero);
+            let snapshot = read_snapshot(&root).unwrap();
+            assert_eq!(
+                snapshot.processes.values().next().unwrap().schedstat.len(),
+                1
+            );
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     #[test]
@@ -632,6 +1147,7 @@ mod tests {
                 .map(|process| (process.key, process))
                 .collect(),
             issues: ProcessCollectionIssues::default(),
+            schedstat_issues: SchedstatCollectionIssues::default(),
         }
     }
     fn process(pid: u32, start: u64, ticks: u64) -> ProcessRaw {
@@ -644,6 +1160,7 @@ mod tests {
             state: 'R',
             user_ticks: ticks,
             system_ticks: 0,
+            schedstat: BTreeMap::new(),
         }
     }
 
@@ -697,7 +1214,8 @@ mod tests {
             telemetry_capabilities(Ok(snapshot)),
             CpuTelemetryCapabilities {
                 host_cpu: CollectorCapability::Available,
-                process_stat: CollectorCapability::Failed
+                process_stat: CollectorCapability::Failed,
+                process_schedstat: SchedstatCapability::Failed,
             }
         );
     }
@@ -714,6 +1232,19 @@ mod tests {
         assert_eq!(selected.first(), Some(&0));
         assert_eq!(selected.last(), Some(&(MAX_PROCESSES as u32 - 1)));
         assert!(issues.limit_reached);
+    }
+
+    #[test]
+    fn bounded_task_selection_keeps_lowest_tids() {
+        let mut issues = SchedstatCollectionIssues::default();
+        let mut tids = BinaryHeap::new();
+        for tid in [9, 4, 8, 1, 3] {
+            insert_lowest_task(&mut tids, tid, 3, &mut issues);
+        }
+        let mut selected = tids.into_vec();
+        selected.sort_unstable();
+        assert_eq!(selected, vec![1, 3, 4]);
+        assert!(issues.task_limit_reached);
     }
 
     #[test]
@@ -737,6 +1268,19 @@ mod tests {
     }
 
     #[test]
+    fn mixed_schedstat_support_is_partial() {
+        let issues = SchedstatCollectionIssues {
+            tasks_read: 1,
+            task_unsupported: 1,
+            ..SchedstatCollectionIssues::default()
+        };
+        assert_eq!(
+            schedstat_capability(&issues, &ProcessCollectionIssues::default()),
+            SchedstatCapability::Partial
+        );
+    }
+
+    #[test]
     fn tolerates_decreasing_iowait_when_aggregate_cpu_time_increases() {
         let start = snapshot(1_000, 600, 400, vec![]);
         let end = snapshot(1_100, 680, 390, vec![]);
@@ -750,6 +1294,241 @@ mod tests {
         assert_eq!(
             sanitized_process_name(&"x".repeat(81)),
             format!("{}…", "x".repeat(80))
+        );
+    }
+
+    #[test]
+    fn normalizes_thread_aggregated_scheduler_delay_for_stable_processes() {
+        let mut first = process(7, 1, 10);
+        first.schedstat = BTreeMap::from([
+            (
+                ThreadKey {
+                    tid: 7,
+                    start_time_ticks: 11,
+                },
+                SchedstatRaw {
+                    running_ns: 100,
+                    runnable_wait_ns: 200,
+                    timeslices: 3,
+                },
+            ),
+            (
+                ThreadKey {
+                    tid: 8,
+                    start_time_ticks: 12,
+                },
+                SchedstatRaw {
+                    running_ns: 50,
+                    runnable_wait_ns: 50,
+                    timeslices: 1,
+                },
+            ),
+        ]);
+        let mut second = process(7, 1, 20);
+        second.schedstat = BTreeMap::from([
+            (
+                ThreadKey {
+                    tid: 7,
+                    start_time_ticks: 11,
+                },
+                SchedstatRaw {
+                    running_ns: 180,
+                    runnable_wait_ns: 600,
+                    timeslices: 7,
+                },
+            ),
+            (
+                ThreadKey {
+                    tid: 8,
+                    start_time_ticks: 12,
+                },
+                SchedstatRaw {
+                    running_ns: 70,
+                    runnable_wait_ns: 100,
+                    timeslices: 2,
+                },
+            ),
+        ]);
+        let observation = interval_from_snapshots(
+            snapshot(100, 60, 40, vec![first]),
+            snapshot(110, 70, 40, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(observation.scheduler_delay_candidates.len(), 1);
+        let candidate = &observation.scheduler_delay_candidates[0];
+        assert_eq!(candidate.runnable_wait_ns, 450);
+        assert_eq!(candidate.running_ns, 100);
+        assert_eq!(candidate.task_count, 2);
+        assert_eq!(candidate.runnable_delay_fraction, 0.000_000_45);
+    }
+
+    #[test]
+    fn excludes_regressing_scheduler_delay_without_losing_cpu_observation() {
+        let mut first = process(7, 1, 10);
+        first.schedstat = BTreeMap::from([(
+            ThreadKey {
+                tid: 7,
+                start_time_ticks: 11,
+            },
+            SchedstatRaw {
+                running_ns: 10,
+                runnable_wait_ns: 20,
+                timeslices: 3,
+            },
+        )]);
+        let mut second = process(7, 1, 20);
+        second.schedstat = BTreeMap::from([(
+            ThreadKey {
+                tid: 7,
+                start_time_ticks: 11,
+            },
+            SchedstatRaw {
+                running_ns: 11,
+                runnable_wait_ns: 19,
+                timeslices: 4,
+            },
+        )]);
+        let observation = interval_from_snapshots(
+            snapshot(100, 60, 40, vec![first]),
+            snapshot(110, 70, 40, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(observation.processes.len(), 1);
+        assert!(observation.scheduler_delay_candidates.is_empty());
+        assert_eq!(observation.schedstat_collection_issues.counter_regressed, 1);
+        assert_eq!(
+            observation.schedstat_capability,
+            SchedstatCapability::Partial
+        );
+    }
+
+    #[test]
+    fn tid_reuse_does_not_merge_scheduler_counters() {
+        let mut first = process(7, 1, 10);
+        first.schedstat.insert(
+            ThreadKey {
+                tid: 9,
+                start_time_ticks: 10,
+            },
+            SchedstatRaw {
+                running_ns: 10,
+                runnable_wait_ns: 20,
+                timeslices: 1,
+            },
+        );
+        let mut second = process(7, 1, 20);
+        second.schedstat.insert(
+            ThreadKey {
+                tid: 9,
+                start_time_ticks: 11,
+            },
+            SchedstatRaw {
+                running_ns: 100,
+                runnable_wait_ns: 200,
+                timeslices: 2,
+            },
+        );
+        let observation = interval_from_snapshots(
+            snapshot(100, 60, 40, vec![first]),
+            snapshot(110, 70, 40, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert!(observation.scheduler_delay_candidates.is_empty());
+        assert_eq!(
+            observation.schedstat_capability,
+            SchedstatCapability::Partial
+        );
+    }
+
+    #[test]
+    fn thread_exit_is_counted_and_makes_schedstat_partial() {
+        let mut first = process(7, 1, 10);
+        first.schedstat.insert(
+            ThreadKey {
+                tid: 7,
+                start_time_ticks: 1,
+            },
+            SchedstatRaw {
+                running_ns: 1,
+                runnable_wait_ns: 2,
+                timeslices: 1,
+            },
+        );
+        first.schedstat.insert(
+            ThreadKey {
+                tid: 8,
+                start_time_ticks: 2,
+            },
+            SchedstatRaw {
+                running_ns: 1,
+                runnable_wait_ns: 2,
+                timeslices: 1,
+            },
+        );
+        let mut second = process(7, 1, 20);
+        second.schedstat.insert(
+            ThreadKey {
+                tid: 7,
+                start_time_ticks: 1,
+            },
+            SchedstatRaw {
+                running_ns: 2,
+                runnable_wait_ns: 4,
+                timeslices: 2,
+            },
+        );
+        let observation = interval_from_snapshots(
+            snapshot(100, 60, 40, vec![first]),
+            snapshot(110, 70, 40, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(observation.schedstat_collection_issues.task_exited, 1);
+        assert_eq!(
+            observation.schedstat_capability,
+            SchedstatCapability::Partial
+        );
+    }
+
+    #[test]
+    fn cpu_counter_regression_keeps_stable_scheduler_delay() {
+        let mut first = process(7, 1, 20);
+        first.schedstat.insert(
+            ThreadKey {
+                tid: 7,
+                start_time_ticks: 10,
+            },
+            SchedstatRaw {
+                running_ns: 10,
+                runnable_wait_ns: 20,
+                timeslices: 1,
+            },
+        );
+        let mut second = process(7, 1, 10);
+        second.schedstat.insert(
+            ThreadKey {
+                tid: 7,
+                start_time_ticks: 10,
+            },
+            SchedstatRaw {
+                running_ns: 20,
+                runnable_wait_ns: 40,
+                timeslices: 2,
+            },
+        );
+        let observation = interval_from_snapshots(
+            snapshot(100, 60, 40, vec![first]),
+            snapshot(110, 70, 40, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert!(observation.processes.is_empty());
+        assert_eq!(
+            observation.scheduler_delay_candidates[0].runnable_wait_ns,
+            20
         );
     }
 }

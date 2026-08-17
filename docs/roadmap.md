@@ -19,7 +19,7 @@ A fresh coding agent can understand what to build without external chat history.
 
 ## Milestone 1 — CPU contention vertical slice
 
-Status: in progress. M1.1 through M1.3 are complete; M1.4 is next.
+Status: in progress. M1.1 through M1.4 are complete; M1.5 is next.
 
 Goal:
 
@@ -64,7 +64,7 @@ Deliver:
 
 ### M1.4 Scheduler-delay attribution
 
-Status: next.
+Status: complete.
 
 Deliver:
 

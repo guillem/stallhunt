@@ -130,7 +130,23 @@ produce process CPU deltas; appearing, exiting, or reused PIDs do not.
 
 ## `/proc/<pid>/schedstat`
 
-Where enabled/readable, this can expose scheduler accounting useful for CPU victim attribution.
+Scheduler accounting is task/thread-scoped. The schedstats sysctl is not used
+as a capability gate: it does not reliably control this per-task interface.
+The collector probes the `schedstat` files directly and reads
+`/proc/<tgid>/task/<tid>/stat` and `schedstat`, preserving task identity as
+`(tid,starttime)` and comparing only identities stable at both endpoints.
+
+The existing 4,096-PID selection remains in force. Across those processes,
+task samples are globally capped at 16,384 per endpoint; selection is
+deterministic by selected PID then lowest TID. Each successful sample brackets
+one `schedstat` read with two task `stat` reads so TID reuse during collection
+cannot fabricate identity-bound counters. Endpoint matching excludes tasks
+that appeared, exited, or reused a TID. Process delay is a checked sum of
+stable-thread deltas, so it may exceed wall-clock time. Enumeration/read
+issues and cap truncation remain qualifiers. Tasks whose full lifetime occurs
+between snapshots remain unobservable. Direct task reads are authoritative.
+This is raw scheduler evidence, not a severity, victim, suspect, or causal
+conclusion.
 
 Expected concepts include:
 

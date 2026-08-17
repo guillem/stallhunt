@@ -42,11 +42,13 @@ pub fn capabilities(
 ) -> String {
     match options.output {
         OutputFormat::Text => format!(
-            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\n",
+            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\n",
             cpu_psi.as_str(),
             cpu_psi.explanation(),
             cpu.host_cpu.as_str(),
-            cpu.process_stat.as_str()
+            cpu.process_stat.as_str(),
+            cpu.process_schedstat.as_str(),
+            cpu.process_schedstat.explanation(),
         ),
         OutputFormat::Json => to_json(&CapabilitiesJson {
             schema_version: 1,
@@ -59,6 +61,10 @@ pub fn capabilities(
                 },
                 host_cpu: cpu.host_cpu.as_str(),
                 process_stat: cpu.process_stat.as_str(),
+                process_schedstat: CapabilityJson {
+                    state: cpu.process_schedstat.as_str(),
+                    message: cpu.process_schedstat.explanation(),
+                },
             },
         }),
     }
@@ -95,8 +101,9 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
                 None => format!("Load at end: unavailable ({:?})", cpu.load_availability),
             };
             let process_context = process_context_line(&cpu);
+            let scheduler_lines = scheduler_delay_lines(&cpu);
             format!(
-                "CPU telemetry observation complete\n\nRequested observation duration: {}\nActual observation duration: {}\nCPU PSI some during interval: {:.2}% ({} us cumulative stall time)\nCPU PSI rolling averages at end: avg10 {:.2}%, avg60 {:.2}%, avg300 {:.2}%\nHost CPU: {:.2}% busy across {} logical CPUs ({} / {} ticks)\n{}\nProcesses sampled: {}\n{}\nTop process CPU consumers during interval:\n{}\n\nThis is raw CPU and process evidence only. Process CPU consumption is concurrent context, not causal attribution; severity, victims, suspects, and scheduler-delay analysis are not implemented yet.\n",
+                "CPU telemetry observation complete\n\nRequested observation duration: {}\nActual observation duration: {}\nCPU PSI some during interval: {:.2}% ({} us cumulative stall time)\nCPU PSI rolling averages at end: avg10 {:.2}%, avg60 {:.2}%, avg300 {:.2}%\nHost CPU: {:.2}% busy across {} logical CPUs ({} / {} ticks)\n{}\nProcesses sampled: {}\n{}\nTop process CPU consumers during interval:\n{}\nScheduler-delay evidence: {}\n{}\n\nThis is raw CPU and process evidence only. Scheduler-delay candidates are aggregated task-level evidence, not confirmed victims or causal attribution; severity, healthy/no-contention, victims, and suspects are not implemented yet.\n",
                 human_duration(options.duration_ms),
                 human_duration_from_duration(observation.interval.elapsed),
                 observation.interval.some_fraction * 100.0,
@@ -112,10 +119,12 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
                 cpu.processes.len(),
                 process_context,
                 process_lines,
+                cpu.schedstat_capability.as_str(),
+                scheduler_lines,
             )
         }
         (Err(error), Ok(cpu)) => format!(
-            "CPU PSI observation unavailable\n\nCPU PSI capability: {}\n{}\nHost CPU: {:.2}% busy across {} logical CPUs ({} / {} ticks)\nProcesses sampled: {}\n{}\nCPU PSI is missing; retained host/process CPU evidence is raw context only, and no diagnosis or finding was produced.\n",
+            "CPU PSI observation unavailable\n\nCPU PSI capability: {}\n{}\nHost CPU: {:.2}% busy across {} logical CPUs ({} / {} ticks)\nProcesses sampled: {}\n{}\nScheduler-delay evidence: {}\n{}\nCPU PSI is missing; retained host/process CPU and scheduler-delay evidence is raw context only, and no diagnosis or finding was produced.\n",
             error.capability().as_str(),
             error.explanation(),
             cpu.host.utilization_fraction * 100.0,
@@ -124,6 +133,8 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
             cpu.host.total_ticks,
             cpu.processes.len(),
             process_context_line(&cpu),
+            cpu.schedstat_capability.as_str(),
+            scheduler_delay_lines(&cpu),
         ),
         (Err(error), Err(_)) => format!(
             "CPU PSI observation unavailable\n\nCPU PSI capability: {}\n{}\nNo complete CPU PSI interval was observed; no diagnosis or finding was produced.\n",
@@ -138,6 +149,20 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
             error.explanation(),
         ),
     }
+}
+
+fn scheduler_delay_lines(cpu: &CpuProcessObservation) -> String {
+    if cpu.scheduler_delay_candidates.is_empty() {
+        return format!(
+            "  No stable process scheduler-delay deltas ({})",
+            cpu.schedstat_capability.explanation()
+        );
+    }
+    cpu.scheduler_delay_candidates.iter().take(10).map(|candidate| format!(
+        "  {} [{}]  {} ns runnable delay across {} sampled task(s) ({:.1}% of interval; summed-thread semantics)",
+        candidate.name, candidate.key.pid, candidate.runnable_wait_ns, candidate.task_count,
+        candidate.runnable_delay_fraction * 100.0
+    )).collect::<Vec<_>>().join("\n")
 }
 
 fn process_context_line(cpu: &CpuProcessObservation) -> String {
@@ -166,6 +191,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
     match (result.psi, result.cpu) {
         (Ok(observation), Ok(cpu)) => {
             let process_stat = crate::cpu::process_capability(&cpu.collection_issues).as_str();
+            let process_schedstat = cpu.schedstat_capability;
             to_json(&HuntJson {
                 schema_version: 1,
                 tool_version: env!("CARGO_PKG_VERSION"),
@@ -179,16 +205,21 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
                     },
                     host_cpu: "available",
                     process_stat,
+                    process_schedstat: CapabilityJson {
+                        state: process_schedstat.as_str(),
+                        message: process_schedstat.explanation(),
+                    },
                 },
                 findings: Vec::new(),
                 qualifiers: vec![QualifierJson {
                     kind: "implementation_limit",
-                    message: "CPU PSI, host CPU counters, load context, and process CPU deltas are collected, but CPU contention inference and causal attribution are not implemented.",
+                    message: "CPU PSI, host CPU counters, load context, process CPU deltas, and available scheduler-delay intervals are collected, but CPU contention inference and causal attribution are not implemented.",
                 }],
             })
         }
         (Err(error), Ok(cpu)) => {
             let process_stat = crate::cpu::process_capability(&cpu.collection_issues).as_str();
+            let process_schedstat = cpu.schedstat_capability;
             to_json(&HuntJson {
                 schema_version: 1,
                 tool_version: env!("CARGO_PKG_VERSION"),
@@ -202,6 +233,10 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
                     },
                     host_cpu: "available",
                     process_stat,
+                    process_schedstat: CapabilityJson {
+                        state: process_schedstat.as_str(),
+                        message: process_schedstat.explanation(),
+                    },
                 },
                 findings: Vec::new(),
                 qualifiers: vec![QualifierJson {
@@ -223,6 +258,10 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
                 },
                 host_cpu: "failed",
                 process_stat: "failed",
+                process_schedstat: CapabilityJson {
+                    state: "failed",
+                    message: "CPU process telemetry was unavailable.",
+                },
             },
             findings: Vec::new(),
             qualifiers: vec![QualifierJson {
@@ -243,6 +282,10 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
                 },
                 host_cpu: "failed",
                 process_stat: "failed",
+                process_schedstat: CapabilityJson {
+                    state: "failed",
+                    message: "CPU process telemetry was unavailable.",
+                },
             },
             findings: Vec::new(),
             qualifiers: vec![QualifierJson {
@@ -296,6 +339,8 @@ struct ObservationJson {
     clock_ticks_per_second: Option<u64>,
     processes: Option<Vec<crate::cpu::ProcessCpuInterval>>,
     process_collection_issues: Option<crate::cpu::ProcessCollectionIssues>,
+    scheduler_delay_candidates: Option<Vec<crate::cpu::ProcessSchedulerDelayInterval>>,
+    schedstat_collection_issues: Option<crate::cpu::SchedstatCollectionIssues>,
 }
 
 impl ObservationJson {
@@ -325,6 +370,8 @@ impl ObservationJson {
                 clock_ticks_per_second: Some(cpu.clock_ticks_per_second),
                 processes: Some(cpu.processes),
                 process_collection_issues: Some(cpu.collection_issues),
+                scheduler_delay_candidates: Some(cpu.scheduler_delay_candidates),
+                schedstat_collection_issues: Some(cpu.schedstat_collection_issues),
             },
             None => Self {
                 psi_duration_us,
@@ -336,6 +383,8 @@ impl ObservationJson {
                 clock_ticks_per_second: None,
                 processes: None,
                 process_collection_issues: None,
+                scheduler_delay_candidates: None,
+                schedstat_collection_issues: None,
             },
         }
     }
@@ -356,6 +405,7 @@ struct CapabilitiesJsonValue<'a> {
     cpu_psi: CapabilityJson<'a>,
     host_cpu: &'a str,
     process_stat: &'a str,
+    process_schedstat: CapabilityJson<'a>,
 }
 
 #[derive(Serialize)]
@@ -441,6 +491,9 @@ mod tests {
                 load_availability: LoadAverageAvailability::Available,
                 processes: Vec::new(),
                 collection_issues: ProcessCollectionIssues::default(),
+                scheduler_delay_candidates: Vec::new(),
+                schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+                schedstat_capability: crate::cpu::SchedstatCapability::Unsupported,
             }),
         }
     }
@@ -491,6 +544,22 @@ mod tests {
     }
 
     #[test]
+    fn psi_failure_retains_scheduler_delay_text_context() {
+        let output = hunt(
+            &HuntOptions {
+                duration_ms: 1_000,
+                output: OutputFormat::Text,
+            },
+            |_| HuntObservation {
+                psi: Err(crate::psi::CpuPsiError::Malformed),
+                cpu: hunt_observation().cpu,
+            },
+        );
+        assert!(output.contains("Scheduler-delay evidence:"));
+        assert!(output.contains("unsupported"));
+    }
+
+    #[test]
     fn process_context_discloses_failed_enumeration() {
         let cpu = CpuProcessObservation {
             elapsed: Duration::from_secs(1),
@@ -509,6 +578,9 @@ mod tests {
                 enumeration_failed: true,
                 ..ProcessCollectionIssues::default()
             },
+            scheduler_delay_candidates: Vec::new(),
+            schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+            schedstat_capability: crate::cpu::SchedstatCapability::Unsupported,
         };
         assert!(process_context_line(&cpu).contains("failed"));
     }
@@ -529,6 +601,7 @@ mod tests {
                 CpuTelemetryCapabilities {
                     host_cpu: crate::cpu::CollectorCapability::Available,
                     process_stat: crate::cpu::CollectorCapability::Available,
+                    process_schedstat: crate::cpu::SchedstatCapability::Unsupported,
                 },
             );
             assert!(output.contains(&format!("CPU PSI: {}", capability.as_str())));

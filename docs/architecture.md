@@ -153,8 +153,8 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 ## Current implementation layout
 
-Milestone 1.3 adds the bounded CPU/process collector used by the first
-telemetry slice:
+Milestone 1.4 adds bounded CPU/process and scheduler-delay collection used by
+the first telemetry slice:
 
 ```text
 src/
@@ -170,7 +170,7 @@ tests/
 
 There is no generic telemetry framework or inference engine. `cpu.rs` keeps
 the narrow procfs CPU/process raw and interval model together; it deliberately
-does not read schedstat or assign attribution roles.
+aggregates stable task schedstat counters but does not assign attribution roles.
 
 ## Observation lifecycle
 
