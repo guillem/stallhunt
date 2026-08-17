@@ -5,7 +5,8 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::cgroup::{
-    CgroupFileState, CgroupObservation, CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
+    CgroupCpuInterval, CgroupFileState, CgroupIoDevice, CgroupIoRaw, CgroupMemoryEventsRaw,
+    CgroupObservation, CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
 };
 use crate::cpu::{
     self, CpuProcessObservation, ProcessKey, ProcessSchedulerDelayInterval, SchedstatCapability,
@@ -16,6 +17,7 @@ use crate::psi::{
     CpuPsiObservation, IoPsiFullInterval, IoPsiObservation, MemoryPsiFullInterval,
     MemoryPsiObservation,
 };
+use std::collections::BTreeMap;
 
 pub const MIN_DIAGNOSIS_WINDOW: Duration = Duration::from_secs(1);
 pub const CPU_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
@@ -48,6 +50,12 @@ pub struct CgroupEvidence {
     pub psi_full_total_delta_us: Option<u64>,
     pub psi_window_us: u128,
     pub psi_state: CgroupFileState,
+    /// Controller values are scoped context only. They do not create the PSI
+    /// verdict or establish a causal relationship with another cgroup.
+    pub cpu: CgroupResource<CgroupCpuInterval>,
+    pub memory_current_end: CgroupResource<u64>,
+    pub memory_events: CgroupResource<CgroupMemoryEventsRaw>,
+    pub io: CgroupResource<BTreeMap<CgroupIoDevice, CgroupIoRaw>>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CgroupFinding {
@@ -1230,6 +1238,10 @@ fn cgroup_finding(
             psi_full_total_delta_us: psi.value.as_ref().and_then(|x| x.full_total_usec),
             psi_window_us: window_us,
             psi_state: psi.state,
+            cpu: group.cpu.clone(),
+            memory_current_end: group.memory_current_end.clone(),
+            memory_events: group.memory_events.clone(),
+            io: group.io.clone(),
         },
         systemd_unit_candidate: group.systemd_unit_candidate.clone(),
         members,

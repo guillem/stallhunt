@@ -5,7 +5,10 @@ use serde::Serialize;
 use crate::analysis::{
     self, AnalysisResult, AssessmentKind, CgroupAssessmentKind, IoAssessmentKind,
 };
-use crate::cgroup::{CgroupCapability, CgroupObservation, cgroup_capability_explanation};
+use crate::cgroup::{
+    CgroupCapability, CgroupObservation, cgroup_capability_explanation,
+    cgroup_capability_from_observation,
+};
 use crate::cli::{CapabilitiesOptions, HelpTopic, HuntOptions, OutputFormat};
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
 use crate::io::{DiskstatsError, IoCapabilities, IoCapability, ProcessIoObservation};
@@ -157,7 +160,7 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
     if let Some(cgroup) = result.cgroup.as_ref() {
         let output = cgroup_hunt_text(cgroup);
         if !output.is_empty() {
-            outputs.push(((0, 0), 3, output));
+            outputs.push((cgroup_text_rank(cgroup), 3, output));
         }
     }
     outputs.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
@@ -166,6 +169,18 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
         .map(|(_, _, output)| output)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn cgroup_text_rank(cgroup: &CgroupHuntObservation) -> (u8, u8) {
+    let Ok(observation) = &cgroup.observation else {
+        return (0, 0);
+    };
+    analysis::analyze_cgroups(Some(observation))
+        .findings
+        .iter()
+        .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
+        .max()
+        .unwrap_or((0, 0))
 }
 
 fn cgroup_hunt_text(cgroup: &CgroupHuntObservation) -> String {
@@ -207,9 +222,60 @@ fn cgroup_hunt_text(cgroup: &CgroupHuntObservation) -> String {
                     .join(", ")
             ));
         }
+        output.push_str(&cgroup_controller_context(finding));
     }
     output.push_str("Scoped findings are not host-causality claims; overlapping ancestor and child scopes are not summed.\n");
     output
+}
+
+fn cgroup_controller_context(finding: &crate::analysis::CgroupFinding) -> String {
+    let evidence = &finding.evidence;
+    let mut lines = Vec::new();
+    if let Some(cpu) = &evidence.cpu.value {
+        let mut context = format!(
+            "CPU usage +{}",
+            human_duration_from_duration(Duration::from_micros(cpu.usage_usec.unwrap_or(0),))
+        );
+        if let Some(throttled) = cpu.throttled_usec {
+            context.push_str(&format!(
+                "; throttled +{}",
+                human_duration_from_duration(Duration::from_micros(throttled))
+            ));
+        }
+        lines.push(context);
+    }
+    if let Some(current) = evidence.memory_current_end.value {
+        let mut context = format!("memory.current {}", human_bytes(current));
+        if let Some(events) = &evidence.memory_events.value {
+            if let Some(oom_kill) = events.oom_kill {
+                context.push_str(&format!("; oom_kill +{oom_kill}"));
+            }
+            if let Some(high) = events.high {
+                context.push_str(&format!("; high events +{high}"));
+            }
+        }
+        lines.push(context);
+    }
+    if let Some(io) = &evidence.io.value {
+        let read = io.values().filter_map(|device| device.rbytes).sum::<u64>();
+        let write = io.values().filter_map(|device| device.wbytes).sum::<u64>();
+        if read != 0 || write != 0 {
+            lines.push(format!(
+                "I/O +{} read / +{} write across {} controller device(s)",
+                human_bytes(read),
+                human_bytes(write),
+                io.len()
+            ));
+        }
+    }
+    if lines.is_empty() {
+        "  controller context: unavailable or incomplete\n".to_owned()
+    } else {
+        format!(
+            "  controller context: {} (scoped context only; not causal proof)\n",
+            lines.join("; ")
+        )
+    }
 }
 
 fn cpu_hunt_text(
@@ -822,7 +888,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
     let memory = memory_json_parts(result.memory.as_ref());
     let io = io_json_parts(result.io.as_ref());
     let cgroup = cgroup_json_parts(result.cgroup.as_ref());
-    let status = if cpu.complete && memory.complete && io.complete {
+    let status = if cpu.complete && memory.complete && io.complete && cgroup.complete {
         "observed"
     } else {
         "incomplete"
@@ -900,6 +966,7 @@ struct CgroupJsonParts {
     state: &'static str,
     message: &'static str,
     analysis: crate::analysis::CgroupAnalysisResult,
+    complete: bool,
 }
 fn cgroup_json_parts(cgroup: Option<&CgroupHuntObservation>) -> CgroupJsonParts {
     match cgroup {
@@ -908,15 +975,20 @@ fn cgroup_json_parts(cgroup: Option<&CgroupHuntObservation>) -> CgroupJsonParts 
             state: "not_observed",
             message: "cgroup telemetry was not included in this injected observation.",
             analysis: Default::default(),
+            complete: true,
         },
         Some(CgroupHuntObservation {
             observation: Ok(value),
-        }) => CgroupJsonParts {
-            observation: Some(value.clone()),
-            state: "available",
-            message: "bounded cgroup v2 context was collected.",
-            analysis: analysis::analyze_cgroups(Some(value)),
-        },
+        }) => {
+            let capability = cgroup_capability_from_observation(value);
+            CgroupJsonParts {
+                observation: Some(value.clone()),
+                state: capability.as_str(),
+                message: cgroup_capability_explanation(capability),
+                analysis: analysis::analyze_cgroups(Some(value)),
+                complete: capability == CgroupCapability::Available,
+            }
+        }
         Some(CgroupHuntObservation {
             observation: Err(error),
         }) => {
@@ -930,6 +1002,7 @@ fn cgroup_json_parts(cgroup: Option<&CgroupHuntObservation>) -> CgroupJsonParts 
                 state: capability.as_str(),
                 message: cgroup_capability_explanation(capability),
                 analysis: Default::default(),
+                complete: false,
             }
         }
     }
@@ -1550,6 +1623,10 @@ fn decimal_duration(whole: u128, fractional: u128, unit: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cgroup::{
+        CgroupCollectionIssues, CgroupCpuInterval, CgroupFileState, CgroupInterval,
+        CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
+    };
     use crate::cpu::{
         CpuProcessObservation, HostCpuInterval, LoadAverageAvailability, LoadAverageRaw,
         ProcessCollectionIssues, ProcessCpuInterval, ProcessKey, ProcessSchedulerDelayInterval,
@@ -1777,6 +1854,87 @@ mod tests {
                 regressed: vec![],
             }),
         }
+    }
+
+    fn cgroup_resource<T>(value: Option<T>, state: CgroupFileState) -> CgroupResource<T> {
+        CgroupResource { state, value }
+    }
+
+    fn scoped_cgroup_observation(partial: bool) -> CgroupHuntObservation {
+        let elapsed = Duration::from_secs(10);
+        CgroupHuntObservation {
+            observation: Ok(CgroupObservation {
+                elapsed,
+                members: vec![],
+                issues: CgroupCollectionIssues {
+                    process_limit_reached: partial,
+                    ..CgroupCollectionIssues::default()
+                },
+                groups: vec![CgroupInterval {
+                    path: "/workload.service".into(),
+                    cpu: cgroup_resource(
+                        Some(CgroupCpuInterval {
+                            usage_usec: Some(2_000_000),
+                            user_usec: None,
+                            system_usec: None,
+                            nr_periods: None,
+                            nr_throttled: None,
+                            throttled_usec: Some(250_000),
+                        }),
+                        CgroupFileState::Available,
+                    ),
+                    memory_current_end: cgroup_resource(Some(4_096), CgroupFileState::Available),
+                    memory_events: cgroup_resource(None, CgroupFileState::Missing),
+                    io: cgroup_resource(None, CgroupFileState::Missing),
+                    cpu_pressure: cgroup_resource(
+                        Some(CgroupPsiInterval {
+                            elapsed: Some(elapsed),
+                            some_total_usec: Some(2_000_000),
+                            full_total_usec: None,
+                            state: CgroupPsiIntervalState::Available,
+                        }),
+                        CgroupFileState::Available,
+                    ),
+                    memory_pressure: cgroup_resource(None, CgroupFileState::Missing),
+                    io_pressure: cgroup_resource(None, CgroupFileState::Missing),
+                    systemd_unit_candidate: Some("workload.service".into()),
+                }],
+            }),
+        }
+    }
+
+    #[test]
+    fn cgroup_partiality_controls_json_status_and_scoped_text_uses_controller_context() {
+        let mut observation = hunt_observation();
+        observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+        observation.cgroup = Some(scoped_cgroup_observation(true));
+        let text = hunt(
+            &HuntOptions {
+                duration_ms: 1_000,
+                output: OutputFormat::Text,
+            },
+            |_| observation,
+        );
+        assert!(text.starts_with("Scoped cgroup findings"));
+        assert!(text.contains("controller context: CPU usage +2s; throttled +250ms"));
+        assert!(text.contains("scoped context only; not causal proof"));
+
+        let mut observation = hunt_observation();
+        observation.cgroup = Some(scoped_cgroup_observation(true));
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 1_000,
+                output: OutputFormat::Json,
+            },
+            |_| observation,
+        ))
+        .unwrap();
+        assert_eq!(json["capabilities"]["cgroup_v2"]["state"], "partial");
+        assert_eq!(json["status"], "incomplete");
+        assert_eq!(
+            json["cgroup_findings"][0]["evidence"]["cpu"]["value"]["usage_usec"],
+            2_000_000
+        );
     }
 
     #[test]

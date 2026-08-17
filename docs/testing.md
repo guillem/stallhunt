@@ -134,17 +134,22 @@ checkout-local temporary path, with direct/sync/fsync behavior and an
 eight-second coordinator bound. The test asserts a PSI-backed I/O-pressure
 finding while preserving the lack of victim, process-device, and causal claims.
 
-M4 must add deterministic cgroup-v2 fixture trees for mountinfo and `0::`
-membership parsing, normalized-path validation, ancestor selection, every
-collection budget, controller/missing-permission degradation, process movement
-and PID reuse across the stat-cgroup-stat check, scoped PSI interval rules, and
-path-derived systemd candidate labeling. Analyzer coverage must include positive,
-negative, boundary, missing-data, and contradictory host-versus-cgroup PSI
-cases. No test may encode cgroup membership or counter activity as causal proof.
+M4 has deterministic cgroup-v2 coverage for mountinfo and `0::` membership
+parsing, normalized-path validation, ancestor selection, controller/missing-file
+degradation, process movement and PID reuse across interval membership, scoped
+PSI rules, path-derived systemd candidates, capability completeness, endpoint
+budget-cost merging, controller rendering, and host-versus-cgroup scope
+separation. Limits, permission-denial issues, and partial snapshots must remain
+explicit regression cases. No test may encode cgroup membership or controller
+activity as causal proof.
 
 Any live cgroup test must be ignored by default, use only a uniquely owned
 delegated/readable subtree, enforce cleanup and timeouts, and skip rather than
 mutate an arbitrary host hierarchy when delegation is absent.
+
+`tests/cgroup_acceptance.rs` follows this policy: it is opt-in and requires a
+caller-provided `BOTTLENECK_CGROUP_ACCEPTANCE_PATH` already containing the test
+process. It observes that scope without mutating the hierarchy.
 
 Mark environment-dependent tests clearly.
 

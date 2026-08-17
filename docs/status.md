@@ -4,7 +4,7 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 4 — Cgroup/systemd awareness (implementation recovery and validation)**
+**Milestone 4 — Cgroup/systemd awareness (implemented; opt-in live validation)**
 
 Milestone 1 — the CPU contention vertical slice, including M1.6 validation and
 overhead measurement — and M3 block-I/O pressure are functionally complete.
@@ -14,16 +14,15 @@ victim attribution, process-device mapping, or causality. M2's first
 host-memory collector/analyzer/output slice is implemented, but safely
 controlled harmful-memory-pressure validation remains open.
 
-M4 code landed in the interrupted checkpoint commit `4318fdc`, despite several
-documents still saying it has not landed. It implements a cgroup-v2-only,
-membership-first collector, scoped PSI analysis, text/JSON output, and
-capability reporting. The implementation follows ADR-0006's main safety and
-causality boundaries, but M4 is not complete: required deterministic
-permission/budget/lifecycle/contradictory-scope coverage and controlled live
-validation are missing, partial snapshots are currently reported as
-`available` by live hunt JSON, controller deltas are retained in raw JSON but
-not explained in cgroup findings, and documentation outside this file remains
-stale.
+M4 implements the cgroup-v2-only, membership-first collector, scoped PSI
+analysis, controller context, text/JSON output, and capability reporting. One
+assessment now derives `available` versus `partial` from the normalized
+observation, its collection issues, and per-file states; it is used by
+`capabilities`, hunt JSON, and top-level hunt status. Endpoint collector cost
+and truncation are merged correctly, text ranks scoped findings by severity and
+confidence, and controller deltas explain—but never establish—scoped PSI
+findings. The live acceptance test is intentionally opt-in: it needs a
+caller-owned delegated cgroup and does not mutate the hierarchy.
 
 ## Verified milestone assessment
 
@@ -40,9 +39,10 @@ stale.
   block-I/O pressure and same-window activity candidates were validated by the
   recorded controlled run. Victim attribution, process-device mapping, and
   causality remain explicitly unsupported.
-- **M4 partial:** substantial collector/analyzer/CLI code exists and works after
-  the integration repairs described below, but validation and capability
-  correctness are incomplete.
+- **M4 implemented:** bounded cgroup-v2 collection, scoped analysis,
+  completeness semantics, controller context, and deterministic coverage are
+  complete. Live delegated-scope validation is available opt-in and cannot be
+  assumed on an arbitrary host.
 - **M5–M8 not started:** no user-facing record/replay, watch mode, eBPF probe, or
   evidence-chain implementation exists.
 
@@ -203,37 +203,15 @@ stale.
 - M3's controlled PSI/resource and same-window-candidate exit is validated,
   but it has not validated I/O victims, process-device mapping, or causality.
   High-visible-PID observer overhead also remains unvalidated.
-- M4 has no ignored live cgroup acceptance test and does not yet meet the
-  deterministic matrix required by `docs/testing.md`. In particular, the
-  checked-in mountinfo fixture is unused, and there is no complete fixture
-  coverage for in-collection stat-cgroup-stat identity changes, every
-  permission/controller/budget failure, or contradictory host-versus-cgroup PSI.
-- `hunt --json` currently marks any successfully normalized cgroup observation
-  as cgroup `available`, even when its issue counters show caps, permissions, or
-  missing controller files; the standalone `capabilities` probe can report the
-  same host as `partial`. Top-level hunt `status` also does not include cgroup
-  completeness. Raw issue data remains present, but the capability summary is
-  misleading.
-- Cgroup CPU/memory/I/O controller deltas are serialized in the observation,
-  but `CgroupEvidence` and concise text do not use them to explain a scoped PSI
-  finding. M4 therefore does not yet deliver the planned controller context at
-  the finding boundary.
+- The ignored cgroup acceptance test requires a caller-provided, uniquely owned
+  delegated subtree. It safely skips when that prerequisite is absent, so an
+  arbitrary host does not yet provide controlled per-cgroup pressure evidence.
 - The cgroup collector adds a second independent procfs PID walk rather than
   reusing the existing CPU or process-I/O selection. It is bounded, but its
   high-visible-PID overhead and total observation skew have not been measured.
-- Cgroup interval issue merging currently omits the end snapshot's
-  `budget_exhausted`, `read_attempts`, and `bytes_read` values, so JSON can
-  under-report M4 collector cost or truncation. Concise cgroup text is also
-  assigned a fixed lowest render rank instead of its actual severity/confidence.
 - JSON serialization now succeeds for cgroup I/O device maps, but the generic
   serializer fallback still suppresses the underlying error and emits only
   `{"status":"serialization_failed"}` if a future shape cannot serialize.
-- Multiple documents, including `README.md`, `docs/README.md`,
-  `docs/architecture.md`, `docs/data-model.md`, `docs/development.md`,
-  `docs/telemetry.md`, and `docs/codex-workflow.md`, still describe M4 as
-  unimplemented or next. `docs/testing.md` still reports the pre-M4 test count,
-  and `MANIFEST.txt` omits the M4 source and fixtures. These are known
-  repository-memory defects.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -243,18 +221,7 @@ stale.
 
 ## Current recommended next task
 
-Finish the existing M4 implementation before starting M5. The precise next
-implementation task is to make cgroup capability/completeness reporting derive
-from one shared observation assessment and use it consistently in
-`capabilities`, hunt JSON, and top-level hunt status. Correct interval issue
-merging and cgroup text ranking in the same completion slice. Add deterministic
-tests for process/group/read/byte caps, missing controllers, permission denial,
-and partial snapshots as part of that change. The following M4 completion step
-should expose already-collected controller deltas as qualified finding context
-and complete the lifecycle, contradictory host-versus-cgroup PSI, renderer, and
-safe live-validation matrix required by `docs/testing.md`.
-
-Do not begin M5 record/replay while M4 remains partial. Preserve the separate M2
+Do not begin M5 record/replay. The current recommended task is the separate M2
 debt: safely demonstrate harmful memory pressure with exact memory PSI `some`
 as the verdict and `full`, meminfo, and vmstat as non-additive context only.
 

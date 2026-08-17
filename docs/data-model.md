@@ -98,8 +98,8 @@ struct ThreadKey {
 
 ### Cgroup
 
-M4's intended key is a normalized cgroup-v2 path plus discovered mount identity.
-It is not implemented yet. Preserve scope separately from an optional
+M4's cgroup key is a normalized cgroup-v2 path plus discovered mount identity.
+Preserve scope separately from an optional
 path-derived systemd unit candidate; the latter is presentation metadata, not a
 stable identity or authoritative manager lookup.
 
@@ -245,10 +245,11 @@ end-snapshot gauge, and each counter delta may be absent after reset. The two
 candidate lists are correlation-only same-window context, not a process-to-device
 mapping, causal chain, or victim model.
 
-M4 is intended to add an additive `CgroupObservation` to pre-1.0 JSON: mount
-identity, stable process-to-cgroup memberships, bounded snapshots, per-scope
-PSI intervals, controller context, inferred unit candidates, and typed
-collection issues. Membership retains the process key proven by a
+M4 adds an additive `CgroupObservation` to pre-1.0 JSON: mount identity,
+stable process-to-cgroup memberships, bounded snapshots, per-scope PSI
+intervals, controller context, inferred unit candidates, and typed collection
+issues. Its capability state is derived from those issues and per-file states,
+not merely the presence of an observation. Membership retains the process key proven by a
 stat-cgroup-stat sequence. A cgroup PSI finding carries cgroup scope and must
 not be merged with or substituted for a host finding; no model edge implies a
 process-to-device or cross-cgroup causal relation.

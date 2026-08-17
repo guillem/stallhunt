@@ -225,20 +225,73 @@ impl CgroupCapability {
         }
     }
 }
+
+/// The capability summary is derived from collected cgroup data rather than
+/// merely from whether an outer snapshot/interval was constructed.  That
+/// keeps `capabilities` and `hunt` honest when budgets, permissions, or
+/// optional controller files make otherwise usable context incomplete.
+pub fn cgroup_capability_from_snapshot(snapshot: &CgroupSnapshot) -> CgroupCapability {
+    if snapshot.members.is_empty()
+        || snapshot.groups.is_empty()
+        || collection_is_partial(&snapshot.issues)
+        || snapshot
+            .groups
+            .values()
+            .any(|group| !all_group_resources_available(group))
+    {
+        CgroupCapability::Partial
+    } else {
+        CgroupCapability::Available
+    }
+}
+
+pub fn cgroup_capability_from_observation(observation: &CgroupObservation) -> CgroupCapability {
+    if observation.groups.is_empty()
+        || collection_is_partial(&observation.issues)
+        || observation.groups.iter().any(|group| {
+            ![
+                group.cpu.state,
+                group.memory_current_end.state,
+                group.memory_events.state,
+                group.io.state,
+                group.cpu_pressure.state,
+                group.memory_pressure.state,
+                group.io_pressure.state,
+            ]
+            .into_iter()
+            .all(|state| state == CgroupFileState::Available)
+        })
+    {
+        CgroupCapability::Partial
+    } else {
+        CgroupCapability::Available
+    }
+}
+
+fn collection_is_partial(issues: &CgroupCollectionIssues) -> bool {
+    issues.process_enumeration_failed
+        || issues.process_enumeration_errors != 0
+        || issues.process_disappeared != 0
+        || issues.process_identity_changed != 0
+        || issues.process_permission_denied != 0
+        || issues.process_malformed != 0
+        || issues.process_limit_reached
+        || issues.cgroup_limit_reached
+        || issues.path_rejected != 0
+        || issues.cgroup_disappeared != 0
+        || issues.cgroup_permission_denied != 0
+        || issues.cgroup_unreadable != 0
+        || issues.cgroup_malformed != 0
+        || issues.budget_exhausted
+        || issues.members_appeared != 0
+        || issues.members_exited != 0
+        || issues.members_reused != 0
+        || issues.members_moved != 0
+}
+
 pub fn probe_cgroup_v2() -> CgroupCapability {
     match read_cgroup_snapshot_at(Path::new("/proc")) {
-        Ok(snapshot)
-            if snapshot.members.is_empty()
-                || snapshot.groups.is_empty()
-                || snapshot.issues != CgroupCollectionIssues::default()
-                || snapshot
-                    .groups
-                    .values()
-                    .any(|group| !all_group_resources_available(group)) =>
-        {
-            CgroupCapability::Partial
-        }
-        Ok(_) => CgroupCapability::Available,
+        Ok(snapshot) => cgroup_capability_from_snapshot(&snapshot),
         Err(CgroupError::Unsupported) => CgroupCapability::Unsupported,
         Err(CgroupError::PermissionDenied) => CgroupCapability::PermissionDenied,
         Err(_) => CgroupCapability::Failed,
@@ -1176,6 +1229,9 @@ fn merge_issues(
         .cgroup_unreadable
         .saturating_add(end.cgroup_unreadable);
     start.cgroup_malformed = start.cgroup_malformed.saturating_add(end.cgroup_malformed);
+    start.budget_exhausted |= end.budget_exhausted;
+    start.read_attempts = start.read_attempts.saturating_add(end.read_attempts);
+    start.bytes_read = start.bytes_read.saturating_add(end.bytes_read);
     start
 }
 
@@ -1625,5 +1681,71 @@ mod tests {
                 .contains_key("/system.slice/example.service")
         );
         assert!(snapshot.groups.contains_key("/system.slice"));
+    }
+
+    #[test]
+    fn completeness_assessment_marks_limits_permissions_and_missing_resources_partial() {
+        let base = CgroupCollectionIssues::default();
+        assert!(!collection_is_partial(&base));
+
+        for mutate in [
+            |issues: &mut CgroupCollectionIssues| issues.process_limit_reached = true,
+            |issues: &mut CgroupCollectionIssues| issues.cgroup_limit_reached = true,
+            |issues: &mut CgroupCollectionIssues| issues.budget_exhausted = true,
+            |issues: &mut CgroupCollectionIssues| issues.process_permission_denied = 1,
+            |issues: &mut CgroupCollectionIssues| issues.cgroup_permission_denied = 1,
+            |issues: &mut CgroupCollectionIssues| issues.cgroup_unreadable = 1,
+            |issues: &mut CgroupCollectionIssues| issues.members_moved = 1,
+        ] {
+            let mut issues = CgroupCollectionIssues::default();
+            mutate(&mut issues);
+            assert!(collection_is_partial(&issues));
+        }
+
+        let snapshot = CgroupSnapshot {
+            mount: mount("/cg"),
+            members: BTreeMap::new(),
+            groups: BTreeMap::from([("/x".into(), raw("/x", None))]),
+            issues: CgroupCollectionIssues::default(),
+        };
+        assert_eq!(
+            cgroup_capability_from_snapshot(&snapshot),
+            CgroupCapability::Partial
+        );
+    }
+
+    #[test]
+    fn issue_merge_includes_both_endpoint_costs_and_budget_exhaustion() {
+        let start = CgroupCollectionIssues {
+            budget_exhausted: false,
+            read_attempts: 4,
+            bytes_read: 10,
+            ..CgroupCollectionIssues::default()
+        };
+        let end = CgroupCollectionIssues {
+            budget_exhausted: true,
+            read_attempts: 7,
+            bytes_read: 20,
+            ..CgroupCollectionIssues::default()
+        };
+        let merged = merge_issues(start, end);
+        assert!(merged.budget_exhausted);
+        assert_eq!(merged.read_attempts, 11);
+        assert_eq!(merged.bytes_read, 30);
+
+        let merged = merge_issues(
+            CgroupCollectionIssues {
+                read_attempts: u32::MAX,
+                bytes_read: u64::MAX,
+                ..CgroupCollectionIssues::default()
+            },
+            CgroupCollectionIssues {
+                read_attempts: 1,
+                bytes_read: 1,
+                ..CgroupCollectionIssues::default()
+            },
+        );
+        assert_eq!(merged.read_attempts, u32::MAX);
+        assert_eq!(merged.bytes_read, u64::MAX);
     }
 }

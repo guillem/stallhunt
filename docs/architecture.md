@@ -208,14 +208,17 @@ map processes to devices, or claim a causal path. Its controlled acceptance
 validates that bounded rootless competing I/O can produce the PSI-backed resource
 finding and candidates, not those unsupported attribution claims.
 
-M4 is designed but not implemented. ADR-0006 defines a cgroup-v2-only,
-membership-first collector: discover the actual cgroup2 mount from mountinfo,
-read the unified `0::` membership form, then map a bounded selected PID set by
-`stat` → cgroup → `stat` identity checks. It will collect only mapped cgroups
-and ancestors under explicit PID, group, depth, path, and file-byte budgets.
-Per-cgroup exact PSI will be an explicitly scoped verdict; controller counters
-will remain context. Path-derived systemd names will be optional inferred
-metadata, without D-Bus or a systemd runtime dependency.
+M4 implements ADR-0006's cgroup-v2-only, membership-first collector: it
+discovers the actual cgroup2 mount from mountinfo, reads the unified `0::`
+membership form, and maps a bounded selected PID set by `stat` → cgroup →
+`stat` identity checks. It collects only mapped cgroups and ancestors under
+explicit PID, group, depth, path, and file-byte budgets. Per-cgroup exact PSI
+is an explicitly scoped verdict; CPU, memory, and I/O controller deltas remain
+qualified context. One typed completeness assessment drives standalone
+capabilities, hunt JSON, and hunt completeness, so partial controller files,
+permissions, budgets, and lifecycle loss cannot be presented as complete.
+Path-derived systemd names are optional inferred metadata, without D-Bus or a
+systemd runtime dependency.
 
 ## Observation lifecycle
 

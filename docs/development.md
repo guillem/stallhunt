@@ -2,9 +2,9 @@
 
 ## Current state
 
-The repository contains completed Milestone 1 CPU and M3 block-I/O slices. M2's
-host-memory slice is implemented but still needs controlled harmful-pressure
-validation; M4 cgroup/service attribution is the next implementation milestone.
+The repository contains completed Milestone 1 CPU, M3 block-I/O, and M4 bounded
+cgroup/service slices. M2's host-memory slice is implemented but still needs
+controlled harmful-pressure validation.
 
 Build and run it from the repository root:
 

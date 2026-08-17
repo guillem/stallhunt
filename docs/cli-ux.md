@@ -114,6 +114,12 @@ process-to-device mapping are unavailable. JSON adds I/O observation, PSI/full
 state, diskstats/process-I/O context, candidates, capabilities, and qualifiers
 without changing prior resource objects.
 
+M4 adds a separate scoped-cgroup finding section. It reports exact cgroup PSI
+only for that cgroup scope and displays CPU, memory, and I/O controller deltas
+as qualified context. Cgroup capability is `partial` whenever the bounded
+snapshot or controller files are incomplete; this also makes the top-level hunt
+status `incomplete`, without discarding valid host findings.
+
 ## Human output structure
 
 Current `hunt` text output is concise and finding-first. It shows the CPU

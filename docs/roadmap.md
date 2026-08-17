@@ -172,9 +172,9 @@ overclaiming victim or causal mapping.
 
 ## Milestone 4 — Cgroup/systemd awareness
 
-Status: in progress (design accepted in ADR-0006; implementation and validation
-are not yet complete). M2's controlled harmful-memory-pressure validation
-remains an outstanding cross-cutting validation debt.
+Status: implementation complete; live validation is opt-in because it requires
+a caller-owned delegated cgroup. M2's controlled harmful-memory-pressure
+validation remains an outstanding cross-cutting validation debt.
 
 Goal:
 
