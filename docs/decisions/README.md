@@ -49,3 +49,4 @@ What credible options were rejected and why?
 - [`0005-git-as-project-memory.md`](0005-git-as-project-memory.md)
 - [`0006-cgroup-v2-scoped-attribution.md`](0006-cgroup-v2-scoped-attribution.md)
 - [`0007-recording-schema.md`](0007-recording-schema.md)
+- [`0008-watch-finding-lifecycle.md`](0008-watch-finding-lifecycle.md)

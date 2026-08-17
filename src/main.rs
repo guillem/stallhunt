@@ -9,6 +9,7 @@ mod observe;
 mod psi;
 mod record;
 mod render;
+mod watch;
 
 use std::env;
 use std::process::ExitCode;
@@ -65,6 +66,10 @@ fn execute(command: Command) -> Result<String, Box<dyn std::error::Error>> {
             redact_recording(&mut recording);
             write_recording(&options.output, &recording, options.force)?;
             Ok(render::redact_written(&options, &recording))
+        }
+        Command::Watch(options) => {
+            watch::run(&options)?;
+            Ok(String::new())
         }
         Command::Help(topic) => Ok(render::help(topic).to_owned()),
         Command::Version => Ok(render::version()),

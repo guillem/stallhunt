@@ -216,7 +216,9 @@ Create ADR before promising format compatibility.
 
 ## Milestone 6 — Continuous watch mode
 
-Status: not started. This is the next unimplemented product slice.
+Status: complete. Finding-lifecycle watch over contiguous rolling windows is
+implemented. It is not a TUI. ADR-0008 records the output and lifecycle
+contract. There is no graceful SIGINT drain and no multi-window recording.
 
 Goal:
 
@@ -231,7 +233,8 @@ Deliver:
 
 ## Milestone 7 — eBPF precision probes
 
-Do not start this milestone merely because eBPF is interesting.
+Status: not started. This is the next unimplemented product slice. Do not
+start it merely because eBPF is interesting.
 
 Add probes to resolve concrete uncertainty.
 

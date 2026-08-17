@@ -354,6 +354,25 @@ Pre-1.0 recordings have no compatibility promise. Unknown `kind` or
 `schema_version` values are rejected. A later ADR can define compatibility
 once the model is stable.
 
+## Watch window model
+
+M6 adds a compact rolling-window document distinct from hunt JSON and from
+recordings (ADR-0008). Each window stores:
+
+- window index and requested interval,
+- current host CPU/memory/I/O observation status,
+- bounded cgroup pressure identities,
+- lifecycle entries (`new`, `persistent`, `resolved`) with consecutive-window
+  counts and optional previous severity,
+- the last 16 compact history events.
+
+Finding identity is host CPU, host memory, host I/O, or a cgroup path plus
+resource. Healthy and insufficient observations do not create identities.
+Missing data leaves an active identity persistent and unconfirmed.
+
+Watch JSON `kind` is `bottleneck.watch_window`. It is not replayable as a
+recording and does not carry full evidence.
+
 ## Missing data
 
 Use `Option` only when "not present" is semantically sufficient.

@@ -17,6 +17,7 @@ fn root_help_exposes_the_initial_command_set() {
 
     assert!(output.status.success());
     assert!(stdout.contains("hunt"));
+    assert!(stdout.contains("watch"));
     assert!(stdout.contains("capabilities"));
     assert!(stdout.contains("record"));
     assert!(stdout.contains("replay"));
@@ -286,6 +287,39 @@ fn record_without_output_is_invalid_invocation() {
     let output = bottleneck(&["record"]);
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("option '--output' is required"));
+}
+
+#[test]
+fn watch_emits_one_lifecycle_window_and_json_stream_object() {
+    let text = bottleneck(&["watch", "--interval", "100ms", "--count", "1"]);
+    let stdout = String::from_utf8(text.stdout).expect("stdout should be UTF-8");
+    assert!(
+        text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    assert!(stdout.contains("WATCH  window 1/1  interval 100ms"));
+    assert!(stdout.contains("Lifecycle"));
+    assert!(stdout.contains("Current window"));
+    assert!(stdout.contains("NEW") || stdout.contains("no pressure findings this window"));
+
+    let json_out = bottleneck(&["watch", "--interval=100ms", "--count=1", "--json"]);
+    let json_stdout = String::from_utf8(json_out.stdout).expect("stdout should be UTF-8");
+    assert!(
+        json_out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&json_out.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_str(json_stdout.trim()).expect("watch JSON should parse");
+    assert_eq!(json["kind"], "bottleneck.watch_window");
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["window_index"], 1);
+    assert_eq!(json["window_count"], 1);
+    assert_eq!(json["interval_ms"], 100);
+    assert!(json["lifecycle"].is_array());
+    assert!(json["current"]["cpu"]["status"].is_string());
+    assert!(json["history"].is_array());
 }
 
 #[test]

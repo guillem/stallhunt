@@ -31,19 +31,19 @@ them.
 
 ## Starting from the current implementation
 
-Milestones 1, 2, 3, the bounded M4 cgroup slice, and M5 recording/replay are
-implemented. The current recommended Codex session is:
+Milestones 1–6 are implemented. The current recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Begin Milestone 6 continuous watch mode as the next unimplemented product
-slice. Keep it finding-lifecycle oriented rather than a generic TUI monitor.
-Do not introduce eBPF as a prerequisite.
+Do not start Milestone 7 merely because eBPF is interesting. Add a probe only
+to resolve a concrete diagnostic uncertainty that the current collectors cannot
+answer. If no such question is ready, the next product work is Milestone 8
+evidence chains, still without treating correlation as certainty.
 
-M5 recording/replay is available for offline re-analysis. Update
-docs/status.md and any affected design docs.
+M6 watch is available as a finding-lifecycle command. Update docs/status.md
+and any affected design docs.
 ```
 
 ## Session discipline

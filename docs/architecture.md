@@ -153,8 +153,9 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 ## Current implementation layout
 
-Milestones 1–5 combine bounded CPU/process, memory-context, I/O-context, PSI,
-cgroup, and recording/replay paths with typed inference/output boundaries:
+Milestones 1–6 combine bounded CPU/process, memory-context, I/O-context, PSI,
+cgroup, recording/replay, and rolling watch paths with typed inference/output
+boundaries:
 
 ```text
 src/
@@ -168,6 +169,7 @@ src/
   psi.rs        # CPU, memory, and I/O PSI parsing, capabilities, and intervals
   record.rs     # versioned normalized-observation recordings and redaction
   render.rs     # concise finding-first text and full-evidence JSON rendering
+  watch.rs      # rolling finding lifecycle tracker and watch renderer
 tests/
   cli.rs                # executable-level behavior tests
   cpu_acceptance.rs     # ignored bounded rootless live-pressure acceptance test
@@ -225,6 +227,14 @@ serializes normalized interval observations with explicit microsecond
 durations, typed observed/unavailable resource slots, and optional identifier
 redaction. `replay` reconstructs `HuntObservation` and reuses the existing
 analyzer and renderers. Unknown `kind` or `schema_version` values are rejected.
+
+M6 adds `watch` (ADR-0008). `observe.rs` exposes start/end endpoints so the
+next window can reuse the previous end snapshot. `watch.rs` classifies host
+CPU/memory/I/O and a bounded set of cgroup pressure findings as new,
+persistent, or resolved. It keeps 16 compact history windows and does not
+retain full observations. TTY text refreshes by clearing the screen; JSON is
+one compact `bottleneck.watch_window` object per window, not a recording and
+not hunt JSON.
 
 ## Observation lifecycle
 

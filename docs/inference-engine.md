@@ -350,6 +350,10 @@ Later features may compare against:
 - saved recordings,
 - rolling local baseline.
 
+M6 watch compares consecutive windows only to classify finding lifecycle. It
+does not introduce a historical baseline, and a resolved finding is not proof
+that the machine is healthy beyond the current window.
+
 Core findings should remain grounded in absolute contention/stall evidence where possible.
 
 ## Rule implementation style

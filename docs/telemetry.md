@@ -79,7 +79,9 @@ qualifiers. `full` is a subset of `some` and is never added to it.
 The same bounded hunt performs one requested sleep between start and end reads.
 Memory PSI, CPU PSI, CPU/process, and memory context are collected
 sequentially, so each pair has an independent measured interval rather than an
-atomic shared snapshot.
+atomic shared snapshot. M6 `watch` reuses the previous end endpoint as the next
+window start so rolling PSI totals stay contiguous and collection is not
+doubled.
 
 ## `/proc/stat`
 

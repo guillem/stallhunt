@@ -2,6 +2,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 pub const DEFAULT_HUNT_DURATION_MS: u64 = 10_000;
+pub const DEFAULT_WATCH_INTERVAL_MS: u64 = 2_000;
 pub const MIN_HUNT_DURATION_MS: u64 = 100;
 pub const MAX_HUNT_DURATION_MS: u64 = 300_000;
 
@@ -30,6 +31,7 @@ pub enum HelpTopic {
     Record,
     Replay,
     Redact,
+    Watch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +55,13 @@ pub struct RedactOptions {
     pub force: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WatchOptions {
+    pub interval_ms: u64,
+    pub count: Option<u32>,
+    pub output: OutputFormat,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Hunt(HuntOptions),
@@ -60,6 +69,7 @@ pub enum Command {
     Record(RecordOptions),
     Replay(ReplayOptions),
     Redact(RedactOptions),
+    Watch(WatchOptions),
     Help(HelpTopic),
     Version,
 }
@@ -104,6 +114,7 @@ where
         "record" => parse_record(arguments),
         "replay" => parse_replay(arguments),
         "redact" => parse_redact(arguments),
+        "watch" => parse_watch(arguments),
         _ if command.starts_with('-') => Err(CliError::new(format!("unknown option '{command}'"))),
         _ => Err(CliError::new(format!("unknown command '{command}'"))),
     }
@@ -120,6 +131,7 @@ where
         Some("record") => HelpTopic::Record,
         Some("replay") => HelpTopic::Replay,
         Some("redact") => HelpTopic::Redact,
+        Some("watch") => HelpTopic::Watch,
         Some(other) => return Err(CliError::new(format!("unknown help topic '{other}'"))),
     };
 
@@ -381,6 +393,80 @@ where
     }))
 }
 
+fn parse_watch<I>(arguments: I) -> Result<Command, CliError>
+where
+    I: Iterator<Item = String>,
+{
+    let mut interval_ms = DEFAULT_WATCH_INTERVAL_MS;
+    let mut interval_seen = false;
+    let mut count = None;
+    let mut output = OutputFormat::Text;
+
+    let mut arguments = arguments.peekable();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "-h" | "--help" => {
+                return reject_trailing_arguments(arguments, Command::Help(HelpTopic::Watch));
+            }
+            "--json" => set_json_output(&mut output)?,
+            "--interval" => {
+                if interval_seen {
+                    return Err(CliError::new("option '--interval' may only be used once"));
+                }
+                let value = arguments
+                    .next()
+                    .ok_or_else(|| CliError::new("option '--interval' requires a value"))?;
+                interval_ms = parse_duration(&value)?;
+                interval_seen = true;
+            }
+            "--count" => {
+                if count.is_some() {
+                    return Err(CliError::new("option '--count' may only be used once"));
+                }
+                let value = arguments
+                    .next()
+                    .ok_or_else(|| CliError::new("option '--count' requires a value"))?;
+                count = Some(parse_count(&value)?);
+            }
+            _ if argument.starts_with("--interval=") => {
+                if interval_seen {
+                    return Err(CliError::new("option '--interval' may only be used once"));
+                }
+                let (_, value) = argument
+                    .split_once('=')
+                    .expect("prefix check guarantees an equals sign");
+                interval_ms = parse_duration(value)?;
+                interval_seen = true;
+            }
+            _ if argument.starts_with("--count=") => {
+                if count.is_some() {
+                    return Err(CliError::new("option '--count' may only be used once"));
+                }
+                let (_, value) = argument
+                    .split_once('=')
+                    .expect("prefix check guarantees an equals sign");
+                count = Some(parse_count(value)?);
+            }
+            _ if argument.starts_with('-') => {
+                return Err(CliError::new(format!(
+                    "unknown option '{argument}' for 'watch'"
+                )));
+            }
+            _ => {
+                return Err(CliError::new(format!(
+                    "unexpected argument '{argument}' for 'watch'"
+                )));
+            }
+        }
+    }
+
+    Ok(Command::Watch(WatchOptions {
+        interval_ms,
+        count,
+        output,
+    }))
+}
+
 fn set_flag(flag: &mut bool, name: &str) -> Result<(), CliError> {
     if *flag {
         return Err(CliError::new(format!(
@@ -471,6 +557,26 @@ fn parse_decimal_milliseconds(number: &str, unit_ms: u64) -> Option<u64> {
 fn invalid_duration(value: &str) -> CliError {
     CliError::new(format!(
         "invalid duration '{value}'; use a value such as 500ms, 2s, 1.5s, or 1m"
+    ))
+}
+
+fn parse_count(value: &str) -> Result<u32, CliError> {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
+        return Err(invalid_count(value));
+    }
+    let count = value.parse::<u32>().map_err(|_| invalid_count(value))?;
+    if count == 0 {
+        return Err(CliError::new("option '--count' must be a positive integer"));
+    }
+    Ok(count)
+}
+
+fn invalid_count(value: &str) -> CliError {
+    CliError::new(format!(
+        "invalid count '{value}'; use a positive integer such as 1 or 30"
     ))
 }
 
@@ -567,9 +673,31 @@ mod tests {
 
     #[test]
     fn unknown_commands_and_options_are_errors() {
-        assert!(parse(["watch"]).is_err());
+        assert!(parse(["explain"]).is_err());
         assert!(parse(["hunt", "--verbose"]).is_err());
         assert!(parse(["capabilities", "extra"]).is_err());
+    }
+
+    #[test]
+    fn watch_uses_documented_defaults_and_bounds() {
+        assert_eq!(
+            parse(["watch"]),
+            Ok(Command::Watch(WatchOptions {
+                interval_ms: DEFAULT_WATCH_INTERVAL_MS,
+                count: None,
+                output: OutputFormat::Text,
+            }))
+        );
+        assert_eq!(
+            parse(["watch", "--json", "--interval", "1s", "--count=3"]),
+            Ok(Command::Watch(WatchOptions {
+                interval_ms: 1_000,
+                count: Some(3),
+                output: OutputFormat::Json,
+            }))
+        );
+        assert!(parse(["watch", "--count", "0"]).is_err());
+        assert!(parse(["watch", "--interval", "1s", "--interval=2s"]).is_err());
     }
 
     #[test]

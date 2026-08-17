@@ -55,7 +55,7 @@ Show available telemetry and permission limitations.
 
 Standard version information.
 
-Delay `watch`, `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
+Delay `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
 
 Implemented in Milestone 5:
 
@@ -82,6 +82,18 @@ Replace identifiers in an existing recording for sharing.
 ```bash
 bottleneck redact incident.json --output incident.redacted.json [--force]
 ```
+
+Implemented in Milestone 6:
+
+### `watch`
+
+Follow rolling bottlenecks by finding lifecycle.
+
+```bash
+bottleneck watch [--interval 2s] [--count N] [--json]
+```
+
+This is not a TUI and not a generic resource monitor.
 
 ## Current CPU diagnosis behavior
 
@@ -152,6 +164,16 @@ version 1. Replay uses the same text/JSON renderers as `hunt`, with the
 recorded requested duration. Invalid recordings exit 1. Missing `--output` or
 an invalid invocation still exits 2. New recording files are created mode
 0600 and are not overwritten unless `--force` is passed.
+
+M6 adds `watch`. `--interval` uses the same 100 ms–5 m duration parser as
+`hunt` and defaults to 2 seconds. `--count` stops after N windows; without it,
+watch runs until interrupted. Each window reuses the previous endpoint
+snapshot. Text reports `new` / `persistent` / `resolved` pressure findings plus
+a compact current-window summary. A TTY refreshes the screen with ANSI
+clear/home; piped text and `--json` append. JSON is one compact
+`bottleneck.watch_window` object per window. It is not hunt JSON and not a
+recording, and it omits full evidence. Use `hunt --json` or `record` when that
+payload is required. Invalid `--count` still exits 2.
 
 ## Human output structure
 
@@ -238,7 +260,8 @@ Do not overdesign terminal visuals before core output stabilizes.
 Current bootstrap policy:
 
 - `0`: the requested command completed, including an explicitly unavailable
-  bootstrap `hunt` and a successful `record`/`replay`/`redact`,
+  bootstrap `hunt`, a successful `record`/`replay`/`redact`, and a completed
+  `watch --count` run,
 - `1`: a parsed command failed at runtime, such as a missing recording file,
   an unreadable or unsupported recording, or a refused overwrite,
 - `2`: invalid command-line invocation.
@@ -371,7 +394,8 @@ Accept ergonomic durations such as:
 
 The current parser accepts integral or decimal durations that resolve exactly
 to milliseconds. Supported units are `ms`, `s`, and `m`; the inclusive range is
-100 ms through 5 minutes; the default is 10 seconds.
+100 ms through 5 minutes. `hunt` and `record` default to 10 seconds; `watch`
+`--interval` defaults to 2 seconds.
 
 These are initial bounded-hunt safety limits, not validated inference
 thresholds. Future analyzers must qualify windows that are too short for strong
@@ -381,8 +405,9 @@ Warn or reduce confidence for observation windows too short to support robust in
 
 ## TUI
 
-A TUI is explicitly not an early priority.
+A TUI is explicitly not an early priority. M6 `watch` refreshes finding
+lifecycle on a TTY without introducing a TUI framework.
 
 The differentiator is diagnosis.
 
-If added later, it should display changing findings rather than simply reproduce `htop`.
+If a TUI is added later, it should display changing findings rather than simply reproduce `htop`.

@@ -195,7 +195,8 @@ This should be the primary early workflow.
 
 Continuous rolling diagnosis.
 
-Later milestone.
+M6 implements finding-lifecycle watch over contiguous rolling windows. It is
+not a TUI. See ADR-0008.
 
 ### `explain`
 

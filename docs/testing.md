@@ -158,9 +158,15 @@ of unknown schema versions, and rejection of hunt JSON. Executable CLI tests
 cover `record`/`replay`/`redact` on a live 100 ms observation, 0600 file mode,
 overwrite refusal, and invalid invocations.
 
+M6 watch tests cover finding lifecycle (new, persistent, resolved, severity
+change, unconfirmed missing data), independent host/cgroup identities, bounded
+history, cgroup tracking caps, and a checked-in lifecycle text fixture plus
+structural JSON assertions. Executable CLI tests cover `watch --count 1` text
+and JSON on a 100 ms window. Live watch does not assert host contention.
+
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 127 unit tests and nine CLI
+The current normal deterministic gate contains 135 unit tests and ten CLI
 tests. Five host-workload acceptance tests are ignored by default and run only
 when intentionally requested.
 
@@ -267,6 +273,7 @@ tests/
       busy_but_not_pressured.json
     render/
       cpu-contention.txt
+      watch-lifecycle.txt
     proc-loadavg-valid
     proc-pid-stat-unusual-name
     proc-pressure-cpu-valid

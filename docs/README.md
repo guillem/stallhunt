@@ -2,8 +2,8 @@
 
 This directory is the durable design and project-memory layer.
 
-Milestones 1–5 are functionally complete. M4 cgroup/service attribution is
-implemented with opt-in live validation. `status.md` is the
+Milestones 1–6 are functionally complete. Milestone 6 adds `watch` as a
+finding-lifecycle command over rolling windows. `status.md` is the
 authoritative current-state record, while
 `experiments.md` retains the controlled validation and overhead evidence.
 
@@ -45,6 +45,7 @@ Accepted initial decisions:
 - ADR-0005: Git repository as project memory
 - ADR-0006: bounded cgroup-v2 scoped attribution
 - ADR-0007: versioned normalized-observation recordings without a compatibility promise
+- ADR-0008: watch tracks finding lifecycle rather than providing a TUI monitor
 
 ## Documentation rules
 

@@ -86,8 +86,6 @@ Later releases may add:
 - syscall/blocking attribution,
 - network queue/socket diagnosis,
 - dependency/wait graphs,
-- continuous watch mode,
-- recording and replay,
 - richer cgroup/container analysis.
 
 ## Repository map
@@ -107,7 +105,8 @@ Later releases may add:
 │   ├── observe.rs
 │   ├── psi.rs
 │   ├── record.rs
-│   └── render.rs
+│   ├── render.rs
+│   └── watch.rs
 ├── tests/
 │   ├── cli.rs
 │   └── fixtures/
@@ -137,11 +136,11 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Milestones 1–5 are functionally complete. Milestone 2's host-memory slice is
+Milestones 1–6 are functionally complete. Milestone 2's host-memory slice is
 implemented and has a recorded delegated-cgroup harmful-pressure acceptance.
-The repository contains a Rust binary with real `hunt`, `record`, `replay`,
-`redact`, `capabilities`, help, version, duration parsing, and text/JSON output
-boundaries.
+The repository contains a Rust binary with real `hunt`, `watch`, `record`,
+`replay`, `redact`, `capabilities`, help, version, duration parsing, and
+text/JSON output boundaries.
 
 `hunt` reads CPU PSI, `/proc/stat`, `/proc/loadavg`, bounded process, and
 bounded task scheduler-accounting snapshots before and after the requested
@@ -161,6 +160,7 @@ cargo run -- hunt --duration 1s
 cargo run -- capabilities
 cargo run -- record --duration 1s --output /tmp/incident.json
 cargo run -- replay /tmp/incident.json
+cargo run -- watch --interval 1s --count 2
 ```
 
 CPU inference remains conservative: only exact-interval CPU PSI `some`
@@ -212,3 +212,10 @@ re-run current inference. They are not hunt JSON and have no pre-1.0
 compatibility promise. New files are created mode 0600. `--redact` replaces
 process names, disk names, and cgroup path components while keeping counters
 and process keys.
+
+M6 adds `watch`. Rolling windows reuse the previous endpoint snapshot. The
+command tracks host CPU/memory/I/O and a bounded set of cgroup pressure
+findings as new, persistent, or resolved. TTY text refreshes the screen; JSON
+emits one compact `bottleneck.watch_window` object per window. Watch is not a
+TUI and is not a recording. Full evidence remains on `hunt --json` and
+`record`.

@@ -4,15 +4,17 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 6 — continuous watch mode (not started)**
+**Milestone 7 — eBPF precision probes (not started)**
 
-Milestones 1–5 are functionally complete. M5 recording and replay is
-implemented: `record` stores a versioned normalized observation, `replay`
-re-runs the current analyzer, and `redact` replaces identifiers for sharing.
-ADR-0007 defines the schema and explicitly withholds a pre-1.0 compatibility
-promise. M4 remains implemented with opt-in live observational validation; that
-test still requires a caller-owned delegated subtree that already contains the
-test process and does not mutate the hierarchy.
+Milestones 1–6 are functionally complete. M6 `watch` tracks rolling finding
+lifecycle over contiguous windows that reuse the previous endpoint snapshot.
+ADR-0008 defines the command as a lifecycle view, not a TUI, and keeps watch
+JSON distinct from hunt JSON and recordings. Do not start M7 merely because
+eBPF is interesting; add a probe only for a concrete diagnostic gap. M5
+recording and replay remain available for offline re-analysis. M4 remains
+implemented with opt-in live observational validation; that test still requires
+a caller-owned delegated subtree that already contains the test process and
+does not mutate the hierarchy.
 
 ## Verified milestone assessment
 
@@ -38,16 +40,20 @@ test process and does not mutate the hierarchy.
 - **M5 complete within its exit condition:** versioned normalized-observation
   recordings, `record`/`replay`/`redact`, identifier redaction, 0600 file
   creation, and deterministic re-analysis are implemented. Pre-1.0 recordings
-  have no compatibility promise (ADR-0007). There is still no watch mode or
-  multi-window recording.
-- **M6–M8 not started:** no user-facing watch mode, eBPF probe, or
-  evidence-chain implementation exists.
+  have no compatibility promise (ADR-0007). There is still no multi-window
+  recording.
+- **M6 complete within its exit condition:** `watch` classifies host and
+  bounded cgroup pressure findings as new, persistent, or resolved across
+  contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
+  keeps 16 history windows. It is not a TUI and does not store full evidence.
+  SIGINT uses default termination; `--count` bounds scripted runs.
+- **M7–M8 not started:** no eBPF probe or evidence-chain implementation exists.
 
 ## Implemented
 
 - A single stable-Rust package builds the `bottleneck` binary.
 - The package forbids unsafe Rust.
-- Real `hunt`, `capabilities`, help, and version command structure exists.
+- Real `hunt`, `watch`, `capabilities`, help, and version command structure exists.
 - `hunt` accepts `--duration` values from 100 ms through 5 minutes, including
   exact-millisecond decimal values, and defaults to 10 seconds.
 - `hunt` and `capabilities` support separate text and JSON render paths.
@@ -185,6 +191,14 @@ test process and does not mutate the hierarchy.
   keeping counters, process keys, and path hierarchy. Hunt JSON is not a
   recording. Unknown kind or schema versions are rejected. Decode is bounded at
   32 MiB. Existing paths are not overwritten unless `--force` is passed.
+- M6 `watch` reuses hunt collectors on contiguous rolling windows. `--interval`
+  defaults to 2 s and uses the hunt duration range; `--count` stops after N
+  windows. Host CPU, memory, and I/O pressure plus at most 16 cgroup pressure
+  identities are classified as new, persistent, or resolved. Healthy results do
+  not create findings; missing or short-window data does not resolve an active
+  finding. History is capped at 16 compact windows. TTY text clears the screen;
+  JSON emits one `bottleneck.watch_window` object per window. Watch JSON is not
+  hunt JSON and not a recording.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -230,6 +244,11 @@ test process and does not mutate the hierarchy.
   microseconds, which can differ slightly from a live nanosecond `Instant`
   interval. Recordings do not include extra host identity such as hostname or
   kernel version.
+- Watch JSON omits victims, suspects, and raw evidence. A disappeared cgroup
+  finding stays unconfirmed until that scope is observed without ranked
+  pressure. Unlimited `watch` without `--count` samples until interrupted and
+  does not drain the current window on SIGINT. Consecutive 100 ms windows remain
+  smoke observations, same as hunt.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -239,10 +258,13 @@ test process and does not mutate the hierarchy.
 
 ## Current recommended next task
 
-Begin Milestone 6 continuous watch mode. Keep it finding-lifecycle oriented
-rather than a generic TUI monitor. Do not introduce eBPF as a prerequisite.
+Do not start Milestone 7 unless a concrete diagnostic question cannot be
+answered with the current `/proc`, PSI, and cgroup collectors. If that bar is
+not met, begin Milestone 8 evidence chains conservatively: relate findings only
+when independent evidence supports a path, and keep uncertainty explicit.
 
-M5 recording/replay is available for offline re-analysis and support bundles.
+M6 watch is available for rolling lifecycle; M5 recording/replay remains the
+offline evidence path.
 
 ## Current design risks
 
@@ -329,17 +351,23 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, M5 recording/replay was validated with deterministic round-trip
-and redaction tests plus a live 100 ms `record` → `replay --json` → `redact`
-CLI path. Recordings reject hunt JSON and unknown schema versions. Default-gate
-coverage is 127 unit tests, nine CLI tests, and five ignored host-workload
-tests. Formatting and locked-offline Clippy passed:
+On 2026-08-17, M6 watch was validated with deterministic lifecycle tests
+(new/persistent/resolved, unconfirmed missing data, cgroup cap/history bounds,
+golden text, structural JSON) plus a live `watch --interval 100ms --count 1`
+text and JSON CLI path. Formatting and locked-offline Clippy passed:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --offline --workspace --all-features
 ```
+
+Default-gate coverage is 135 unit tests, ten CLI tests, and five ignored
+host-workload tests.
+
+Earlier the same day, M5 recording/replay was validated with deterministic
+round-trip and redaction tests plus a live 100 ms `record` → `replay --json` →
+`redact` CLI path. Recordings reject hunt JSON and unknown schema versions.
 
 Earlier the same day, `tests/memory_acceptance.rs` ran twice on Linux 7.1.5 with
 `BOTTLENECK_MEMORY_ACCEPTANCE_PATH` set to the user-delegated `app.slice`.

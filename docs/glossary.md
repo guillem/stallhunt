@@ -112,3 +112,9 @@ Example:
 A versioned JSON document of normalized interval observations captured by
 `record`. Replay re-runs current inference against that observation. Hunt JSON
 is a diagnostic report, not a recording.
+
+## Watch window
+
+A rolling observation interval produced by `watch`. Consecutive windows reuse
+the previous endpoint snapshot. Watch reports finding lifecycle rather than a
+resource dashboard.

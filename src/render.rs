@@ -26,7 +26,7 @@ use crate::psi::{
     MemoryPsiCapability, MemoryPsiFullInterval, MemoryPsiObservation,
 };
 
-const ROOT_HELP: &str = "Linux performance triage that reports evidence-backed bottlenecks.\n\nUSAGE:\n    bottleneck <COMMAND>\n\nCOMMANDS:\n    hunt          Run a bounded diagnosis\n    capabilities  Report available telemetry\n    record        Capture a normalized observation for later replay\n    replay        Re-analyze a recording without collecting live telemetry\n    redact        Replace identifiers in a recording for sharing\n    version       Print version information\n    help          Print this help or help for a command\n\nOPTIONS:\n    -h, --help     Print help\n    -V, --version  Print version information\n";
+const ROOT_HELP: &str = "Linux performance triage that reports evidence-backed bottlenecks.\n\nUSAGE:\n    bottleneck <COMMAND>\n\nCOMMANDS:\n    hunt          Run a bounded diagnosis\n    watch         Track rolling finding lifecycle\n    capabilities  Report available telemetry\n    record        Capture a normalized observation for later replay\n    replay        Re-analyze a recording without collecting live telemetry\n    redact        Replace identifiers in a recording for sharing\n    version       Print version information\n    help          Print this help or help for a command\n\nOPTIONS:\n    -h, --help     Print help\n    -V, --version  Print version information\n";
 
 const HUNT_HELP: &str = "Run a bounded bottleneck diagnosis.\n\nUSAGE:\n    bottleneck hunt [OPTIONS]\n\nOPTIONS:\n    --duration <DURATION>  Observation duration from 100ms to 5m [default: 10s]\n    --json                 Emit machine-readable JSON\n    -h, --help             Print help\n\nDURATION EXAMPLES:\n    500ms  2s  1.5s  1m\n";
 
@@ -38,6 +38,8 @@ const REPLAY_HELP: &str = "Re-analyze a recording with the current inference eng
 
 const REDACT_HELP: &str = "Replace identifiers in an existing recording.\n\nUSAGE:\n    bottleneck redact --output <PATH> [OPTIONS] <PATH>\n\nOPTIONS:\n    --output <PATH>  Redacted recording to create\n    --force          Overwrite the output path if it already exists\n    -h, --help       Print help\n\nCounters, process keys, and path hierarchy are kept. Names and cgroup path\ncomponents are replaced. This is not cryptographic anonymization.\n";
 
+const WATCH_HELP: &str = "Track rolling bottlenecks by finding lifecycle, not a live dashboard.\n\nUSAGE:\n    bottleneck watch [OPTIONS]\n\nOPTIONS:\n    --interval <DURATION>  Rolling window from 100ms to 5m [default: 2s]\n    --count <N>            Stop after N windows; omit to run until interrupted\n    --json                 Emit one compact JSON object per window\n    -h, --help             Print help\n\nEach window reuses the previous endpoint snapshot so intervals stay contiguous.\nLifecycle states are new, persistent, and resolved. Healthy results do not create\nfindings; missing or short-window data does not resolve an active finding.\nTTY text replaces the screen; piped text and JSON append. This is not a TUI.\n";
+
 pub fn help(topic: HelpTopic) -> &'static str {
     match topic {
         HelpTopic::Root => ROOT_HELP,
@@ -46,6 +48,7 @@ pub fn help(topic: HelpTopic) -> &'static str {
         HelpTopic::Record => RECORD_HELP,
         HelpTopic::Replay => REPLAY_HELP,
         HelpTopic::Redact => REDACT_HELP,
+        HelpTopic::Watch => WATCH_HELP,
     }
 }
 
