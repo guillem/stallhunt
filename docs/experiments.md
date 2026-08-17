@@ -157,4 +157,7 @@ Record:
 
 ## Current experimental conclusions
 
-None yet. The project has no implementation.
+No controlled M1.6 experiment has produced a durable conclusion yet. M1.5 CPU
+collection and conservative inference are implemented, but its provisional
+thresholds and collector-overhead limits still require the controlled
+experiments described above.

@@ -6,8 +6,7 @@ Last updated: 2026-08-17
 
 **Milestone 1 — CPU contention vertical slice**
 
-Milestones 1.1 through 1.4 are complete. M1.4 adds bounded scheduler-delay
-evidence; Milestone 1.5 (CPU inference) is next.
+Milestones 1.1 through 1.5 are complete. M1.5 adds conservative CPU inference.
 
 ## Implemented
 
@@ -26,10 +25,12 @@ evidence; Milestone 1.5 (CPU inference) is next.
   elapsed microseconds. Counter regression, an unmeasurable interval, and a
   delta exceeding elapsed time are rejected rather than clamped.
 - `capabilities` probes CPU PSI and distinguishes available, unsupported,
-  permission-denied, and failed states. `hunt` reports incomplete observations
-  explicitly without producing findings.
-- Text and JSON output include typed CPU PSI interval evidence and rolling
-  averages while explicitly limiting the result to raw evidence.
+  permission-denied, and failed states. A valid CPU PSI interval still produces
+  a CPU resource verdict if host/process context is incomplete; attribution is
+  omitted and qualified. Invalid or unavailable CPU PSI produces no assessment.
+- Text and JSON output include typed CPU PSI interval evidence, rolling
+  averages, and evidence-backed CPU findings or an explicit insufficient-data
+  result.
 - `hunt` also collects `/proc/stat`, `/proc/loadavg`, and bounded two-snapshot
   `/proc/<pid>/stat` process data over the same observation window. It reports
   host CPU counter deltas, logical CPU count, load context, and CPU deltas for
@@ -59,43 +60,52 @@ evidence; Milestone 1.5 (CPU inference) is next.
   endpoint after the existing PID cap. Direct task schedstat reads determine
   availability; task churn, TID reuse, permissions, malformed data, and caps are
   explicit JSON context. Candidate delay is raw summed-thread evidence.
+- M1.5 analyzes normalized CPU evidence without reading procfs: exact-interval
+  CPU PSI alone establishes the resource verdict. The effective diagnostic and
+  resource-confidence window is the shorter of requested and measured PSI
+  duration; a requested duration below one second remains smoke mode. Otherwise
+  the effective window must be at least one second. Provisional `<1%`,
+  `1/5/15/30%` boundaries produce an explicit no-meaningful-contention finding
+  or low, moderate, high, and severe contention. Stable scheduler-delay
+  candidates and same-window CPU consumers are separately ranked, qualified
+  victims and suspects; neither role proves causality.
 - Invalid CLI invocations write to stderr and exit with status 2.
 - Unit tests cover command parsing, PSI parsing/fixtures, boundary and invalid
-  interval normalization, and renderer semantics.
+  interval normalization, pure CPU analyzer positive/negative/boundary,
+  missing-data, and contradictory-evidence cases, plus renderer semantics.
+- Normalized JSON fixtures cover healthy, saturated, busy-but-not-pressured,
+  and scheduler-accounting-unavailable CPU analysis inputs.
 - Executable integration tests cover real host CPU PSI hunt/capability behavior
   and invalid invocation.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
 
-- CPU PSI remains host-wide evidence only. There is no CPU severity/confidence
-  inference, no healthy/no-contention conclusion, and no victim or suspect
-  attribution. Process CPU consumption is concurrent context, not causal
-  evidence.
+- CPU PSI is host-wide evidence. M1.5 provides provisional severity and
+  qualified attribution, but process consumers remain same-window correlation,
+  not proven causes.
 - A hunt can be incomplete if CPU PSI becomes unreadable or invalid between
   snapshots; this is reported as an explicit capability/observation limit.
 - The JSON shape is bootstrap scaffolding and has no pre-1.0 compatibility
   promise beyond its explicit `schema_version` field.
-- Scheduler delay is raw evidence only; there is no severity/confidence
-  inference, healthy result, victim conclusion, suspect ranking, or causality.
-  Tasks whose entire lifetime falls between snapshots are not observable. No
-  general telemetry framework, inference engine, or real finding exists yet.
+- Scheduler-delay candidates are observed stable-task evidence, not proof of
+  user-visible harm. Tasks whose entire lifetime falls between snapshots are
+  not observable.
 - Scheduler identity validation can require three procfs file reads for each of
   up to 16,384 selected tasks per endpoint. The collector is bounded, but its
   observer overhead still needs measurement in M1.6.
 - No CI workflow or packaging configuration exists; validation is local.
+- CPU thresholds are provisional and event telemetry is still required for
+  stronger causal attribution.
 
 ## Current recommended next task
 
-Implement **Milestone 1.5: CPU inference**:
+Implement **Milestone 1.6: CPU validation and overhead measurement**:
 
-- establish contention from exact-interval CPU PSI and emit an explicit
-  no-meaningful-contention result when pressure is negligible,
-- centralize provisional severity thresholds and keep confidence independent,
-- rank runnable-delay victim candidates separately from same-window CPU
-  consumers, with suspect confidence capped by correlation-only evidence,
-- cover positive, negative, boundary, missing-data, and contradictory-evidence
-  cases with deterministic normalized fixtures.
+- measure collector overhead and validate provisional PSI thresholds with
+  controlled load experiments; add concise structural/golden output coverage and
+  safe bounded rootless CPU acceptance coverage; retain the current conservative
+  causal wording.
 
 Do not broaden into memory or I/O collection before M1.6 validates the CPU
 slice.
@@ -174,7 +184,7 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M1.4 validation ran:
+On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M1.5 validation ran:
 
 ```bash
 cargo fmt --all -- --check
@@ -182,17 +192,23 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Validation uses the locked dependency graph from the local Cargo cache. The 45
-unit and 6 executable integration tests cover strict schedstat parsing, direct
-fixture-tree collection, stable task aggregation, TID reuse, thread churn,
-counter regression, bounded PID/TID selection, partial rendering, and earlier
-CPU/PSI behavior. On the Linux 7.1.5 validation host, the
+Validation uses the locked dependency graph from the local Cargo cache. The
+55 unit tests and 6 executable integration tests cover strict schedstat
+parsing, direct fixture-tree collection,
+stable task aggregation, TID reuse, thread churn, counter regression, bounded
+PID/TID selection, normalized CPU analyzer fixtures for healthy, saturated,
+scheduler-unavailable, and busy-but-not-pressured scenarios, plus programmatic
+boundary, missing-data, partial-context, top-N, and contradictory-evidence
+rules. They also cover partial rendering and executable CPU/PSI behavior. On
+the Linux 7.1.5 validation host, the
 `kernel.sched_schedstats` sysctl was `0` while direct per-task schedstat remained
-available; host hunt JSON retained stable scheduler-delay intervals and
-reported no scheduler collection issues.
+available. Live 100ms JSON remained an explicit insufficient observation, while
+a live 1s JSON observation produced a medium-confidence no-meaningful-contention
+finding on the otherwise idle validation host and retained stable scheduler
+intervals without collection issues.
 
 ## Next milestone
 
-**Milestone 1.5 — CPU inference.**
+**Milestone 1.6 — CPU validation and overhead measurement.**
 
 See `roadmap.md`.

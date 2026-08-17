@@ -213,6 +213,11 @@ Use an internal numeric score if helpful, but expose a small stable vocabulary:
 
 Avoid magical thresholds spread throughout the code.
 
+M1.5 uses typed `CpuFinding`, `CpuEvidence`, `Victim`, `Suspect`, and
+`Qualifier` values. Evidence retains exact PSI fraction, cumulative delta and
+window plus optional host/load context. Victims retain stable task count and
+summed runnable delay; suspects retain same-window CPU fraction.
+
 Centralize scoring configuration.
 
 ## Confidence

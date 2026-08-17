@@ -19,7 +19,7 @@ A fresh coding agent can understand what to build without external chat history.
 
 ## Milestone 1 — CPU contention vertical slice
 
-Status: in progress. M1.1 through M1.4 are complete; M1.5 is next.
+Status: in progress. M1.1 through M1.5 are complete; M1.6 validation is next.
 
 Goal:
 
@@ -74,6 +74,8 @@ Deliver:
 
 ### M1.5 CPU inference
 
+Status: complete.
+
 Deliver:
 
 - CPU contention finding,
@@ -84,16 +86,18 @@ Deliver:
 - evidence and qualifiers,
 - healthy/no-contention result.
 
-### M1.6 CLI polish and validation
+### M1.6 CPU validation and overhead measurement
 
 Deliver:
 
-- concise default renderer,
-- structured JSON,
-- golden fixtures,
-- synthetic CPU contention script/test,
-- measured collector overhead,
-- documentation update.
+- concise default finding-first renderer and structural/golden output fixtures,
+- controlled CPU-pressure experiments that validate the provisional PSI
+  severity boundaries,
+- safe, bounded, rootless synthetic CPU acceptance coverage,
+- measured collector overhead across representative process/task counts and
+  under CPU pressure,
+- documented experiment results and any resulting threshold or collection
+  changes.
 
 Milestone exit condition:
 

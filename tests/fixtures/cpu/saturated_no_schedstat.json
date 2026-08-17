@@ -1,0 +1,1 @@
+{"schema":"normalized_cpu_fixture_v1","psi_some_fraction":0.20,"window_ms":10000,"schedstat":"unsupported","expected_kind":"cpu_scheduling_contention","expected_severity":"high","expected_victims":0,"expected_suspects":0,"expected_qualifier":"victim_attribution_limited"}

@@ -31,28 +31,29 @@ them.
 
 ## Starting from the current implementation
 
-Milestones 1.1 through 1.4 are complete. The current recommended Codex session is:
+Milestones 1.1 through 1.5 are complete. The current recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Implement Milestone 1.5: CPU inference.
+Implement Milestone 1.6: CPU validation and overhead measurement.
 
 Requirements:
-- establish CPU contention only from exact-interval CPU PSI, never utilization
-  alone,
-- centralize and test provisional severity thresholds while keeping confidence
-  independent,
-- rank scheduler-delay victim candidates and same-window CPU consumers with
-  separate, qualified attribution confidence,
-- emit an explicit healthy/no-meaningful-contention result,
-- test positive, negative, boundary, missing-data, and contradictory-evidence
-  cases.
+- validate the provisional exact-interval CPU PSI severity boundaries with
+  controlled load experiments,
+- measure bounded collector overhead on representative process/task counts and
+  under CPU pressure,
+- exercise a safe, bounded, rootless synthetic CPU acceptance scenario and add
+  structural/golden renderer coverage,
+- preserve the existing conservative causal wording unless new evidence
+  justifies a documented change,
+- add deterministic regression coverage for any revised threshold or
+  measurement behavior,
+- record validation methods, results, and remaining limits in project memory.
 
-Integrate the smallest explicit CPU analyzer and typed findings into the
-existing `hunt` output. Do not broaden into memory or I/O collection yet.
-Update docs/status.md and any affected design docs.
+Do not add another resource collector before the CPU slice has been validated.
+Update docs/status.md, docs/experiments.md, and any affected design docs.
 ```
 
 ## Session discipline
@@ -200,3 +201,6 @@ document CPU severity thresholds
 ```
 
 rather than implementation trivia.
+
+For inference changes, test the pure normalized analyzer before using a live
+hunt smoke: live load is context, never an expected verdict fixture.

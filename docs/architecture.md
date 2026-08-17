@@ -153,11 +153,12 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 ## Current implementation layout
 
-Milestone 1.4 adds bounded CPU/process and scheduler-delay collection used by
-the first telemetry slice:
+Milestone 1.5 combines bounded CPU/process and scheduler-delay collection with
+the first CPU inference slice:
 
 ```text
 src/
+  analysis.rs   # pure normalized CPU inference and typed findings
   main.rs       # process entry point and exit behavior
   cli.rs        # command/options model and duration parsing
   cpu.rs        # procfs CPU/process snapshots and interval normalization
@@ -168,9 +169,15 @@ tests/
   fixtures/     # deterministic procfs parser fixtures
 ```
 
-There is no generic telemetry framework or inference engine. `cpu.rs` keeps
-the narrow procfs CPU/process raw and interval model together; it deliberately
-aggregates stable task schedstat counters but does not assign attribution roles.
+There is no generic telemetry framework. `cpu.rs` keeps the narrow procfs
+CPU/process raw and interval model together; it deliberately aggregates stable
+task schedstat counters but does not assign attribution roles. `analysis.rs` is
+a narrow pure boundary that consumes only normalized
+PSI and CPU/process interval observations and emits typed serializable CPU
+findings. A valid PSI interval is sufficient for the CPU resource verdict;
+failed CPU/process context becomes qualification and removes attribution rather
+than invalidating PSI. Procfs remains outside analysis and renderers do not
+recompute rules.
 
 ## Observation lifecycle
 

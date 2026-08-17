@@ -98,11 +98,17 @@ Later releases may add:
 ├── Cargo.toml
 ├── README.md
 ├── src/
+│   ├── analysis.rs
 │   ├── cli.rs
+│   ├── cpu.rs
 │   ├── main.rs
+│   ├── psi.rs
 │   └── render.rs
 ├── tests/
-│   └── cli.rs
+│   ├── cli.rs
+│   └── fixtures/
+│       ├── cpu/
+│       └── proc-*
 └── docs/
     ├── README.md
     ├── product.md
@@ -127,7 +133,7 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Milestones 1.1 through 1.4 are complete. The repository contains a Rust binary
+Milestones 1.1 through 1.5 are complete. The repository contains a Rust binary
 with real `hunt`, `capabilities`, help, version, duration parsing, and
 text/JSON output boundaries.
 
@@ -135,10 +141,12 @@ text/JSON output boundaries.
 bounded task scheduler-accounting snapshots before and after the requested
 interval. It reports PSI, host CPU
 counter deltas, capacity/load context, and CPU deltas for processes that
-persisted with the same PID and start time across both snapshots. It does not
-yet infer contention severity, identify victims or suspects, or claim causal
-attribution. Scheduler-delay candidates are raw summed stable-thread evidence,
-not confirmed victims. `capabilities` also reports scheduler accounting state.
+persisted with the same PID and start time across both snapshots. M1.5 derives
+an evidence-backed CPU resource verdict from valid exact-interval CPU PSI,
+including provisional severity and explicit no-meaningful-contention results.
+It ranks scheduler-delay victim candidates and same-window CPU-consumer suspect
+candidates with qualifiers; neither role is a causal claim. `capabilities` also
+reports scheduler accounting state.
 
 Run the current binary with:
 
@@ -147,6 +155,13 @@ cargo run -- hunt --duration 1s
 cargo run -- capabilities
 ```
 
-The next task is CPU inference (M1.5).
+M1.5 adds conservative CPU inference: only exact-interval CPU PSI `some`
+determines whether contention exists. A valid interval below 1% reports no
+meaningful CPU scheduling contention; 1/5/15/30% are the provisional low,
+moderate, high, and severe boundaries. Intervals below one second are telemetry
+smoke observations and explicitly do not receive a healthy or contention verdict.
 
 See [`docs/status.md`](docs/status.md) and [`docs/roadmap.md`](docs/roadmap.md).
+
+The next task is M1.6 validation and collector-overhead measurement; it does not
+add another resource collector.

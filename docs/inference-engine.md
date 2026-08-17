@@ -144,6 +144,26 @@ Example only:
 > 30%      severe
 ```
 
+### Implemented M1.5 CPU rule
+
+Only a valid exact-interval CPU PSI `some` fraction produces the CPU resource
+verdict. The effective diagnostic and resource-confidence window is the shorter
+of requested duration and measured PSI interval; a requested duration below one
+second remains smoke mode. Otherwise, for an effective window of at least one
+second, `<1%` is an explicit no-meaningful-contention finding; `[1,5)%`,
+`[5,15)%`, `[15,30)%`, and `>=30%` map to low, moderate, high, and severe.
+CPU utilization >=90% and runnable tasks greater than logical CPU count are
+supporting/contradictory context only. An effective 5s window has high resource
+confidence; 1s..<5s has medium. Valid PSI continues to produce the resource
+verdict when host/process context is unavailable; attribution is empty and
+qualified. Absent or invalid PSI produces no assessment.
+
+When contention exists, positive stable schedstat delay is ranked descending
+then `ProcessKey` (top five) as observed runnable-delay victim candidates, not
+proof of user-visible harm. Same-window consumers >=25% of one CPU are ranked
+the same way (top three) as correlation-only suspects. Their confidence is at
+most medium without event telemetry; consumers within 10% are non-unique.
+
 These values must be validated and should not be enshrined without tests/experiments.
 
 Severity may be adjusted using:

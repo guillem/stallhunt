@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::analysis::{self, AnalysisResult, AssessmentKind};
 use crate::cli::{CapabilitiesOptions, HelpTopic, HuntOptions, OutputFormat};
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities, HuntObservation};
 use crate::psi::{CpuPsiCapability, CpuPsiObservation};
@@ -73,6 +74,8 @@ pub fn capabilities(
 fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
     match (result.psi, result.cpu) {
         (Ok(observation), Ok(cpu)) => {
+            let analysis = analysis::analyze_cpu(Some(&observation), Some(&cpu));
+            let finding_text = finding_text(&analysis);
             let process_lines = cpu
                 .processes
                 .iter()
@@ -103,7 +106,8 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
             let process_context = process_context_line(&cpu);
             let scheduler_lines = scheduler_delay_lines(&cpu);
             format!(
-                "CPU telemetry observation complete\n\nRequested observation duration: {}\nActual observation duration: {}\nCPU PSI some during interval: {:.2}% ({} us cumulative stall time)\nCPU PSI rolling averages at end: avg10 {:.2}%, avg60 {:.2}%, avg300 {:.2}%\nHost CPU: {:.2}% busy across {} logical CPUs ({} / {} ticks)\n{}\nProcesses sampled: {}\n{}\nTop process CPU consumers during interval:\n{}\nScheduler-delay evidence: {}\n{}\n\nThis is raw CPU and process evidence only. Scheduler-delay candidates are aggregated task-level evidence, not confirmed victims or causal attribution; severity, healthy/no-contention, victims, and suspects are not implemented yet.\n",
+                "{}\n\nRequested observation duration: {}\nActual observation duration: {}\nCPU PSI some during interval: {:.2}% ({} us cumulative stall time)\nCPU PSI rolling averages at end: avg10 {:.2}%, avg60 {:.2}%, avg300 {:.2}%\nHost CPU: {:.2}% busy across {} logical CPUs ({} / {} ticks)\n{}\nProcesses sampled: {}\n{}\nTop process CPU consumers during interval:\n{}\nScheduler-delay evidence: {}\n{}\n",
+                finding_text,
                 human_duration(options.duration_ms),
                 human_duration_from_duration(observation.interval.elapsed),
                 observation.interval.some_fraction * 100.0,
@@ -141,13 +145,17 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
             error.capability().as_str(),
             error.explanation(),
         ),
-        (Ok(psi), Err(error)) => format!(
-            "CPU PSI observation complete\n\nActual observation duration: {}\nCPU PSI some during interval: {:.2}% ({} us cumulative stall time)\n\nCPU process telemetry was unavailable: {}\nCPU PSI is raw evidence only; no diagnosis or finding was produced.\n",
-            human_duration_from_duration(psi.interval.elapsed),
-            psi.interval.some_fraction * 100.0,
-            psi.interval.total_delta_us,
-            error.explanation(),
-        ),
+        (Ok(psi), Err(error)) => {
+            let analysis = analysis::analyze_cpu(Some(&psi), None);
+            format!(
+                "{}\n\nActual observation duration: {}\nCPU PSI some during interval: {:.2}% ({} us cumulative stall time)\n\nCPU process telemetry was unavailable: {}\n",
+                finding_text(&analysis),
+                human_duration_from_duration(psi.interval.elapsed),
+                psi.interval.some_fraction * 100.0,
+                psi.interval.total_delta_us,
+                error.explanation(),
+            )
+        }
     }
 }
 
@@ -163,6 +171,79 @@ fn scheduler_delay_lines(cpu: &CpuProcessObservation) -> String {
         candidate.name, candidate.key.pid, candidate.runnable_wait_ns, candidate.task_count,
         candidate.runnable_delay_fraction * 100.0
     )).collect::<Vec<_>>().join("\n")
+}
+
+fn finding_text(analysis: &AnalysisResult) -> String {
+    let Some(finding) = analysis.findings.first() else {
+        return "CPU assessment unavailable".into();
+    };
+    let cpu_context_available = finding.evidence.host_utilization_fraction.is_some();
+    let attributions = format!(
+        "\nVictim candidates: {}\nSuspect consumers: {}",
+        if finding.victims.is_empty() {
+            if cpu_context_available {
+                "none observed".into()
+            } else {
+                "unavailable (CPU/process context was not collected)".into()
+            }
+        } else {
+            finding
+                .victims
+                .iter()
+                .map(|v| {
+                    format!(
+                        "{} [{}]: {}ns, {:?}",
+                        v.name, v.key.pid, v.runnable_wait_ns, v.confidence
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+        if finding.suspects.is_empty() {
+            if cpu_context_available {
+                "none above 25% of one CPU".into()
+            } else {
+                "unavailable (CPU/process context was not collected)".into()
+            }
+        } else {
+            finding
+                .suspects
+                .iter()
+                .map(|s| {
+                    format!(
+                        "{} [{}]: {:.1}% CPU, {}, {:?}",
+                        s.name,
+                        s.key.pid,
+                        s.cpu_fraction_of_one * 100.0,
+                        s.label,
+                        s.confidence
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+    );
+    let header = match finding.kind {
+        AssessmentKind::CpuContention => format!(
+            "CPU scheduling contention: {:?} (resource confidence: {:?})\n{}",
+            finding.severity, finding.resource_confidence, finding.summary
+        ),
+        AssessmentKind::CpuNoMeaningfulContention => format!(
+            "CPU assessment: no meaningful scheduling contention (resource confidence: {:?})\n{}",
+            finding.resource_confidence, finding.summary
+        ),
+        AssessmentKind::InsufficientObservation => format!(
+            "CPU assessment: insufficient observation\n{}",
+            finding.summary
+        ),
+    };
+    let qualifiers = finding
+        .qualifiers
+        .iter()
+        .map(|q| q.message)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{header}{attributions}\nQualifiers: {qualifiers}")
 }
 
 fn process_context_line(cpu: &CpuProcessObservation) -> String {
@@ -192,6 +273,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
         (Ok(observation), Ok(cpu)) => {
             let process_stat = crate::cpu::process_capability(&cpu.collection_issues).as_str();
             let process_schedstat = cpu.schedstat_capability;
+            let findings = analysis::analyze_cpu(Some(&observation), Some(&cpu)).findings;
             to_json(&HuntJson {
                 schema_version: 1,
                 tool_version: env!("CARGO_PKG_VERSION"),
@@ -210,11 +292,8 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
                         message: process_schedstat.explanation(),
                     },
                 },
-                findings: Vec::new(),
-                qualifiers: vec![QualifierJson {
-                    kind: "implementation_limit",
-                    message: "CPU PSI, host CPU counters, load context, process CPU deltas, and available scheduler-delay intervals are collected, but CPU contention inference and causal attribution are not implemented.",
-                }],
+                findings,
+                qualifiers: Vec::new(),
             })
         }
         (Err(error), Ok(cpu)) => {
@@ -263,7 +342,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
                     message: "CPU process telemetry was unavailable.",
                 },
             },
-            findings: Vec::new(),
+            findings: analysis::analyze_cpu(Some(&psi), None).findings,
             qualifiers: vec![QualifierJson {
                 kind: "collection_limit",
                 message: error.explanation(),
@@ -319,7 +398,7 @@ struct HuntJson<'a> {
     requested_observation: RequestedObservation,
     observation: Option<ObservationJson>,
     capabilities: CapabilitiesJsonValue<'a>,
-    findings: Vec<serde_json::Value>,
+    findings: Vec<crate::analysis::CpuFinding>,
     qualifiers: Vec<QualifierJson<'a>>,
 }
 
@@ -440,7 +519,7 @@ mod tests {
     use super::*;
     use crate::cpu::{
         CpuProcessObservation, HostCpuInterval, LoadAverageAvailability, LoadAverageRaw,
-        ProcessCollectionIssues,
+        ProcessCollectionIssues, ProcessCpuInterval, ProcessKey,
     };
     use crate::psi::{CpuPsiInterval, CpuPsiRaw};
 
@@ -489,7 +568,16 @@ mod tests {
                     last_pid: 1,
                 }),
                 load_availability: LoadAverageAvailability::Available,
-                processes: Vec::new(),
+                processes: vec![ProcessCpuInterval {
+                    key: ProcessKey {
+                        pid: 9,
+                        start_time_ticks: 1,
+                    },
+                    name: "consumer".into(),
+                    state: 'R',
+                    cpu_ticks: 50,
+                    cpu_fraction_of_one: 0.4,
+                }],
                 collection_issues: ProcessCollectionIssues::default(),
                 scheduler_delay_candidates: Vec::new(),
                 schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
@@ -499,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn hunt_renders_raw_interval_pressure_without_a_diagnosis() {
+    fn hunt_renders_interval_pressure_with_a_diagnosis() {
         let output = hunt(
             &HuntOptions {
                 duration_ms: 1_000,
@@ -509,7 +597,67 @@ mod tests {
         );
         assert!(output.contains("Actual observation duration: 1250ms"));
         assert!(output.contains("CPU PSI some during interval: 20.00%"));
-        assert!(output.contains("not implemented yet"));
+        assert!(output.contains("CPU scheduling contention"));
+        assert!(output.contains("same window; this correlation does not prove causality"));
+    }
+
+    #[test]
+    fn contention_json_is_typed_and_cpu_failure_retains_psi_finding() {
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 1_000,
+                output: OutputFormat::Json,
+            },
+            |_| hunt_observation(),
+        ))
+        .unwrap();
+        let finding = &json["findings"][0];
+        assert_eq!(finding["kind"], "cpu_scheduling_contention");
+        assert_eq!(finding["resource"], "cpu");
+        assert!(
+            finding["severity"].is_string()
+                && finding["resource_confidence"].is_string()
+                && finding["evidence"].is_object()
+                && finding["victims"].is_array()
+                && finding["suspects"].is_array()
+                && finding["qualifiers"].is_array()
+        );
+        let partial: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 1_000,
+                output: OutputFormat::Json,
+            },
+            |_| HuntObservation {
+                psi: Ok(observation()),
+                cpu: Err(crate::cpu::CpuError::Unreadable),
+            },
+        ))
+        .unwrap();
+        assert_eq!(partial["status"], "incomplete");
+        assert_eq!(partial["findings"][0]["kind"], "cpu_scheduling_contention");
+        assert!(partial["findings"][0]["evidence"]["host_utilization_fraction"].is_null());
+        assert!(partial["qualifiers"][0]["kind"].is_string());
+
+        let partial_text = hunt(
+            &HuntOptions {
+                duration_ms: 1_000,
+                output: OutputFormat::Text,
+            },
+            |_| HuntObservation {
+                psi: Ok(observation()),
+                cpu: Err(crate::cpu::CpuError::Unreadable),
+            },
+        );
+        assert!(
+            partial_text
+                .contains("Victim candidates: unavailable (CPU/process context was not collected)")
+        );
+        assert!(
+            partial_text
+                .contains("Suspect consumers: unavailable (CPU/process context was not collected)")
+        );
+        assert!(!partial_text.contains("Victim candidates: none observed"));
+        assert!(!partial_text.contains("Suspect consumers: none above"));
     }
 
     #[test]
@@ -524,7 +672,7 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(json["status"], "observed");
         assert_eq!(json["observation"]["cpu_psi"]["total_delta_us"], 250_000);
-        assert_eq!(json["findings"], serde_json::json!([]));
+        assert!(json["findings"].is_array());
     }
 
     #[test]

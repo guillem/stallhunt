@@ -167,14 +167,15 @@ Recommended directory:
 tests/
   fixtures/
     cpu/
-      healthy/
-      saturated/
-      saturated_no_schedstat/
-      busy_but_not_pressured/
-    parsers/
-      psi/
-      proc_stat/
-      pid_stat/
+      healthy.json
+      saturated.json
+      saturated_no_schedstat.json
+      busy_but_not_pressured.json
+    proc-loadavg-valid
+    proc-pid-stat-unusual-name
+    proc-pressure-cpu-valid
+    proc-schedstat-valid
+    proc-stat-valid
 ```
 
 A normalized observation fixture should include a schema version.
@@ -231,3 +232,16 @@ A new finding type should not be considered trustworthy until:
 3. positive/negative analyzer tests exist,
 4. at least one synthetic real-host experiment behaves as expected,
 5. documented limitations match observed behavior.
+
+# CPU analyzer fixtures
+
+Normalized CPU analyzer tests must be host-independent. The four JSON fixtures
+under `tests/fixtures/cpu/` cover a healthy negative case, saturated contention,
+saturated contention without schedstat attribution, and busy-but-not-pressured
+contradictory context. They describe normalized PSI, window, CPU context,
+process CPU, stable scheduler delay, and scheduler capability where relevant.
+
+Missing-data, partial-context, threshold-boundary, and top-N ranking cases are
+also required, but are currently expressed as programmatic analyzer tests rather
+than serialized fixtures. Do not imply that every rule condition has a JSON
+fixture merely because fixture-driven tests exist.

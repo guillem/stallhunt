@@ -31,16 +31,16 @@ fn version_uses_the_binary_and_package_version() {
 }
 
 #[test]
-fn hunt_handles_every_cpu_psi_capability_state_without_claiming_a_diagnosis() {
+fn hunt_handles_every_cpu_psi_capability_state() {
     let output = bottleneck(&["hunt", "--duration", "100ms"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
-    if stdout.contains("CPU telemetry observation complete") {
+    if stdout.contains("CPU assessment: insufficient observation") {
         assert!(stdout.contains("Requested observation duration: 100ms"));
         assert!(stdout.contains("CPU PSI some during interval:"));
         assert!(stdout.contains("Host CPU:"));
-        assert!(stdout.contains("not implemented yet"));
+        assert!(stdout.contains("CPU assessment: insufficient observation"));
     } else {
         assert!(stdout.contains("CPU PSI observation unavailable"));
         assert!(stdout.contains("No complete CPU PSI interval was observed"));
@@ -56,7 +56,7 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
     assert!(output.status.success());
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["requested_observation"]["duration_ms"], 100);
-    assert_eq!(json["findings"], serde_json::json!([]));
+    assert!(json["findings"].is_array());
 
     let capability = json["capabilities"]["cpu_psi"]["state"]
         .as_str()
@@ -72,6 +72,7 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
     match json["status"].as_str() {
         Some("observed") => {
             assert_eq!(capability, "available");
+            assert_eq!(json["findings"][0]["kind"], "insufficient_observation");
             assert!(json["observation"]["cpu_psi"]["some_fraction"].is_number());
             assert!(json["observation"]["scheduler_delay_candidates"].is_array());
             assert!(json["observation"]["schedstat_collection_issues"].is_object());

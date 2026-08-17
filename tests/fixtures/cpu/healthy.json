@@ -1,0 +1,1 @@
+{"schema":"normalized_cpu_fixture_v1","psi_some_fraction":0.005,"window_ms":10000,"host_utilization_fraction":0.2,"expected_kind":"cpu_no_meaningful_contention","expected_severity":"none","expected_victims":0,"expected_suspects":0,"expected_qualifier":"cpu_no_meaningful_contention"}

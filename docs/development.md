@@ -2,7 +2,7 @@
 
 ## Current state
 
-The repository contains the Milestone 1.4 CPU telemetry slice.
+The repository contains the Milestone 1.5 CPU contention slice.
 
 Build and run it from the repository root:
 
@@ -12,9 +12,17 @@ cargo run -- hunt --duration 1s
 cargo run -- capabilities --json
 ```
 
-`hunt` performs a bounded two-snapshot CPU PSI, host CPU/load, and process CPU
-observation. It reports raw evidence only, including bounded task-summed
-scheduler-delay candidates when enabled; CPU inference remains future work.
+`hunt` performs a bounded two-snapshot CPU PSI, host CPU/load, process CPU, and
+task scheduler-accounting observation. The pure CPU analyzer uses only a valid
+exact-interval CPU PSI `some` value for its resource verdict. The effective
+diagnostic and resource-confidence window is the shorter of requested and
+measured PSI duration; a request below one second remains telemetry smoke mode.
+Otherwise, an effective window of at least one second reports either no
+meaningful CPU scheduling contention or a provisional low, moderate, high, or
+severe finding. Host/process collection failure does not discard a valid PSI
+resource verdict, but leaves attribution empty and qualified. Runnable-delay
+victims and same-window CPU consumers are qualified attribution candidates, not
+proven causes.
 
 ## Toolchain
 
@@ -173,5 +181,13 @@ An ADR is appropriate if unsafe/FFI becomes a significant architectural mechanis
 ## Generated code
 
 Avoid build-time code generation unless it removes meaningful maintenance burden.
+
+The current local validation commands are:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
 
 If future eBPF bindings/BTF tooling generates artifacts, document exactly what is generated, from what source, and whether generated files are committed.

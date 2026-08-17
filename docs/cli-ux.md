@@ -57,9 +57,9 @@ Standard version information.
 
 Delay `watch`, `record`, `replay`, `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
 
-## Current CPU telemetry behavior
+## Current CPU diagnosis behavior
 
-Milestone 1.1 implements:
+Milestone 1.5 implements:
 
 ```text
 bottleneck hunt [--duration <DURATION>] [--json]
@@ -72,17 +72,26 @@ task scheduler-accounting snapshots around the requested sleep. It reports
 `some.total` delta divided by the actual
 monotonic elapsed interval, along with host CPU tick deltas, logical CPU count,
 load context, and process CPU deltas for stable `(pid, starttime)` identities.
-A successful observation uses JSON `status: "observed"`; unavailable or invalid
-CPU PSI or CPU/process collection produces `status: "incomplete"`, an
-explicit qualifier, and no findings. When either collector succeeds, its
-partial evidence remains in an `observation` object; it is `null` only when no
-complete evidence is available.
+A valid exact-interval CPU PSI `some` value determines the CPU resource verdict;
+host utilization, load, and process data provide context rather than
+independently creating contention. The effective diagnostic and resource-
+confidence window is the shorter of the requested duration and measured PSI
+interval. A request below one second remains telemetry smoke mode even if the
+measured interval is longer. Otherwise, an effective window of at least one
+second reports either no meaningful CPU scheduling contention or a provisional
+low, moderate, high, or severe finding.
 
-This is evidence collection, not a CPU bottleneck finding: the output must not
-claim severity, healthy/no-contention status, victims, suspects, or causality.
-Process CPU consumption is explicitly concurrent context, not a causal claim.
-Scheduler-delay candidates are summed stable-thread evidence, not confirmed
-victims.
+If host/process CPU context fails but CPU PSI is valid, `hunt` retains the CPU
+resource verdict, marks the response incomplete, and emits collection
+qualifiers; victims and suspects are empty because attribution is unavailable.
+Unavailable or invalid CPU PSI produces no CPU contention assessment. Partial
+evidence remains in an `observation` object; it is `null` only when no complete
+evidence is available.
+
+When contention is found, scheduler-delay candidates are ranked as affected
+workloads and same-window CPU consumers as likely contributors. Both roles are
+qualified correlation: summed stable-thread delay is not confirmed harm, and
+CPU consumption does not prove causality.
 `capabilities` probes CPU PSI and reports `available`, `unsupported`,
 `permission_denied`, or `failed`.
 
@@ -225,25 +234,59 @@ Requirements:
 - evidence,
 - qualifiers.
 
-Example shape:
+Representative M1.5 finding shape (optional context fields are omitted here):
 
 ```json
 {
   "schema_version": 1,
   "tool_version": "0.1.0",
-  "observation": {
+  "requested_observation": {
     "duration_ms": 10000
   },
   "capabilities": {},
   "findings": [
     {
-      "kind": "cpu_scheduler_contention",
+      "kind": "cpu_scheduling_contention",
+      "resource": "cpu",
       "severity": "severe",
-      "confidence": "high",
-      "victims": [],
-      "suspects": [],
-      "evidence": [],
-      "qualifiers": []
+      "resource_confidence": "high",
+      "summary": "CPU scheduling contention observed.",
+      "evidence": {
+        "psi_some_fraction": 0.234,
+        "psi_total_delta_us": 2340000,
+        "psi_window_us": 10000000,
+        "host_utilization_fraction": 0.971,
+        "logical_cpu_count": 8,
+        "runnable_tasks": 14,
+        "loadavg1": 12.3
+      },
+      "victims": [
+        {
+          "key": { "pid": 4812, "start_time_ticks": 123456 },
+          "name": "postgres",
+          "runnable_wait_ns": 1810000000,
+          "runnable_delay_fraction": 0.181,
+          "stable_task_count": 4,
+          "confidence": "high",
+          "label": "observed_runnable_delay_victim_candidate"
+        }
+      ],
+      "suspects": [
+        {
+          "key": { "pid": 9231, "start_time_ticks": 123999 },
+          "name": "rustc",
+          "cpu_fraction_of_one": 0.58,
+          "cpu_ticks": 584,
+          "confidence": "medium",
+          "label": "concurrent_cpu_consumer"
+        }
+      ],
+      "qualifiers": [
+        {
+          "kind": "high_utilization_context",
+          "message": "Host CPU utilization was at least 90%; this is supporting context, not the contention verdict."
+        }
+      ]
     }
   ]
 }
