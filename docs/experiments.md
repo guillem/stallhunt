@@ -128,6 +128,42 @@ experiment: no reclaim, swap-pressure, or possible-thrashing conclusion is
 validated by it. The required follow-up is a safe, bounded controlled scenario
 that produces exact memory PSI `some` with relevant reclaim and/or swap context.
 
+## EXP-0005: M2 harmful-memory validation prerequisite check
+
+Date: 2026-08-17. Host/kernel: Linux 7.1.5.
+
+### Question
+
+Can this session safely create controlled harmful memory pressure without
+affecting an arbitrary host cgroup?
+
+### Setup
+
+The caller's unified membership was
+`/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.chromium.Chromium-334038.scope`.
+The unified hierarchy exposed the `memory` controller and zram swap, and
+`stress-ng` was installed. Memory PSI, meminfo, and vmstat were readable.
+However, neither the current cgroup's `cgroup.procs` nor
+`cgroup.subtree_control` was writable, so the session could not create or move
+work into a uniquely owned memory-limited subtree.
+
+A safe one-second `hunt --json` smoke observed memory PSI `some` of 0% over
+1,209,764 µs and produced `memory_no_harmful_pressure` with available memory
+telemetry. This is healthy-path evidence only.
+
+### Result
+
+Blocked safely. Running an unconstrained `stress-ng --vm` workload would put
+the shared host/container under pressure and cannot validate the M2 acceptance
+criterion safely.
+
+### Follow-up
+
+Run a bounded allocator/reclaim workload inside a caller-provided writable,
+uniquely owned delegated cgroup with an explicit memory limit. Assert an exact
+memory PSI `some` finding; retain `full`, meminfo, and vmstat as non-additive
+context only.
+
 ## Planned I/O experiments
 
 Do not run destructive tests against arbitrary real devices.

@@ -119,7 +119,9 @@ On a controlled CPU-saturation scenario, the tool identifies CPU contention and 
 
 Status: in progress. The first host-memory collector/analyzer/output slice and
 deterministic fixtures exist; safe controlled harmful-pressure validation is
-still required.
+still required. The 2026-08-17 prerequisite check found no writable delegated
+cgroup, so it recorded a safe block instead of running an unconstrained
+host-wide allocator.
 
 Goal:
 

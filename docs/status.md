@@ -4,7 +4,7 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 4 — Cgroup/systemd awareness (implemented; opt-in live validation)**
+**Milestone 2 — harmful-memory-pressure validation (blocked on safe delegation)**
 
 Milestone 1 — the CPU contention vertical slice, including M1.6 validation and
 overhead measurement — and M3 block-I/O pressure are functionally complete.
@@ -196,7 +196,9 @@ caller-owned delegated cgroup and does not mutate the hierarchy.
   case, but high-visible-PID/task overhead remains unvalidated.
 - No CI workflow or packaging configuration exists; validation is local.
 - M2 has not yet demonstrated safely controlled real-host harmful memory
-  pressure. Reclaim and swap labels have separate low mechanism confidence;
+  pressure. The 2026-08-17 prerequisite check found readable memory telemetry,
+  zram swap, and `stress-ng`, but no writable current cgroup/subtree control;
+  an unconstrained allocator would be unsafe. Reclaim and swap labels have separate low mechanism confidence;
   possible thrashing requires material direct-reclaim plus bidirectional-swap
   rates and is capped at medium mechanism confidence. All remain
   implementation/fixture validated rather than experimentally validated.
@@ -312,7 +314,16 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, the interrupted M4 checkpoint
+On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M4 capability/completeness,
+controller-context, renderer, and delegated-scope acceptance checks passed the
+full deterministic gate (121 unit tests, six CLI tests; the delegated cgroup
+test correctly skipped without a configured owned scope). The follow-up M2
+prerequisite check confirmed readable memory PSI/meminfo/vmstat, zram swap, and
+an installed `stress-ng`, but no writable `cgroup.procs` or
+`cgroup.subtree_control`; `docs/experiments.md` records why a host-wide memory
+stressor was not run.
+
+Earlier on 2026-08-17, the interrupted M4 checkpoint
 initially failed `cargo fmt --check` and Clippy because `src/cgroup.rs` was
 unformatted and contained two non-test dead-code entry points. After those
 trivial integration repairs, the live CLI test exposed a cgroup I/O JSON map-key
