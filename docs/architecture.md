@@ -218,9 +218,13 @@ membership form, and maps a bounded selected PID set by `stat` → cgroup →
 explicit PID, group, depth, path, and file-byte budgets. Per-cgroup exact PSI
 is an explicitly scoped verdict; CPU, memory, and I/O controller deltas remain
 qualified context. Selected `memory.stat` page deltas may label an already
-pressured scoped memory finding as reclaim or swap, and a positive `cpu.stat`
-`throttled_usec` delta may label already-pressured scoped CPU as quota-throttle,
-without changing the `Pressure` kind or creating a verdict. One typed
+pressured scoped memory finding as reclaim, swap, or possible-thrashing, and a
+positive `cpu.stat` `throttled_usec` delta may label already-pressured scoped
+CPU as quota-throttle, without changing the `Pressure` kind or creating a
+verdict. Possible-thrashing uses the host conjunction at cgroup scope: high or
+severe PSI `some`, valid `full` of at least 1%, a 5s PSI window, and material
+direct-reclaim plus bidirectional swap rates over the cgroup observation
+interval. One typed
 completeness assessment drives standalone capabilities, hunt JSON, and hunt
 completeness, so partial controller files, permissions, budgets, and lifecycle
 loss cannot be presented as complete.
@@ -238,8 +242,8 @@ next window can reuse the previous end snapshot. `watch.rs` classifies host
 CPU/memory/I/O and a bounded set of cgroup pressure findings as new,
 persistent, or resolved. It keeps 16 compact history windows and does not
 retain full observations. Cgroup watch `kind` strings include the scoped
-resource and any reclaim, swap, or quota-throttle label; identity remains path
-plus resource. TTY text refreshes by clearing the screen; JSON is
+resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
+identity remains path plus resource. TTY text refreshes by clearing the screen; JSON is
 one compact `bottleneck.watch_window` object per window, not a recording and
 not hunt JSON.
 

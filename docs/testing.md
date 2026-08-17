@@ -172,19 +172,22 @@ cross-scope and CPU–I/O negatives, checked-in related-evidence text
 fixtures, and structural hunt JSON. Chains are not causal claims and are not
 watch identities.
 
-Scoped cgroup memory findings may be labeled reclaim or swap from `memory.stat`
-page deltas. Tests cover reclaim, swap-wins, unlabeled pressure (including
+Scoped cgroup memory findings may be labeled reclaim, swap, or possible
+thrashing from `memory.stat` page deltas. Tests cover reclaim, swap-wins,
+possible-thrashing (including short window, missing/invalid `full`, slower
+observation-interval rates, and moderate `some`), unlabeled pressure (including
 `memory.events` high without page deltas), scan-without-steal, and page
 counters that must not create a pressure verdict. Scoped CPU findings may be
 labeled quota-throttle from `cpu.stat` `throttled_usec`. Tests cover a positive
 throttle label, `nr_throttled` without time, and throttle counters that must not
 create a pressure verdict. Watch still keys off `Pressure` and does not gain a
 new identity. Watch lifecycle `kind` strings name the scoped resource and any
-reclaim, swap, or quota-throttle label; a mechanism change stays `persistent`.
+reclaim, swap, possible-thrashing, or quota-throttle label; a mechanism change
+stays `persistent`.
 
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 146 unit tests and ten CLI
+The current normal deterministic gate contains 148 unit tests and ten CLI
 tests. Five host-workload acceptance tests are ignored by default and run only
 when intentionally requested.
 

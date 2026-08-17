@@ -51,6 +51,7 @@ pub enum CgroupAssessmentKind {
 pub enum CgroupMechanism {
     Reclaim,
     Swap,
+    PossibleThrashing,
     CpuQuotaThrottle,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1472,12 +1473,25 @@ fn cgroup_finding(
     } else {
         CgroupAssessmentKind::Pressure
     };
-    let (mechanism, mechanism_confidence) = cgroup_mechanism_label(resource, kind, group);
+    let (mechanism, mechanism_confidence) = if resource == CgroupResourceKind::Memory
+        && kind == CgroupAssessmentKind::Pressure
+        && group.memory_stat.value.as_ref().is_some_and(|stat| {
+            scoped_possible_thrashing(severity, full, window, state, observation.elapsed, stat)
+        }) {
+        (
+            Some(CgroupMechanism::PossibleThrashing),
+            Some(Confidence::Medium),
+        )
+    } else {
+        cgroup_mechanism_label(resource, kind, group)
+    };
     match mechanism {
-        Some(CgroupMechanism::Reclaim | CgroupMechanism::Swap) => {
+        Some(
+            CgroupMechanism::Reclaim | CgroupMechanism::Swap | CgroupMechanism::PossibleThrashing,
+        ) => {
             qualifiers.push(Qualifier {
                 kind: "cgroup_memory_mechanism_same_window_correlation",
-                message: "Cgroup memory.stat page deltas occurred in the same window as scoped PSI pressure; they support a reclaim or swap label but do not prove causality.",
+                message: "Cgroup memory.stat page deltas occurred in the same window as scoped PSI pressure; they support a reclaim, swap, or possible-thrashing label but do not prove causality.",
             });
         }
         Some(CgroupMechanism::CpuQuotaThrottle) => {
@@ -1487,6 +1501,12 @@ fn cgroup_finding(
             });
         }
         None => {}
+    }
+    if mechanism == Some(CgroupMechanism::PossibleThrashing) {
+        qualifiers.push(Qualifier {
+            kind: "cgroup_possible_thrashing_heuristic",
+            message: "Scoped possible thrashing requires sustained high `some`, non-trivial valid `full`, and material direct-reclaim plus bidirectional swap churn over the cgroup observation interval; it remains a heuristic and may include descendant activity.",
+        });
     }
     let confidence = if kind == CgroupAssessmentKind::InsufficientObservation {
         Confidence::Low
@@ -1510,6 +1530,12 @@ fn cgroup_finding(
             "Scoped memory swap pressure observed in {} ({:.2}% cgroup PSI some).",
             group.path,
             some.unwrap_or(0.0) * 100.0
+        ),
+        (CgroupAssessmentKind::Pressure, Some(CgroupMechanism::PossibleThrashing)) => format!(
+            "Scoped memory evidence is consistent with possible thrashing in {} ({:.2}% some, {:.2}% full PSI).",
+            group.path,
+            some.unwrap_or(0.0) * 100.0,
+            full.unwrap_or(0.0) * 100.0
         ),
         (CgroupAssessmentKind::Pressure, Some(CgroupMechanism::CpuQuotaThrottle)) => format!(
             "Scoped CPU quota-throttle pressure observed in {} ({:.2}% cgroup PSI some).",
@@ -1556,6 +1582,41 @@ fn cgroup_finding(
         members,
         qualifiers,
     }
+}
+
+fn scoped_possible_thrashing(
+    severity: Severity,
+    full: Option<f64>,
+    psi_window: Option<Duration>,
+    psi_state: CgroupPsiIntervalState,
+    observation_elapsed: Duration,
+    stat: &CgroupMemoryStatRaw,
+) -> bool {
+    matches!(severity, Severity::High | Severity::Severe)
+        && psi_window.is_some_and(|window| window >= Duration::from_secs(5))
+        && matches!(psi_state, CgroupPsiIntervalState::Available)
+        && full.is_some_and(|fraction| fraction >= 0.01)
+        && !observation_elapsed.is_zero()
+        && page_rate_at_least(
+            stat.pgscan_direct,
+            observation_elapsed,
+            THRASHING_MIN_PAGE_RATE_PER_SEC,
+        )
+        && page_rate_at_least(
+            stat.pgsteal_direct,
+            observation_elapsed,
+            THRASHING_MIN_PAGE_RATE_PER_SEC,
+        )
+        && page_rate_at_least(
+            stat.pswpin,
+            observation_elapsed,
+            THRASHING_MIN_PAGE_RATE_PER_SEC,
+        )
+        && page_rate_at_least(
+            stat.pswpout,
+            observation_elapsed,
+            THRASHING_MIN_PAGE_RATE_PER_SEC,
+        )
 }
 
 fn cgroup_mechanism_label(
@@ -1991,6 +2052,13 @@ mod tests {
         group
     }
 
+    fn with_memory_full(mut group: CgroupInterval, full_us: Option<u64>) -> CgroupInterval {
+        if let Some(psi) = group.memory_pressure.value.as_mut() {
+            psi.full_total_usec = full_us;
+        }
+        group
+    }
+
     fn scoped_memory_io_observation(
         groups: Vec<CgroupInterval>,
         elapsed: Duration,
@@ -2202,6 +2270,240 @@ mod tests {
                 .iter()
                 .all(|finding| finding.kind != CgroupAssessmentKind::Pressure),
             "page counters must not create a pressure verdict"
+        );
+    }
+
+    #[test]
+    fn cgroup_memory_stat_labels_possible_thrashing_without_creating_pressure() {
+        let elapsed = Duration::from_secs(5);
+        let some_us = 1_000_000; // 20% over 5s: high severity
+        let full_us = 100_000; // 2% valid full
+        let material = 5_120;
+        let thrash = scoped_memory_io_observation(
+            vec![with_memory_full(
+                with_cgroup_stat(
+                    scoped_memory_io_group(
+                        "/workload.service",
+                        Some(some_us),
+                        None,
+                        None,
+                        cgroup_events(None, None),
+                        elapsed,
+                    ),
+                    cgroup_stat(
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                    ),
+                ),
+                Some(full_us),
+            )],
+            elapsed,
+        );
+        let finding = memory_finding(&thrash);
+        assert_eq!(finding.kind, CgroupAssessmentKind::Pressure);
+        assert_eq!(finding.severity, Severity::High);
+        assert_eq!(finding.mechanism, Some(CgroupMechanism::PossibleThrashing));
+        assert_eq!(finding.mechanism_confidence, Some(Confidence::Medium));
+        assert!(finding.summary.contains("possible thrashing"));
+        assert!(!finding.summary.to_lowercase().contains("cause"));
+        assert!(
+            finding
+                .qualifiers
+                .iter()
+                .any(|qualifier| qualifier.kind == "cgroup_possible_thrashing_heuristic")
+        );
+
+        let slower = scoped_memory_io_observation(
+            vec![with_memory_full(
+                with_cgroup_stat(
+                    scoped_memory_io_group(
+                        "/workload.service",
+                        Some(some_us),
+                        None,
+                        None,
+                        cgroup_events(None, None),
+                        elapsed,
+                    ),
+                    cgroup_stat(
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                    ),
+                ),
+                Some(full_us),
+            )],
+            Duration::from_secs(10),
+        );
+        assert_eq!(
+            memory_finding(&slower).mechanism,
+            Some(CgroupMechanism::Swap),
+            "page rates must use the cgroup observation interval, not the PSI interval"
+        );
+
+        let short = scoped_memory_io_observation(
+            vec![with_memory_full(
+                with_cgroup_stat(
+                    scoped_memory_io_group(
+                        "/workload.service",
+                        Some(400_000),
+                        None,
+                        None,
+                        cgroup_events(None, None),
+                        Duration::from_secs(2),
+                    ),
+                    cgroup_stat(
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                    ),
+                ),
+                Some(40_000),
+            )],
+            Duration::from_secs(2),
+        );
+        assert_eq!(
+            memory_finding(&short).mechanism,
+            Some(CgroupMechanism::Swap),
+            "a PSI window shorter than 5s must not receive a scoped thrashing label"
+        );
+
+        let moderate = scoped_memory_io_observation(
+            vec![with_memory_full(
+                with_cgroup_stat(
+                    scoped_memory_io_group(
+                        "/workload.service",
+                        Some(800_000),
+                        None,
+                        None,
+                        cgroup_events(None, None),
+                        Duration::from_secs(10),
+                    ),
+                    cgroup_stat(Some(10_240), Some(10_240), Some(10_240), Some(10_240)),
+                ),
+                Some(200_000),
+            )],
+            Duration::from_secs(10),
+        );
+        assert_eq!(
+            memory_finding(&moderate).mechanism,
+            Some(CgroupMechanism::Swap),
+            "moderate some must not be labeled possible thrashing"
+        );
+
+        let missing_full = scoped_memory_io_observation(
+            vec![with_cgroup_stat(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    Some(some_us),
+                    None,
+                    None,
+                    cgroup_events(None, None),
+                    elapsed,
+                ),
+                cgroup_stat(
+                    Some(material),
+                    Some(material),
+                    Some(material),
+                    Some(material),
+                ),
+            )],
+            elapsed,
+        );
+        assert_eq!(
+            memory_finding(&missing_full).mechanism,
+            Some(CgroupMechanism::Swap),
+            "missing full must not be labeled possible thrashing"
+        );
+
+        let mut invalid_full = scoped_memory_io_observation(
+            vec![with_memory_full(
+                with_cgroup_stat(
+                    scoped_memory_io_group(
+                        "/workload.service",
+                        Some(some_us),
+                        None,
+                        None,
+                        cgroup_events(None, None),
+                        elapsed,
+                    ),
+                    cgroup_stat(
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                    ),
+                ),
+                Some(full_us),
+            )],
+            elapsed,
+        );
+        invalid_full.groups[0]
+            .memory_pressure
+            .value
+            .as_mut()
+            .unwrap()
+            .state = CgroupPsiIntervalState::FullExceedsSome;
+        assert_eq!(
+            memory_finding(&invalid_full).mechanism,
+            Some(CgroupMechanism::Swap),
+            "invalid full must not be labeled possible thrashing"
+        );
+
+        let scan_only = scoped_memory_io_observation(
+            vec![with_memory_full(
+                with_cgroup_stat(
+                    scoped_memory_io_group(
+                        "/workload.service",
+                        Some(some_us),
+                        None,
+                        None,
+                        cgroup_events(None, None),
+                        elapsed,
+                    ),
+                    cgroup_stat(Some(material), Some(0), Some(material), Some(material)),
+                ),
+                Some(full_us),
+            )],
+            elapsed,
+        );
+        assert_eq!(
+            memory_finding(&scan_only).mechanism,
+            Some(CgroupMechanism::Swap),
+            "scan without steal is not scoped possible thrashing"
+        );
+
+        let healthy = scoped_memory_io_observation(
+            vec![with_memory_full(
+                with_cgroup_stat(
+                    scoped_memory_io_group(
+                        "/workload.service",
+                        Some(5_000),
+                        None,
+                        None,
+                        cgroup_events(None, None),
+                        elapsed,
+                    ),
+                    cgroup_stat(
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                        Some(material),
+                    ),
+                ),
+                Some(full_us),
+            )],
+            elapsed,
+        );
+        assert!(
+            analyze_cgroups(Some(&healthy))
+                .findings
+                .iter()
+                .all(|finding| finding.kind != CgroupAssessmentKind::Pressure),
+            "page counters and full PSI must not create a pressure verdict"
         );
     }
 

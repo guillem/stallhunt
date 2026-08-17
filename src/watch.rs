@@ -838,6 +838,9 @@ const fn cgroup_watch_kind(
             "cgroup_memory_reclaim_pressure"
         }
         (CgroupResourceKind::Memory, Some(CgroupMechanism::Swap)) => "cgroup_memory_swap_pressure",
+        (CgroupResourceKind::Memory, Some(CgroupMechanism::PossibleThrashing)) => {
+            "cgroup_memory_possible_thrashing"
+        }
         (CgroupResourceKind::Cpu, Some(CgroupMechanism::CpuQuotaThrottle)) => {
             "cgroup_cpu_quota_throttle_pressure"
         }
@@ -1224,6 +1227,13 @@ mod tests {
         ))
         .expect("swap pressure");
         assert_eq!(swap.kind, "cgroup_memory_swap_pressure");
+
+        let (_, thrash) = cgroup_pressure_signal(sample_cgroup_finding(
+            CgroupResourceKind::Memory,
+            Some(CgroupMechanism::PossibleThrashing),
+        ))
+        .expect("possible thrashing");
+        assert_eq!(thrash.kind, "cgroup_memory_possible_thrashing");
 
         let (_, throttle) = cgroup_pressure_signal(sample_cgroup_finding(
             CgroupResourceKind::Cpu,

@@ -212,8 +212,8 @@ the test process and does not mutate the hierarchy.
   finding. History is capped at 16 compact windows. TTY text clears the screen;
   JSON emits one `bottleneck.watch_window` object per window. Watch JSON is not
   hunt JSON and not a recording. Scoped cgroup lifecycle `kind` values name the
-  resource and any reclaim, swap, or quota-throttle label; identity remains
-  path plus resource.
+  resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
+  identity remains path plus resource.
 - M8 relates a memory reclaim, swap, or possible-thrashing finding to host I/O
   pressure as `consistent_with` when both exist. It also relates same-cgroup
   memory and I/O pressure when that path has a positive `memory.events` high or
@@ -222,13 +222,17 @@ the test process and does not mutate the hierarchy.
   evidence section; hunt JSON adds `evidence_chains`. Coincidence without the
   independent mechanism is not a chain, host findings are not linked to cgroup
   findings, and the relation is never a causal claim.
-- Scoped memory pressure findings may be labeled reclaim or swap from already
-  collected `memory.stat` page deltas (`pswpin`, or `pgscan_direct` plus
-  `pgsteal_direct`). PSI still creates the verdict; `CgroupAssessmentKind`
-  remains `Pressure`. Mechanism confidence is low. `memory.events` high/max do
-  not label the finding. Scan without steal is unlabeled. Page counters without
-  PSI do not create pressure. There is no scoped thrashing label. Watch still
-  keys off `Pressure`.
+- Scoped memory pressure findings may be labeled reclaim, swap, or possible
+  thrashing from already collected `memory.stat` page deltas (`pswpin`,
+  `pswpout`, or `pgscan_direct` plus `pgsteal_direct`). PSI still creates the
+  verdict; `CgroupAssessmentKind` remains `Pressure`. Reclaim and swap
+  mechanism confidence is low. Possible-thrashing uses the host conjunction
+  (high or severe `some`, at least 1% valid `full`, a 5s PSI window, and
+  material bidirectional swap plus direct-reclaim rates over the cgroup
+  observation interval) and has medium mechanism confidence. `memory.events`
+  high/max do not label the finding. Scan without steal is unlabeled reclaim.
+  Page counters without PSI do not create pressure. Watch still keys off
+  `Pressure`.
 - Scoped CPU pressure findings may be labeled quota-throttle from an already
   collected `cpu.stat` `throttled_usec` delta. PSI still creates the verdict;
   `CgroupAssessmentKind` remains `Pressure`. Mechanism confidence is low.
@@ -294,10 +298,12 @@ the test process and does not mutate the hierarchy.
   stalls, do not map processes to devices, do not link host and cgroup
   findings, and are not a watch identity. Generic memory pressure coincident
   with I/O pressure remains two findings with no chain. Direct scan without
-  steal is not a cgroup reclaim mechanism. Scoped memory findings have no
-  thrashing label, and `memory.events` high/max do not label a finding. Scoped
-  CPU quota-throttle is same-window `cpu.stat` correlation, not proof that a
-  quota caused scoped or host CPU stalls.
+  steal is not a cgroup reclaim mechanism. Scoped possible-thrashing is the
+  same provisional heuristic as the host label, using cgroup PSI `full` and
+  `memory.stat` rates over the cgroup observation interval; default 2s watch
+  windows are too short to receive it. `memory.events` high/max do not label a
+  finding. Scoped CPU quota-throttle is same-window `cpu.stat` correlation, not
+  proof that a quota caused scoped or host CPU stalls.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -403,10 +409,12 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, watch cgroup lifecycle `kind` strings were validated for reclaim,
-swap, quota-throttle, unlabeled CPU/I/O, and a mechanism change that stays
-`persistent` on the same path-plus-resource identity. Formatting and
-locked-offline Clippy passed:
+On 2026-08-17, scoped cgroup possible-thrashing labels were validated with
+deterministic analyzer coverage (positive conjunction, slower observation-
+interval rates, short PSI window, moderate `some`, missing `full`, invalid
+`full`, scan-without-steal, page counters without PSI) plus hunt text/JSON
+rendering of the label and watch `kind` `cgroup_memory_possible_thrashing`.
+Formatting and locked-offline Clippy passed:
 
 ```bash
 cargo fmt --all -- --check
@@ -414,8 +422,13 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Default-gate coverage is 146 unit tests, ten CLI tests, and five ignored
+Default-gate coverage is 148 unit tests, ten CLI tests, and five ignored
 host-workload tests.
+
+Earlier the same day, watch cgroup lifecycle `kind` strings were validated for reclaim,
+swap, quota-throttle, unlabeled CPU/I/O, and a mechanism change that stays
+`persistent` on the same path-plus-resource identity. Formatting and
+locked-offline Clippy passed; default-gate coverage was then 146 unit tests.
 
 Earlier the same day, scoped cgroup CPU quota-throttle labels were validated
 with deterministic analyzer coverage (positive `throttled_usec`,

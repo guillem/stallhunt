@@ -155,10 +155,11 @@ without changing prior resource objects.
 M4 adds a separate scoped-cgroup finding section. It reports exact cgroup PSI
 only for that cgroup scope and displays CPU, memory, and I/O controller deltas
 as qualified context. When `memory.stat` supports it, a scoped memory pressure
-line may say reclaim or swap and include low mechanism confidence; page
-counters never create that pressure line. A scoped CPU pressure line may say
-quota-throttle when `cpu.stat` shows throttled time; throttle counters never
-create that pressure line. Cgroup capability is `partial` whenever the bounded
+line may say reclaim, swap, or possible thrashing and include mechanism
+confidence; page counters never create that pressure line. Possible-thrashing
+uses the host conjunction and medium mechanism confidence. A scoped CPU pressure
+line may say quota-throttle when `cpu.stat` shows throttled time; throttle
+counters never create that pressure line. Cgroup capability is `partial` whenever the bounded
 snapshot or controller files are incomplete; this also makes the top-level hunt
 status `incomplete`, without discarding valid host findings.
 
@@ -179,8 +180,9 @@ clear/home; piped text and `--json` append. JSON is one compact
 recording, and it omits full evidence. Host memory `kind` values already name
 reclaim, swap, or possible thrashing. Scoped cgroup `kind` values name the
 resource and, when labeled, the mechanism (`cgroup_memory_reclaim_pressure`,
-`cgroup_memory_swap_pressure`, `cgroup_cpu_quota_throttle_pressure`); identity
-remains path plus resource, so a mechanism change stays `persistent`. Use
+`cgroup_memory_swap_pressure`, `cgroup_memory_possible_thrashing`,
+`cgroup_cpu_quota_throttle_pressure`); identity remains path plus resource, so
+a mechanism change stays `persistent`. Use
 `hunt --json` or `record` when the full evidence payload is required. Invalid
 `--count` still exits 2.
 

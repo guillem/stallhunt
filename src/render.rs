@@ -2730,6 +2730,108 @@ mod tests {
     }
 
     #[test]
+    fn scoped_possible_thrashing_label_is_rendered_without_claiming_causality() {
+        let elapsed = Duration::from_secs(5);
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 5_000,
+                output: OutputFormat::Json,
+            },
+            |_| {
+                let mut observation = hunt_observation();
+                observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+                observation.psi.as_mut().unwrap().interval.total_delta_us = 25_000;
+                let mut cgroup = scoped_memory_io_cgroup_observation(None, false);
+                if let Ok(value) = cgroup.observation.as_mut() {
+                    value.elapsed = elapsed;
+                    value.groups[0].memory_pressure = cgroup_resource(
+                        Some(CgroupPsiInterval {
+                            elapsed: Some(elapsed),
+                            some_total_usec: Some(1_000_000),
+                            full_total_usec: Some(100_000),
+                            state: CgroupPsiIntervalState::Available,
+                        }),
+                        CgroupFileState::Available,
+                    );
+                    value.groups[0].memory_stat = cgroup_resource(
+                        Some(CgroupMemoryStatRaw {
+                            pgscan_direct: Some(5_120),
+                            pgsteal_direct: Some(5_120),
+                            pswpin: Some(5_120),
+                            pswpout: Some(5_120),
+                        }),
+                        CgroupFileState::Available,
+                    );
+                }
+                observation.cgroup = Some(cgroup);
+                observation
+            },
+        ))
+        .unwrap();
+        let memory = json["cgroup_findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["resource"] == "memory")
+            .expect("memory finding");
+        assert_eq!(memory["kind"], "pressure");
+        assert_eq!(memory["mechanism"], "possible_thrashing");
+        assert_eq!(memory["mechanism_confidence"], "medium");
+        assert!(
+            memory["summary"]
+                .as_str()
+                .unwrap()
+                .contains("possible thrashing")
+        );
+        assert!(
+            !memory["summary"]
+                .as_str()
+                .unwrap()
+                .to_lowercase()
+                .contains("cause")
+        );
+
+        let text = hunt(
+            &HuntOptions {
+                duration_ms: 5_000,
+                output: OutputFormat::Text,
+            },
+            |_| {
+                let mut observation = hunt_observation();
+                observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+                observation.psi.as_mut().unwrap().interval.total_delta_us = 25_000;
+                let mut cgroup = scoped_memory_io_cgroup_observation(None, false);
+                if let Ok(value) = cgroup.observation.as_mut() {
+                    value.elapsed = elapsed;
+                    value.groups[0].memory_pressure = cgroup_resource(
+                        Some(CgroupPsiInterval {
+                            elapsed: Some(elapsed),
+                            some_total_usec: Some(1_000_000),
+                            full_total_usec: Some(100_000),
+                            state: CgroupPsiIntervalState::Available,
+                        }),
+                        CgroupFileState::Available,
+                    );
+                    value.groups[0].memory_stat = cgroup_resource(
+                        Some(CgroupMemoryStatRaw {
+                            pgscan_direct: Some(5_120),
+                            pgsteal_direct: Some(5_120),
+                            pswpin: Some(5_120),
+                            pswpout: Some(5_120),
+                        }),
+                        CgroupFileState::Available,
+                    );
+                }
+                observation.cgroup = Some(cgroup);
+                observation
+            },
+        );
+        assert!(text.contains("possible thrashing"));
+        assert!(text.contains("mechanism confidence medium"));
+        assert!(!text.to_lowercase().contains("caused"));
+    }
+
+    #[test]
     fn memory_partial_capability_message_describes_an_invalid_full_interval() {
         let mut observation = hunt_observation();
         let mut memory = memory_hunt_observation(0.08, Some(0.01), true);

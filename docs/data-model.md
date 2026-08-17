@@ -255,10 +255,12 @@ not be merged with or substituted for a host finding; no model edge implies a
 process-to-device or cross-cgroup causal relation. A scoped memory pressure
 finding may carry an optional `mechanism` of `reclaim` or `swap` with separate
 low `mechanism_confidence` when `memory.stat` page deltas are present in the
-same window, or `cpu_quota_throttle` when a scoped CPU finding has a positive
-`cpu.stat` `throttled_usec` delta. Those fields are omitted when unlabeled.
-`memory.events` high/max remain chain-only evidence and do not label the
-finding. `nr_throttled` without throttled time does not label CPU.
+same window, `possible_thrashing` with medium `mechanism_confidence` when the
+host thrashing conjunction is met at cgroup scope, or `cpu_quota_throttle` when
+a scoped CPU finding has a positive `cpu.stat` `throttled_usec` delta. Those
+fields are omitted when unlabeled. `memory.events` high/max remain chain-only
+evidence and do not label the finding. `nr_throttled` without throttled time
+does not label CPU.
 
 ## Confidence
 
@@ -375,8 +377,9 @@ recordings (ADR-0008). Each window stores:
 Finding identity is host CPU, host memory, host I/O, or a cgroup path plus
 resource. Healthy and insufficient observations do not create identities.
 Missing data leaves an active identity persistent and unconfirmed. A cgroup
-lifecycle `kind` names the scoped resource and any reclaim, swap, or CPU
-quota-throttle label; changing that label does not create a new identity.
+lifecycle `kind` names the scoped resource and any reclaim, swap, possible-
+thrashing, or CPU quota-throttle label; changing that label does not create a
+new identity.
 
 Watch JSON `kind` is `bottleneck.watch_window`. It is not replayable as a
 recording and does not carry full evidence.

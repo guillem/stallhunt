@@ -68,11 +68,18 @@ rank findings independently of PSI. When a scoped memory finding is already
 `Pressure`, positive `memory.stat` `pswpin` labels correlated swap pressure, and
 positive `pgscan_direct` plus `pgsteal_direct` labels correlated reclaim
 pressure. Swap wins if both are present. Scan without steal is not reclaim.
+The host possible-thrashing conjunction may also label already-pressured scoped
+memory: high or severe `some`, at least 1% valid `full`, a 5s PSI window, and
+at least 1,024 pages/second of direct scan, steal, swap-in, and swap-out over
+the independent cgroup observation interval. That label has medium mechanism
+confidence and remains a heuristic. Invalid or missing `full` cannot support
+it. Page rates use the cgroup observation interval, never the PSI interval.
 When a scoped CPU finding is already `Pressure`, a positive `cpu.stat`
 `throttled_usec` delta labels correlated quota-throttle pressure. `nr_throttled`
-without throttled time does not label. Those labels have low mechanism
-confidence and never create pressure from page counters, `memory.events`, or
-CPU throttle counters alone. There is no scoped thrashing label.
+without throttled time does not label. Reclaim and swap labels have low
+mechanism confidence. None of these labels create pressure from page counters,
+`memory.events`, or CPU throttle counters alone.
+
 Membership and same-window activity may identify a scoped workload for the
 operator, but cannot prove it caused another cgroup's delay. An inferred
 systemd unit name remains label metadata, not a causal or manager-authoritative
