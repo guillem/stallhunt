@@ -237,7 +237,9 @@ M6 adds `watch` (ADR-0008). `observe.rs` exposes start/end endpoints so the
 next window can reuse the previous end snapshot. `watch.rs` classifies host
 CPU/memory/I/O and a bounded set of cgroup pressure findings as new,
 persistent, or resolved. It keeps 16 compact history windows and does not
-retain full observations. TTY text refreshes by clearing the screen; JSON is
+retain full observations. Cgroup watch `kind` strings include the scoped
+resource and any reclaim, swap, or quota-throttle label; identity remains path
+plus resource. TTY text refreshes by clearing the screen; JSON is
 one compact `bottleneck.watch_window` object per window, not a recording and
 not hunt JSON.
 

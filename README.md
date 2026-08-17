@@ -222,8 +222,10 @@ and process keys.
 
 M6 adds `watch`. Rolling windows reuse the previous endpoint snapshot. The
 command tracks host CPU/memory/I/O and a bounded set of cgroup pressure
-findings as new, persistent, or resolved. TTY text refreshes the screen; JSON
-emits one compact `bottleneck.watch_window` object per window. Watch is not a
+findings as new, persistent, or resolved. Scoped cgroup `kind` values name the
+resource and any reclaim, swap, or quota-throttle label. TTY text refreshes the
+screen; JSON emits one compact `bottleneck.watch_window` object per window.
+Watch is not a
 TUI and is not a recording. Full evidence remains on `hunt --json` and
 `record`.
 

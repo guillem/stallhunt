@@ -374,7 +374,9 @@ recordings (ADR-0008). Each window stores:
 
 Finding identity is host CPU, host memory, host I/O, or a cgroup path plus
 resource. Healthy and insufficient observations do not create identities.
-Missing data leaves an active identity persistent and unconfirmed.
+Missing data leaves an active identity persistent and unconfirmed. A cgroup
+lifecycle `kind` names the scoped resource and any reclaim, swap, or CPU
+quota-throttle label; changing that label does not create a new identity.
 
 Watch JSON `kind` is `bottleneck.watch_window`. It is not replayable as a
 recording and does not carry full evidence.

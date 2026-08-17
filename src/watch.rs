@@ -13,8 +13,9 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::analysis::{
-    self, AssessmentKind, CgroupAssessmentKind, CgroupFinding, CgroupResourceKind, Confidence,
-    CpuFinding, IoAssessmentKind, IoFinding, MemoryAssessmentKind, MemoryFinding, Severity,
+    self, AssessmentKind, CgroupAssessmentKind, CgroupFinding, CgroupMechanism, CgroupResourceKind,
+    Confidence, CpuFinding, IoAssessmentKind, IoFinding, MemoryAssessmentKind, MemoryFinding,
+    Severity,
 };
 use crate::cli::{OutputFormat, WatchOptions};
 use crate::observe::{
@@ -821,11 +822,29 @@ fn cgroup_pressure_signal(finding: CgroupFinding) -> Option<(FindingId, Resource
             status: ObservationStatus::Pressure,
             severity: finding.severity,
             confidence: finding.resource_confidence,
-            kind: "cgroup_pressure",
+            kind: cgroup_watch_kind(finding.resource, finding.mechanism),
             summary: finding.summary,
             psi_some_fraction: finding.evidence.psi_some_fraction,
         },
     ))
+}
+
+const fn cgroup_watch_kind(
+    resource: CgroupResourceKind,
+    mechanism: Option<CgroupMechanism>,
+) -> &'static str {
+    match (resource, mechanism) {
+        (CgroupResourceKind::Memory, Some(CgroupMechanism::Reclaim)) => {
+            "cgroup_memory_reclaim_pressure"
+        }
+        (CgroupResourceKind::Memory, Some(CgroupMechanism::Swap)) => "cgroup_memory_swap_pressure",
+        (CgroupResourceKind::Cpu, Some(CgroupMechanism::CpuQuotaThrottle)) => {
+            "cgroup_cpu_quota_throttle_pressure"
+        }
+        (CgroupResourceKind::Cpu, _) => "cgroup_cpu_pressure",
+        (CgroupResourceKind::Memory, _) => "cgroup_memory_pressure",
+        (CgroupResourceKind::Io, _) => "cgroup_io_pressure",
+    }
 }
 
 fn unconfirmed_signal(kind: &'static str, summary: &str) -> ResourceSignal {
@@ -852,6 +871,8 @@ const fn severity_rank(severity: Severity) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::CgroupEvidence;
+    use crate::cgroup::{CgroupFileState, CgroupResource};
 
     fn pressure(kind: &'static str, severity: Severity, psi: f64) -> ResourceSignal {
         ResourceSignal {
@@ -1132,5 +1153,136 @@ mod tests {
         assert_eq!(json["lifecycle"][0]["state"], "new");
         assert_eq!(json["lifecycle"][0]["id"]["scope"], "cpu");
         assert_eq!(json["current"]["cpu"]["status"], "pressure");
+    }
+
+    fn sample_cgroup_finding(
+        resource: CgroupResourceKind,
+        mechanism: Option<CgroupMechanism>,
+    ) -> CgroupFinding {
+        CgroupFinding {
+            path: "/workload.service".into(),
+            resource,
+            kind: CgroupAssessmentKind::Pressure,
+            severity: Severity::High,
+            resource_confidence: Confidence::High,
+            mechanism,
+            mechanism_confidence: mechanism.map(|_| Confidence::Low),
+            summary: "scoped pressure".into(),
+            evidence: CgroupEvidence {
+                psi_some_fraction: Some(0.2),
+                psi_some_total_delta_us: Some(2_000_000),
+                psi_full_fraction: None,
+                psi_full_total_delta_us: None,
+                psi_window_us: 10_000_000,
+                psi_state: CgroupFileState::Available,
+                cpu: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                memory_current_end: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                memory_events: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                memory_stat: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                io: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+            },
+            systemd_unit_candidate: None,
+            members: vec![],
+            qualifiers: vec![],
+        }
+    }
+
+    #[test]
+    fn cgroup_watch_kind_names_mechanism_without_splitting_identity() {
+        let (reclaim_id, reclaim) = cgroup_pressure_signal(sample_cgroup_finding(
+            CgroupResourceKind::Memory,
+            Some(CgroupMechanism::Reclaim),
+        ))
+        .expect("reclaim pressure");
+        assert_eq!(
+            reclaim_id,
+            FindingId::Cgroup {
+                path: "/workload.service".into(),
+                resource: CgroupResourceKind::Memory,
+            }
+        );
+        assert_eq!(reclaim.kind, "cgroup_memory_reclaim_pressure");
+
+        let (_, swap) = cgroup_pressure_signal(sample_cgroup_finding(
+            CgroupResourceKind::Memory,
+            Some(CgroupMechanism::Swap),
+        ))
+        .expect("swap pressure");
+        assert_eq!(swap.kind, "cgroup_memory_swap_pressure");
+
+        let (_, throttle) = cgroup_pressure_signal(sample_cgroup_finding(
+            CgroupResourceKind::Cpu,
+            Some(CgroupMechanism::CpuQuotaThrottle),
+        ))
+        .expect("throttle pressure");
+        assert_eq!(throttle.kind, "cgroup_cpu_quota_throttle_pressure");
+
+        let (_, unlabeled_cpu) =
+            cgroup_pressure_signal(sample_cgroup_finding(CgroupResourceKind::Cpu, None))
+                .expect("cpu pressure");
+        assert_eq!(unlabeled_cpu.kind, "cgroup_cpu_pressure");
+
+        let (_, unlabeled_memory) =
+            cgroup_pressure_signal(sample_cgroup_finding(CgroupResourceKind::Memory, None))
+                .expect("memory pressure");
+        assert_eq!(unlabeled_memory.kind, "cgroup_memory_pressure");
+
+        let (_, unlabeled_io) =
+            cgroup_pressure_signal(sample_cgroup_finding(CgroupResourceKind::Io, None))
+                .expect("io pressure");
+        assert_eq!(unlabeled_io.kind, "cgroup_io_pressure");
+
+        let mut tracker = WatchTracker::new();
+        let id = FindingId::Cgroup {
+            path: "/workload.service".into(),
+            resource: CgroupResourceKind::Memory,
+        };
+        let mut first = host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        );
+        first.cgroups.push((
+            id.clone(),
+            pressure("cgroup_memory_reclaim_pressure", Severity::High, 0.2),
+        ));
+        first
+            .observed_cgroup_paths
+            .insert("/workload.service".into());
+        let new = tracker.ingest_signals(first);
+        assert_eq!(new.lifecycle[0].state, LifecycleState::New);
+        assert_eq!(new.lifecycle[0].kind, "cgroup_memory_reclaim_pressure");
+
+        let mut second = host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        );
+        second.cgroups.push((
+            id.clone(),
+            pressure("cgroup_memory_swap_pressure", Severity::High, 0.2),
+        ));
+        second
+            .observed_cgroup_paths
+            .insert("/workload.service".into());
+        let persistent = tracker.ingest_signals(second);
+        assert_eq!(persistent.lifecycle[0].id, id);
+        assert_eq!(persistent.lifecycle[0].state, LifecycleState::Persistent);
+        assert_eq!(persistent.lifecycle[0].kind, "cgroup_memory_swap_pressure");
     }
 }

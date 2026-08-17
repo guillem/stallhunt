@@ -176,8 +176,13 @@ snapshot. Text reports `new` / `persistent` / `resolved` pressure findings plus
 a compact current-window summary. A TTY refreshes the screen with ANSI
 clear/home; piped text and `--json` append. JSON is one compact
 `bottleneck.watch_window` object per window. It is not hunt JSON and not a
-recording, and it omits full evidence. Use `hunt --json` or `record` when that
-payload is required. Invalid `--count` still exits 2.
+recording, and it omits full evidence. Host memory `kind` values already name
+reclaim, swap, or possible thrashing. Scoped cgroup `kind` values name the
+resource and, when labeled, the mechanism (`cgroup_memory_reclaim_pressure`,
+`cgroup_memory_swap_pressure`, `cgroup_cpu_quota_throttle_pressure`); identity
+remains path plus resource, so a mechanism change stays `persistent`. Use
+`hunt --json` or `record` when the full evidence payload is required. Invalid
+`--count` still exits 2.
 
 ## Human output structure
 

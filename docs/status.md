@@ -211,7 +211,9 @@ the test process and does not mutate the hierarchy.
   not create findings; missing or short-window data does not resolve an active
   finding. History is capped at 16 compact windows. TTY text clears the screen;
   JSON emits one `bottleneck.watch_window` object per window. Watch JSON is not
-  hunt JSON and not a recording.
+  hunt JSON and not a recording. Scoped cgroup lifecycle `kind` values name the
+  resource and any reclaim, swap, or quota-throttle label; identity remains
+  path plus resource.
 - M8 relates a memory reclaim, swap, or possible-thrashing finding to host I/O
   pressure as `consistent_with` when both exist. It also relates same-cgroup
   memory and I/O pressure when that path has a positive `memory.events` high or
@@ -401,11 +403,10 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, scoped cgroup CPU quota-throttle labels were validated with
-deterministic analyzer coverage (positive `throttled_usec`, count-without-time,
-throttle counters without PSI) plus hunt text/JSON rendering of the label
-beside existing `cpu.stat` controller context. Formatting and locked-offline
-Clippy passed:
+On 2026-08-17, watch cgroup lifecycle `kind` strings were validated for reclaim,
+swap, quota-throttle, unlabeled CPU/I/O, and a mechanism change that stays
+`persistent` on the same path-plus-resource identity. Formatting and
+locked-offline Clippy passed:
 
 ```bash
 cargo fmt --all -- --check
@@ -413,8 +414,13 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Default-gate coverage is 145 unit tests, ten CLI tests, and five ignored
+Default-gate coverage is 146 unit tests, ten CLI tests, and five ignored
 host-workload tests.
+
+Earlier the same day, scoped cgroup CPU quota-throttle labels were validated
+with deterministic analyzer coverage (positive `throttled_usec`,
+count-without-time, throttle counters without PSI) plus hunt text/JSON
+rendering of the label; default-gate coverage was then 145 unit tests.
 
 Earlier the same day, scoped cgroup memory reclaim/swap labels were validated
 with deterministic analyzer coverage (reclaim, swap-wins, unlabeled high
