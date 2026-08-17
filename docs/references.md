@@ -76,6 +76,20 @@ Relevant to:
 - `io.stat`,
 - per-cgroup pressure files.
 
+For M4, this is also the authority for the cgroup2 single hierarchy, the `0::`
+`/proc/<pid>/cgroup` membership form, mount/namespace semantics, controllers,
+and membership movement while a collector observes it. Pair it with the PSI
+reference above for scoped `some`/`full` interpretation.
+
+### systemd control-group metadata
+
+- <https://www.freedesktop.org/software/systemd/man/latest/sd_pid_get_cgroup.html>
+- <https://www.freedesktop.org/software/systemd/man/latest/systemd-cgls.html>
+
+These official systemd references describe control-group paths and unit-oriented
+views. M4 deliberately does not depend on their APIs: a unit-looking component
+derived from a cgroup path is only an inferred candidate, not a D-Bus lookup.
+
 ### VM sysctls / memory subsystem context
 
 - <https://docs.kernel.org/admin-guide/sysctl/vm.html>

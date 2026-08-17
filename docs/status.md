@@ -14,6 +14,15 @@ victim attribution, process-device mapping, or causality. M2's first
 host-memory collector/analyzer/output slice is implemented, but safely
 controlled harmful-memory-pressure validation remains open.
 
+M4 design is accepted in ADR-0006; implementation and validation have not yet
+landed. The slice is cgroup-v2-only, membership-first, bounded, and
+permission-aware: mount discovery comes from mountinfo, membership from `0::`,
+and a stat-cgroup-stat identity check prevents a moved/reused PID from being
+attributed. It will read selected mapped cgroups and ancestors rather than a
+whole tree, limit itself to 1,024 PIDs and 2,048 groups plus depth/path/file
+budgets, and add only scoped PSI verdicts with controller context. Systemd unit
+names will be optional inferred path metadata; no D-Bus dependency is planned.
+
 ## Implemented
 
 - A single stable-Rust package builds the `bottleneck` binary.
@@ -162,12 +171,15 @@ controlled harmful-memory-pressure validation remains open.
 
 ## Current recommended next task
 
-Implement M4 cgroup/service attribution as the next vertical slice:
+Finish M4 cgroup/service attribution according to ADR-0006:
 
-- discover cgroup v2 and, where present, map processes to cgroups/services
-  using bounded, permission-aware collection;
+- implement mountinfo / `0::` discovery and bounded stat-cgroup-stat process
+  membership; collect only mapped groups plus ancestors;
+- add scoped PSI/controller context, capabilities, text/JSON evidence, and
+  deterministic lifecycle/budget/permission fixtures;
 - retain host PSI verdicts and qualified M1/M3 candidate semantics rather than
-  treating cgroup membership as causal proof;
+  treating cgroup membership, controller activity, or inferred systemd metadata
+  as causal proof;
 - preserve the M2 debt: safely demonstrate harmful memory pressure separately,
   with exact memory PSI `some` as verdict and `full`, meminfo, and vmstat as
   non-additive context only.

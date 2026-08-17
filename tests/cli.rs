@@ -56,6 +56,7 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
     assert_eq!(json["schema_version"], 1);
     assert_eq!(json["requested_observation"]["duration_ms"], 100);
     assert!(json["findings"].is_array());
+    assert!(json["cgroup_findings"].is_array());
 
     let capability = json["capabilities"]["cpu_psi"]["state"]
         .as_str()
@@ -86,6 +87,10 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
     ));
     assert!(matches!(
         json["capabilities"]["process_io"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
+        json["capabilities"]["cgroup_v2"]["state"].as_str(),
         Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
     ));
     assert!(matches!(
@@ -169,6 +174,7 @@ fn capabilities_json_reports_the_actual_cpu_psi_probe_state() {
         json["capabilities"]["process_io"].as_str(),
         Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
     ));
+    assert!(json["capabilities"]["cgroup_v2"]["message"].is_string());
 }
 
 #[test]

@@ -1,0 +1,1262 @@
+diff --git a/README.md b/README.md
+index 8335381..fd60fc9 100644
+--- a/README.md
++++ b/README.md
+@@ -194,3 +194,11 @@ candidates are not victims, are not mapped to one another, and do not establish
+ causality. High I/O activity with low PSI remains a healthy/no-contention result.
+ M2 controlled harmful-memory-pressure validation remains outstanding; the next
+ implementation milestone is M4 cgroup/service attribution.
++
++M4's implementation design is accepted in ADR-0006 but has not landed yet. It
++will use cgroup v2 only, discover the mounted unified hierarchy rather than
++assuming a fixed path, and map at most 1,024 stable process identities to their
++current `0::` cgroups. It will read only those groups and ancestors (at most
++2,048 groups under depth/path/file-byte budgets). Per-cgroup PSI will be a
++verdict about that scope only; controller activity and path-derived systemd unit
++candidates will be qualified context, never cross-cgroup causal proof.
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 4c748ec..62dced8 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -208,6 +208,15 @@ map processes to devices, or claim a causal path. Its controlled acceptance
+ validates that bounded rootless competing I/O can produce the PSI-backed resource
+ finding and candidates, not those unsupported attribution claims.
+ 
++M4 is designed but not implemented. ADR-0006 defines a cgroup-v2-only,
++membership-first collector: discover the actual cgroup2 mount from mountinfo,
++read the unified `0::` membership form, then map a bounded selected PID set by
++`stat` → cgroup → `stat` identity checks. It will collect only mapped cgroups
++and ancestors under explicit PID, group, depth, path, and file-byte budgets.
++Per-cgroup exact PSI will be an explicitly scoped verdict; controller counters
++will remain context. Path-derived systemd names will be optional inferred
++metadata, without D-Bus or a systemd runtime dependency.
++
+ ## Observation lifecycle
+ 
+ A bounded hunt might behave as follows:
+@@ -306,7 +315,9 @@ Do not sum unrelated short-lived processes solely by command name without making
+ 
+ ## Cgroup design
+ 
+-Prefer cgroup v2.
++M4 will use cgroup v2 only (ADR-0006). It will discover the mounted hierarchy rather
++than assuming `/sys/fs/cgroup`, uses the unified `0::` membership entry, and
++reads selected mapped cgroups plus ancestors rather than an arbitrary tree.
+ 
+ Cgroups are important because a "cause" or "victim" is often better expressed as:
+ 
+@@ -316,7 +327,11 @@ system.slice/postgresql.service
+ 
+ than as dozens of PIDs.
+ 
+-Early releases may implement process-level findings first, but normalized identifiers should not make cgroup-aware findings impossible later.
++Exact per-cgroup PSI is a finding only about that cgroup's scope. CPU, memory,
++and I/O controller counters provide scoped context but do not create a pressure
++verdict by themselves. A cgroup path or path-derived systemd unit candidate is
++not evidence that the cgroup caused any other cgroup's delay. Missing controllers
++and permissions are capability/collection qualifiers.
+ 
+ ## Evidence graph
+ 
+diff --git a/docs/codex-workflow.md b/docs/codex-workflow.md
+index 2f82399..5226dcc 100644
+--- a/docs/codex-workflow.md
++++ b/docs/codex-workflow.md
+@@ -40,13 +40,19 @@ Read AGENTS.md and all required project documentation. Inspect the existing
+ Rust implementation before proposing new abstractions.
+ 
+ Implement M4 cgroup/service attribution as the smallest coherent vertical
+-slice. Use cgroup v2 only where it is mounted and readable; keep collection
+-bounded and permission-aware.
++slice. Follow ADR-0006: use cgroup v2 only, discover the mount from mountinfo
++and membership from `0::`, retain stable stat-cgroup-stat mappings for no more
++than 1,024 PIDs, and inspect only mapped cgroups plus ancestors (at most 2,048
++groups under depth/path/file-byte budgets). Keep collection bounded and
++permission-aware.
+ 
+ Requirements:
+ - preserve host PSI verdicts and existing finding-first text/full JSON evidence,
+ - present cgroup/service membership and resource activity as scoped context, not
+   proof that a workload caused another workload's delay,
++- make per-cgroup exact PSI a verdict only for its own scope; controller counters
++  are context, and path-derived systemd names are inferred metadata without a
++  D-Bus/runtime dependency,
+ - retain M3's exact I/O PSI `some` verdict and non-additive `full` context; do
+   not infer device/process mapping, victims, or causality from activity,
+ - leave M2's controlled harmful-memory-pressure validation as explicit
+diff --git a/docs/data-model.md b/docs/data-model.md
+index 5c615ba..bfc09e8 100644
+--- a/docs/data-model.md
++++ b/docs/data-model.md
+@@ -98,7 +98,10 @@ struct ThreadKey {
+ 
+ ### Cgroup
+ 
+-Use normalized cgroup-v2 path plus mount identity if necessary.
++M4's intended key is a normalized cgroup-v2 path plus discovered mount identity.
++It is not implemented yet. Preserve scope separately from an optional
++path-derived systemd unit candidate; the latter is presentation metadata, not a
++stable identity or authoritative manager lookup.
+ 
+ ### Block device
+ 
+@@ -118,6 +121,10 @@ struct Capabilities {
+     process_schedstat: CapabilityState,
+     process_io: CapabilityState,
+     cgroup_v2: CapabilityState,
++    cgroup_cpu: CapabilityState,
++    cgroup_memory: CapabilityState,
++    cgroup_io: CapabilityState,
++    cgroup_psi: CapabilityState,
+     delay_accounting: CapabilityState,
+ }
+ ```
+@@ -238,6 +245,14 @@ end-snapshot gauge, and each counter delta may be absent after reset. The two
+ candidate lists are correlation-only same-window context, not a process-to-device
+ mapping, causal chain, or victim model.
+ 
++M4 is intended to add an additive `CgroupObservation` to pre-1.0 JSON: mount
++identity, stable process-to-cgroup memberships, bounded snapshots, per-scope
++PSI intervals, controller context, inferred unit candidates, and typed
++collection issues. Membership retains the process key proven by a
++stat-cgroup-stat sequence. A cgroup PSI finding carries cgroup scope and must
++not be merged with or substituted for a host finding; no model edge implies a
++process-to-device or cross-cgroup causal relation.
++
+ ## Confidence
+ 
+ Suggested vocabulary:
+diff --git a/docs/decisions/README.md b/docs/decisions/README.md
+index 77c37ba..d41eb24 100644
+--- a/docs/decisions/README.md
++++ b/docs/decisions/README.md
+@@ -47,3 +47,4 @@ What credible options were rejected and why?
+ - [`0003-procfs-first-ebpf-later.md`](0003-procfs-first-ebpf-later.md)
+ - [`0004-evidence-not-certainty.md`](0004-evidence-not-certainty.md)
+ - [`0005-git-as-project-memory.md`](0005-git-as-project-memory.md)
++- [`0006-cgroup-v2-scoped-attribution.md`](0006-cgroup-v2-scoped-attribution.md)
+diff --git a/docs/inference-engine.md b/docs/inference-engine.md
+index ad4ca47..5e77a8a 100644
+--- a/docs/inference-engine.md
++++ b/docs/inference-engine.md
+@@ -55,6 +55,20 @@ Later I/O hypotheses:
+ - device-level latency/saturation,
+ - likely process/cgroup contributor.
+ 
++## Planned M4 cgroup scope rule
++
++M4 will add bounded cgroup-v2 evidence without changing the existing host
++verdict rules. A valid exact interval from a cgroup's own PSI file supports a
++finding about that cgroup scope; it does not establish host pressure, or vice
++versa. Per-cgroup `full` is non-additive subset context.
++
++Per-cgroup `cpu.stat`, memory, and I/O controller measurements will rank or
++explain activity only after a scoped PSI verdict, subject to collection
++qualifiers. Membership and same-window activity may identify a scoped workload
++for the operator, but cannot prove it caused another cgroup's delay. An inferred
++systemd unit name remains label metadata, not a causal or manager-authoritative
++claim.
++
+ ## CPU v0.1 inference
+ 
+ ### Step 1: establish contention
+diff --git a/docs/references.md b/docs/references.md
+index 79351b3..9456a16 100644
+--- a/docs/references.md
++++ b/docs/references.md
+@@ -76,6 +76,20 @@ Relevant to:
+ - `io.stat`,
+ - per-cgroup pressure files.
+ 
++For M4, this is also the authority for the cgroup2 single hierarchy, the `0::`
++`/proc/<pid>/cgroup` membership form, mount/namespace semantics, controllers,
++and membership movement while a collector observes it. Pair it with the PSI
++reference above for scoped `some`/`full` interpretation.
++
++### systemd control-group metadata
++
++- <https://www.freedesktop.org/software/systemd/man/latest/sd_pid_get_cgroup.html>
++- <https://www.freedesktop.org/software/systemd/man/latest/systemd-cgls.html>
++
++These official systemd references describe control-group paths and unit-oriented
++views. M4 deliberately does not depend on their APIs: a unit-looking component
++derived from a cgroup path is only an inferred candidate, not a D-Bus lookup.
++
+ ### VM sysctls / memory subsystem context
+ 
+ - <https://docs.kernel.org/admin-guide/sysctl/vm.html>
+diff --git a/docs/roadmap.md b/docs/roadmap.md
+index d7282e1..f16a351 100644
+--- a/docs/roadmap.md
++++ b/docs/roadmap.md
+@@ -172,8 +172,9 @@ overclaiming victim or causal mapping.
+ 
+ ## Milestone 4 — Cgroup/systemd awareness
+ 
+-Status: next implementation milestone. M2's controlled harmful-memory-pressure
+-validation remains an outstanding cross-cutting validation debt.
++Status: in progress (design accepted in ADR-0006; implementation and validation
++are not yet complete). M2's controlled harmful-memory-pressure validation
++remains an outstanding cross-cutting validation debt.
+ 
+ Goal:
+ 
+@@ -181,11 +182,16 @@ Make findings useful on modern service/container hosts.
+ 
+ Deliver:
+ 
+-- cgroup v2 discovery,
+-- per-cgroup CPU/memory/I/O/PSI where available,
+-- mapping processes to cgroups,
+-- aggregate findings,
+-- optional systemd unit metadata without hard dependency if feasible.
++- cgroup-v2 mount discovery using mountinfo and `0::` unified membership only;
++- stat-cgroup-stat stable mapping for at most 1,024 selected PIDs;
++- mapped cgroups plus ancestors only, capped at 2,048 groups with depth/path/
++  file-byte budgets;
++- scoped per-cgroup PSI verdicts plus CPU/memory/I/O controller context where
++  readable;
++- additive pre-1.0 JSON and explicit partial-permission/controller qualifiers;
++- optional path-derived, explicitly inferred systemd unit candidate without
++  D-Bus or a runtime dependency;
++- no whole-tree scan, cgroup-v1 support, or cross-cgroup causal attribution.
+ 
+ ## Milestone 5 — Recording and replay
+ 
+diff --git a/docs/security-privileges.md b/docs/security-privileges.md
+index f23f79b..2289f1d 100644
+--- a/docs/security-privileges.md
++++ b/docs/security-privileges.md
+@@ -35,6 +35,19 @@ Future eBPF/perf/tracepoint capabilities may require:
+ 
+ Do not make this the default execution mode.
+ 
++### Planned M4 cgroup-v2 collection
++
++M4 reads only from the caller-visible cgroup2 mount and procfs membership files;
++it does not create, move, configure, or delete cgroups. Mount namespaces and
++delegation may intentionally hide ancestors or controller files. Such absence is
++reported as partial capability/context rather than worked around with privilege
++escalation. Bounded membership-first reads (1,024 PIDs, 2,048 groups plus depth,
++path, and file-byte limits) protect against a large or adversarial hierarchy.
++
++Cgroup paths and inferred unit names can disclose service, user, or container
++structure. They are sensitive collection output alongside process names and
++command lines.
++
+ ## Degradation
+ 
+ When access is denied:
+diff --git a/docs/status.md b/docs/status.md
+index 039eed3..99b8a61 100644
+--- a/docs/status.md
++++ b/docs/status.md
+@@ -14,6 +14,15 @@ victim attribution, process-device mapping, or causality. M2's first
+ host-memory collector/analyzer/output slice is implemented, but safely
+ controlled harmful-memory-pressure validation remains open.
+ 
++M4 design is accepted in ADR-0006; implementation and validation have not yet
++landed. The slice is cgroup-v2-only, membership-first, bounded, and
++permission-aware: mount discovery comes from mountinfo, membership from `0::`,
++and a stat-cgroup-stat identity check prevents a moved/reused PID from being
++attributed. It will read selected mapped cgroups and ancestors rather than a
++whole tree, limit itself to 1,024 PIDs and 2,048 groups plus depth/path/file
++budgets, and add only scoped PSI verdicts with controller context. Systemd unit
++names will be optional inferred path metadata; no D-Bus dependency is planned.
++
+ ## Implemented
+ 
+ - A single stable-Rust package builds the `bottleneck` binary.
+@@ -162,12 +171,15 @@ controlled harmful-memory-pressure validation remains open.
+ 
+ ## Current recommended next task
+ 
+-Implement M4 cgroup/service attribution as the next vertical slice:
++Finish M4 cgroup/service attribution according to ADR-0006:
+ 
+-- discover cgroup v2 and, where present, map processes to cgroups/services
+-  using bounded, permission-aware collection;
++- implement mountinfo / `0::` discovery and bounded stat-cgroup-stat process
++  membership; collect only mapped groups plus ancestors;
++- add scoped PSI/controller context, capabilities, text/JSON evidence, and
++  deterministic lifecycle/budget/permission fixtures;
+ - retain host PSI verdicts and qualified M1/M3 candidate semantics rather than
+-  treating cgroup membership as causal proof;
++  treating cgroup membership, controller activity, or inferred systemd metadata
++  as causal proof;
+ - preserve the M2 debt: safely demonstrate harmful memory pressure separately,
+   with exact memory PSI `some` as verdict and `full`, meminfo, and vmstat as
+   non-additive context only.
+diff --git a/docs/telemetry.md b/docs/telemetry.md
+index 7f11f0e..3c48389 100644
+--- a/docs/telemetry.md
++++ b/docs/telemetry.md
+@@ -22,7 +22,7 @@ The first implementation should use kernel/user-space interfaces that are alread
+ | Disk counters | `/proc/diskstats` | device | P1 | device-level activity/queue context |
+ | Memory | `/proc/meminfo` | host | P1 | occupancy/reclaim/swap context |
+ | VM counters | `/proc/vmstat` | host | P1 | reclaim, swap, fault context |
+-| cgroups | `/sys/fs/cgroup` | cgroup | P1/P2 | service/container grouping |
++| cgroups | discovered cgroup2 mount | cgroup | P1/P2 | bounded service/container grouping |
+ 
+ Priority:
+ - P0: CPU vertical slice
+@@ -281,13 +281,32 @@ Device-level saturation can be high confidence while process attribution remains
+ 
+ ## Cgroup v2
+ 
+-Eventually collect per-cgroup:
++M4 is planned under ADR-0006 and is not implemented yet. It will support only
++cgroup v2: locate its mount from `/proc/self/mountinfo`, and use the unified
++`0::` record from `/proc/<pid>/cgroup` rather than assuming a fixed mount path.
++Membership is checked as `stat` → cgroup → `stat`, retaining it only when PID
++plus start time remains stable.
++
++The collector will select at most 1,024 PIDs per endpoint and retain at most
++2,048 mapped cgroups including ancestors. It will not recursively enumerate an
++arbitrary tree. Normalized paths, depth, and each cgroup-file read will have
++explicit byte budgets; caps, namespace visibility, permissions, controller
++absence, movement, and parse errors will be typed qualifiers.
++
++For retained cgroups, it is intended to collect:
+ 
+ - CPU statistics,
+ - memory events/current,
+ - I/O statistics,
+ - PSI files where available.
+ 
++Exact per-cgroup PSI `some` will establish a verdict for that scope only.
++`full` remains non-additive subset context, while `cpu.stat`, memory, and I/O
++controller files contextualize it. Membership and counters cannot establish
++cross-cgroup causality. Recognizable systemd-looking path components may produce
++an explicitly inferred unit candidate; no D-Bus, libsystemd, or manager is
++required.
++
+ Benefits:
+ 
+ - systemd service attribution,
+@@ -389,7 +408,7 @@ Memory PSI               yes
+ I/O PSI                  yes
+ Per-process schedstat    yes
+ Per-process I/O          partial (permission-limited)
+-cgroup v2                yes
++cgroup v2                yes / partial / unavailable
+ eBPF tracing             unavailable (not required)
+ ```
+ 
+diff --git a/docs/testing.md b/docs/testing.md
+index 72d8a5a..cd3484a 100644
+--- a/docs/testing.md
++++ b/docs/testing.md
+@@ -134,6 +134,18 @@ checkout-local temporary path, with direct/sync/fsync behavior and an
+ eight-second coordinator bound. The test asserts a PSI-backed I/O-pressure
+ finding while preserving the lack of victim, process-device, and causal claims.
+ 
++M4 must add deterministic cgroup-v2 fixture trees for mountinfo and `0::`
++membership parsing, normalized-path validation, ancestor selection, every
++collection budget, controller/missing-permission degradation, process movement
++and PID reuse across the stat-cgroup-stat check, scoped PSI interval rules, and
++path-derived systemd candidate labeling. Analyzer coverage must include positive,
++negative, boundary, missing-data, and contradictory host-versus-cgroup PSI
++cases. No test may encode cgroup membership or counter activity as causal proof.
++
++Any live cgroup test must be ignored by default, use only a uniquely owned
++delegated/readable subtree, enforce cleanup and timeouts, and skip rather than
++mutate an arbitrary host hierarchy when delegation is absent.
++
+ Mark environment-dependent tests clearly.
+ 
+ The current normal deterministic gate contains 103 unit tests and six CLI
+diff --git a/src/analysis.rs b/src/analysis.rs
+index be27480..46966ba 100644
+--- a/src/analysis.rs
++++ b/src/analysis.rs
+@@ -4,6 +4,9 @@ use std::time::Duration;
+ 
+ use serde::Serialize;
+ 
++use crate::cgroup::{
++    CgroupFileState, CgroupObservation, CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
++};
+ use crate::cpu::{
+     self, CpuProcessObservation, ProcessKey, ProcessSchedulerDelayInterval, SchedstatCapability,
+ };
+@@ -23,6 +26,54 @@ pub const IO_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
+ const THRASHING_MIN_PAGE_RATE_PER_SEC: u64 = 1_024;
+ const SUSPECT_MIN_FRACTION: f64 = 0.25;
+ 
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub enum CgroupResourceKind {
++    Cpu,
++    Memory,
++    Io,
++}
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub enum CgroupAssessmentKind {
++    NoMeaningfulPressure,
++    Pressure,
++    InsufficientObservation,
++}
++#[derive(Debug, Clone, PartialEq, Serialize)]
++pub struct CgroupEvidence {
++    pub psi_some_fraction: Option<f64>,
++    pub psi_some_total_delta_us: Option<u64>,
++    pub psi_full_fraction: Option<f64>,
++    pub psi_full_total_delta_us: Option<u64>,
++    pub psi_window_us: u128,
++    pub psi_state: CgroupFileState,
++}
++#[derive(Debug, Clone, PartialEq, Serialize)]
++pub struct CgroupFinding {
++    pub path: String,
++    pub resource: CgroupResourceKind,
++    pub kind: CgroupAssessmentKind,
++    pub severity: Severity,
++    pub resource_confidence: Confidence,
++    pub summary: String,
++    pub evidence: CgroupEvidence,
++    pub systemd_unit_candidate: Option<String>,
++    pub members: Vec<CgroupMember>,
++    pub qualifiers: Vec<Qualifier>,
++}
++#[derive(Debug, Clone, PartialEq, Serialize)]
++pub struct CgroupMember {
++    pub key: ProcessKey,
++    pub name: String,
++    pub label: &'static str,
++}
++#[derive(Debug, Clone, Default, PartialEq, Serialize)]
++pub struct CgroupAnalysisResult {
++    pub findings: Vec<CgroupFinding>,
++    pub qualifiers: Vec<Qualifier>,
++}
++
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+ #[serde(rename_all = "snake_case")]
+ pub enum Severity {
+@@ -953,6 +1004,239 @@ const fn no_io_victim_attribution_qualifier() -> Qualifier {
+     }
+ }
+ 
++/// Analyze scoped cgroup PSI independently of host findings.  Cgroup-local
++/// pressure is not evidence that the group caused host-wide pressure.
++pub fn analyze_cgroups(observation: Option<&CgroupObservation>) -> CgroupAnalysisResult {
++    let Some(observation) = observation else {
++        return CgroupAnalysisResult::default();
++    };
++    let mut all_findings = Vec::new();
++    for group in &observation.groups {
++        for (resource, psi) in [
++            (CgroupResourceKind::Cpu, &group.cpu_pressure),
++            (CgroupResourceKind::Memory, &group.memory_pressure),
++            (CgroupResourceKind::Io, &group.io_pressure),
++        ] {
++            all_findings.push(cgroup_finding(group, resource, psi, observation));
++        }
++    }
++    all_findings.sort_by(|left, right| {
++        severity_rank(right.severity)
++            .cmp(&severity_rank(left.severity))
++            .then_with(|| {
++                confidence_rank(right.resource_confidence)
++                    .cmp(&confidence_rank(left.resource_confidence))
++            })
++            .then_with(|| {
++                right
++                    .evidence
++                    .psi_some_fraction
++                    .partial_cmp(&left.evidence.psi_some_fraction)
++                    .unwrap_or(std::cmp::Ordering::Equal)
++            })
++            .then_with(|| left.path.cmp(&right.path))
++            .then_with(|| {
++                cgroup_resource_rank(left.resource).cmp(&cgroup_resource_rank(right.resource))
++            })
++    });
++    let mut findings: Vec<_> = all_findings
++        .iter()
++        .filter(|finding| finding.kind == CgroupAssessmentKind::Pressure)
++        .cloned()
++        .collect();
++    findings.truncate(64);
++    if findings.is_empty()
++        && let Some(summary) = all_findings.into_iter().next()
++    {
++        findings.push(summary);
++    }
++    CgroupAnalysisResult {
++        findings,
++        qualifiers: vec![],
++    }
++}
++
++fn cgroup_resource_rank(resource: CgroupResourceKind) -> u8 {
++    match resource {
++        CgroupResourceKind::Cpu => 0,
++        CgroupResourceKind::Memory => 1,
++        CgroupResourceKind::Io => 2,
++    }
++}
++
++fn cgroup_finding(
++    group: &crate::cgroup::CgroupInterval,
++    resource: CgroupResourceKind,
++    psi: &CgroupResource<CgroupPsiInterval>,
++    observation: &CgroupObservation,
++) -> CgroupFinding {
++    let mut qualifiers = vec![
++        Qualifier {
++            kind: "cgroup_scoped_evidence",
++            message: "This is cgroup-scoped PSI evidence. It does not establish that this cgroup caused host pressure or that host pressure affected this cgroup.",
++        },
++        Qualifier {
++            kind: "cgroup_context_not_causality",
++            message: "CPU, memory, I/O counters, gauges, and stable membership are context only; they do not establish a cross-resource or process causal relationship.",
++        },
++        Qualifier {
++            kind: "cgroup_hierarchy_overlaps",
++            message: "Ancestor and child cgroup scopes can overlap because parent controller and PSI data may include descendants; findings are not independent and are never summed.",
++        },
++        Qualifier {
++            kind: "cgroup_path_lifetime_uncertain",
++            message: "A stable cgroup path has no generation counter, so deletion and recreation at the same path cannot be ruled out.",
++        },
++    ];
++    if group.systemd_unit_candidate.is_some() {
++        qualifiers.push(Qualifier { kind: "systemd_unit_candidate", message: "The systemd-looking final path component is a presentation-only candidate, not authoritative unit identity." });
++    }
++    if observation.issues.members_moved != 0
++        || observation.issues.members_reused != 0
++        || observation.issues.members_appeared != 0
++        || observation.issues.members_exited != 0
++    {
++        qualifiers.push(Qualifier { kind: "cgroup_membership_changed", message: "Membership changed during the interval; only stable same-path members are retained, so membership context is partial." });
++    }
++    if observation.issues.process_limit_reached
++        || observation.issues.cgroup_limit_reached
++        || observation.issues.process_permission_denied != 0
++        || observation.issues.cgroup_permission_denied != 0
++    {
++        qualifiers.push(Qualifier {
++            kind: "cgroup_collection_partial",
++            message: "Bounded collection or permissions made cgroup context partial.",
++        });
++    }
++    let window = psi.value.as_ref().and_then(|interval| interval.elapsed);
++    let window_us = window.map(|duration| duration.as_micros()).unwrap_or(0);
++    let members = observation
++        .members
++        .iter()
++        .filter(|member| {
++            member.cgroup_path == group.path
++                || (group.path == "/"
++                    || member
++                        .cgroup_path
++                        .strip_prefix(&group.path)
++                        .is_some_and(|rest| rest.starts_with('/')))
++        })
++        .take(5)
++        .map(|member| CgroupMember {
++            key: member.key,
++            name: member.name.clone(),
++            label: if member.cgroup_path == group.path {
++                "stable_direct_cgroup_member"
++            } else {
++                "stable_descendant_cgroup_member"
++            },
++        })
++        .collect();
++    let (some, full, state) = match &psi.value {
++        Some(interval) => {
++            let some = interval
++                .some_total_usec
++                .zip(window.filter(|duration| !duration.is_zero()))
++                .map(|(value, duration)| value as f64 / duration.as_micros() as f64);
++            let full = interval
++                .full_total_usec
++                .zip(window.filter(|duration| !duration.is_zero()))
++                .map(|(value, duration)| value as f64 / duration.as_micros() as f64);
++            (some, full, interval.state)
++        }
++        None => (None, None, CgroupPsiIntervalState::Partial),
++    };
++    let insufficient = window.is_none_or(|duration| duration < MIN_DIAGNOSIS_WINDOW);
++    let some_exceeds_window = psi
++        .value
++        .as_ref()
++        .and_then(|value| value.some_total_usec)
++        .is_some_and(|value| u128::from(value) > window_us);
++    let valid_some = matches!(
++        state,
++        CgroupPsiIntervalState::Available
++            | CgroupPsiIntervalState::Partial
++            | CgroupPsiIntervalState::FullExceedsSome
++    ) && some.is_some()
++        && !some_exceeds_window;
++    let severity = if valid_some && !insufficient {
++        severity_for_psi(some.unwrap_or(0.0))
++    } else {
++        Severity::None
++    };
++    if !valid_some {
++        qualifiers.push(Qualifier { kind: "cgroup_psi_unavailable_or_invalid", message: "This cgroup PSI interval is unavailable or its `some` counter regressed; no pressure verdict was made." });
++    }
++    if some_exceeds_window {
++        qualifiers.push(Qualifier { kind: "cgroup_some_exceeds_window", message: "Cgroup PSI `some` exceeded its measured interval and was rejected as inconsistent; no pressure verdict was made." });
++    }
++    if matches!(
++        state,
++        CgroupPsiIntervalState::Partial | CgroupPsiIntervalState::FullExceedsSome
++    ) {
++        qualifiers.push(Qualifier { kind: "cgroup_full_partial", message: "Cgroup PSI `full` is partial or inconsistent; valid `some` remains the sole pressure verdict." });
++    }
++    if insufficient {
++        qualifiers.push(Qualifier {
++            kind: "insufficient_observation",
++            message: "A measured cgroup PSI interval of at least 1s is required for a diagnosis.",
++        });
++    }
++    let kind = if insufficient || !valid_some {
++        CgroupAssessmentKind::InsufficientObservation
++    } else if severity == Severity::None {
++        CgroupAssessmentKind::NoMeaningfulPressure
++    } else {
++        CgroupAssessmentKind::Pressure
++    };
++    let confidence = if kind == CgroupAssessmentKind::InsufficientObservation {
++        Confidence::Low
++    } else if window.is_some_and(|duration| duration >= Duration::from_secs(5)) {
++        Confidence::High
++    } else {
++        Confidence::Medium
++    };
++    let resource_name = match resource {
++        CgroupResourceKind::Cpu => "CPU",
++        CgroupResourceKind::Memory => "memory",
++        CgroupResourceKind::Io => "I/O",
++    };
++    let summary = match kind {
++        CgroupAssessmentKind::Pressure => format!(
++            "Scoped {resource_name} pressure observed in {} ({:.2}% cgroup PSI some).",
++            group.path,
++            some.unwrap_or(0.0) * 100.0
++        ),
++        CgroupAssessmentKind::NoMeaningfulPressure => format!(
++            "No meaningful scoped {resource_name} pressure observed in {}.",
++            group.path
++        ),
++        CgroupAssessmentKind::InsufficientObservation => format!(
++            "Scoped {resource_name} assessment for {} is insufficient or unavailable.",
++            group.path
++        ),
++    };
++    CgroupFinding {
++        path: group.path.clone(),
++        resource,
++        kind,
++        severity,
++        resource_confidence: confidence,
++        summary,
++        evidence: CgroupEvidence {
++            psi_some_fraction: some,
++            psi_some_total_delta_us: psi.value.as_ref().and_then(|x| x.some_total_usec),
++            psi_full_fraction: full,
++            psi_full_total_delta_us: psi.value.as_ref().and_then(|x| x.full_total_usec),
++            psi_window_us: window_us,
++            psi_state: psi.state,
++        },
++        systemd_unit_candidate: group.systemd_unit_candidate.clone(),
++        members,
++        qualifiers,
++    }
++}
++
+ pub fn analyze_cpu(
+     psi: Option<&CpuPsiObservation>,
+     cpu: Option<&CpuProcessObservation>,
+@@ -1175,6 +1459,7 @@ fn process_coverage_partial(cpu: &CpuProcessObservation) -> bool {
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use crate::cgroup::{CgroupCollectionIssues, CgroupInterval, CgroupPsiIntervalState};
+     use crate::cpu::{
+         HostCpuInterval, LoadAverageAvailability, ProcessCollectionIssues, ProcessCpuInterval,
+         SchedstatCollectionIssues,
+@@ -1190,6 +1475,110 @@ mod tests {
+     use serde::Deserialize;
+     use std::collections::BTreeMap;
+ 
++    fn cgroup_observation(
++        some_us: Option<u64>,
++        elapsed: Duration,
++        state: CgroupPsiIntervalState,
++    ) -> CgroupObservation {
++        let psi = CgroupResource {
++            state: CgroupFileState::Available,
++            value: Some(CgroupPsiInterval {
++                elapsed: Some(elapsed),
++                some_total_usec: some_us,
++                full_total_usec: None,
++                state,
++            }),
++        };
++        CgroupObservation {
++            elapsed,
++            members: vec![],
++            issues: CgroupCollectionIssues::default(),
++            groups: vec![CgroupInterval {
++                path: "/demo.service".into(),
++                cpu: CgroupResource {
++                    state: CgroupFileState::Missing,
++                    value: None,
++                },
++                memory_current_end: CgroupResource {
++                    state: CgroupFileState::Missing,
++                    value: None,
++                },
++                memory_events: CgroupResource {
++                    state: CgroupFileState::Missing,
++                    value: None,
++                },
++                io: CgroupResource {
++                    state: CgroupFileState::Missing,
++                    value: None,
++                },
++                cpu_pressure: psi,
++                memory_pressure: CgroupResource {
++                    state: CgroupFileState::Missing,
++                    value: None,
++                },
++                io_pressure: CgroupResource {
++                    state: CgroupFileState::Missing,
++                    value: None,
++                },
++                systemd_unit_candidate: Some("demo.service".into()),
++            }],
++        }
++    }
++
++    #[test]
++    fn cgroup_pressure_is_scoped_and_never_a_host_causal_claim() {
++        let observation = cgroup_observation(
++            Some(100_000),
++            Duration::from_secs(1),
++            CgroupPsiIntervalState::Available,
++        );
++        let finding = &analyze_cgroups(Some(&observation)).findings[0];
++        assert_eq!(finding.kind, CgroupAssessmentKind::Pressure);
++        assert_eq!(finding.severity, Severity::Moderate);
++        assert_eq!(
++            finding.systemd_unit_candidate.as_deref(),
++            Some("demo.service")
++        );
++        assert!(
++            finding
++                .qualifiers
++                .iter()
++                .any(|q| q.kind == "cgroup_scoped_evidence")
++        );
++        assert!(
++            finding
++                .qualifiers
++                .iter()
++                .any(|q| q.kind == "systemd_unit_candidate")
++        );
++        assert!(finding.qualifiers.iter().any(|q| {
++            q.message
++                .contains("does not establish that this cgroup caused host pressure")
++        }));
++    }
++
++    #[test]
++    fn cgroup_short_or_invalid_some_has_no_pressure_verdict() {
++        let short = cgroup_observation(
++            Some(5_000),
++            Duration::from_millis(500),
++            CgroupPsiIntervalState::Available,
++        );
++        assert_eq!(
++            analyze_cgroups(Some(&short)).findings[0].kind,
++            CgroupAssessmentKind::InsufficientObservation
++        );
++        let invalid = cgroup_observation(
++            None,
++            Duration::from_secs(1),
++            CgroupPsiIntervalState::SomeExceedsElapsed,
++        );
++        assert_eq!(
++            analyze_cgroups(Some(&invalid)).findings[0].kind,
++            CgroupAssessmentKind::InsufficientObservation
++        );
++    }
++
+     fn psi(fraction: f64, elapsed: Duration) -> CpuPsiObservation {
+         CpuPsiObservation {
+             requested: elapsed,
+diff --git a/src/main.rs b/src/main.rs
+index 678ee8a..125a94f 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,4 +1,5 @@
+ mod analysis;
++mod cgroup;
+ mod cli;
+ mod cpu;
+ mod io;
+@@ -25,6 +26,7 @@ fn main() -> ExitCode {
+                     memory::probe_memory_context(),
+                     psi::probe_io_psi(),
+                     io::probe_io_context(),
++                    cgroup::probe_cgroup_v2(),
+                 ),
+                 Command::Help(topic) => render::help(topic).to_owned(),
+                 Command::Version => render::version(),
+diff --git a/src/observe.rs b/src/observe.rs
+index fb38409..232fe76 100644
+--- a/src/observe.rs
++++ b/src/observe.rs
+@@ -8,6 +8,7 @@ use std::path::Path;
+ use std::thread;
+ use std::time::{Duration, Instant};
+ 
++use crate::cgroup::{self, CgroupError, CgroupObservation};
+ use crate::cpu::{self, CpuError, CpuProcessObservation};
+ use crate::io::{self as block_io, DiskstatsError, DiskstatsObservation, ProcessIoObservation};
+ use crate::memory::{self, MemoryContextError, MemoryContextObservation};
+@@ -28,6 +29,10 @@ pub struct IoHuntObservation {
+     pub diskstats: Result<DiskstatsObservation, DiskstatsError>,
+     pub processes: Result<ProcessIoObservation, DiskstatsError>,
+ }
++#[derive(Debug)]
++pub struct CgroupHuntObservation {
++    pub observation: Result<CgroupObservation, CgroupError>,
++}
+ 
+ #[derive(Debug)]
+ pub struct HuntObservation {
+@@ -39,6 +44,9 @@ pub struct HuntObservation {
+     /// `None` is reserved for injected pre-M3 fixtures. Live hunts always
+     /// populate I/O observation independently of other resource availability.
+     pub io: Option<IoHuntObservation>,
++    /// `None` is reserved for injected pre-M4 fixtures. Live hunts always
++    /// collect bounded cgroup-v2 context independently of host resources.
++    pub cgroup: Option<CgroupHuntObservation>,
+ }
+ 
+ pub fn observe_hunt(requested: Duration) -> HuntObservation {
+@@ -55,6 +63,9 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
+                 diskstats: Err(DiskstatsError::EmptyInterval),
+                 processes: Err(DiskstatsError::EmptyInterval),
+             }),
++            cgroup: Some(CgroupHuntObservation {
++                observation: Err(CgroupError::EmptyInterval),
++            }),
+         };
+     }
+ 
+@@ -72,6 +83,8 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
+     let diskstats_started_at = Instant::now();
+     let process_io_start = block_io::read_process_io_snapshot_at(Path::new("/proc"));
+     let process_io_started_at = Instant::now();
++    let cgroup_start = cgroup::read_cgroup_snapshot_at(Path::new("/proc"));
++    let cgroup_started_at = Instant::now();
+ 
+     thread::sleep(requested);
+ 
+@@ -89,6 +102,8 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
+     let io_psi_ended_at = Instant::now();
+     let cpu_psi_end = psi::read_cpu_psi();
+     let cpu_psi_ended_at = Instant::now();
++    let cgroup_end = cgroup::read_cgroup_snapshot_at(Path::new("/proc"));
++    let cgroup_ended_at = Instant::now();
+ 
+     let psi = match (cpu_psi_start, cpu_psi_end) {
+         (Ok(start), Ok(end)) => psi::interval_from_raw(
+@@ -153,6 +168,14 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
+         process_io_end,
+         process_io_ended_at.duration_since(process_io_started_at),
+     );
++    let cgroup = match (cgroup_start, cgroup_end) {
++        (Ok(start), Ok(end)) => cgroup::cgroup_interval_from_snapshots(
++            start,
++            end,
++            cgroup_ended_at.duration_since(cgroup_started_at),
++        ),
++        (Err(error), _) | (_, Err(error)) => Err(error),
++    };
+ 
+     HuntObservation {
+         psi,
+@@ -166,5 +189,8 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
+             diskstats,
+             processes,
+         }),
++        cgroup: Some(CgroupHuntObservation {
++            observation: cgroup,
++        }),
+     }
+ }
+diff --git a/src/render.rs b/src/render.rs
+index 7afc36b..02807bc 100644
+--- a/src/render.rs
++++ b/src/render.rs
+@@ -2,14 +2,19 @@ use std::time::Duration;
+ 
+ use serde::Serialize;
+ 
+-use crate::analysis::{self, AnalysisResult, AssessmentKind, IoAssessmentKind};
++use crate::analysis::{
++    self, AnalysisResult, AssessmentKind, CgroupAssessmentKind, IoAssessmentKind,
++};
++use crate::cgroup::{CgroupCapability, CgroupObservation, cgroup_capability_explanation};
+ use crate::cli::{CapabilitiesOptions, HelpTopic, HuntOptions, OutputFormat};
+ use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
+ use crate::io::{DiskstatsError, IoCapabilities, IoCapability, ProcessIoObservation};
+ use crate::memory::{
+     MemoryContextCapabilities, MemoryContextCapability, MemoryContextObservation, VmstatCounter,
+ };
+-use crate::observe::{HuntObservation, IoHuntObservation, MemoryHuntObservation};
++use crate::observe::{
++    CgroupHuntObservation, HuntObservation, IoHuntObservation, MemoryHuntObservation,
++};
+ use crate::psi::{
+     CpuPsiCapability, CpuPsiObservation, IoPsiCapability, IoPsiFullInterval, IoPsiObservation,
+     MemoryPsiCapability, MemoryPsiFullInterval, MemoryPsiObservation,
+@@ -44,6 +49,7 @@ where
+     }
+ }
+ 
++#[allow(clippy::too_many_arguments)]
+ pub fn capabilities(
+     options: &CapabilitiesOptions,
+     cpu_psi: CpuPsiCapability,
+@@ -52,10 +58,11 @@ pub fn capabilities(
+     memory: MemoryContextCapabilities,
+     io_psi: IoPsiCapability,
+     io: IoCapabilities,
++    cgroup: CgroupCapability,
+ ) -> String {
+     match options.output {
+         OutputFormat::Text => format!(
+-            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\nMemory PSI: {}\n{}\nHost /proc/meminfo: {}\nHost /proc/vmstat: {}\nI/O PSI: {}\n{}\nHost /proc/diskstats: {}\nProcess /proc/<pid>/io: {}\n",
++            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\nMemory PSI: {}\n{}\nHost /proc/meminfo: {}\nHost /proc/vmstat: {}\nI/O PSI: {}\n{}\nHost /proc/diskstats: {}\nProcess /proc/<pid>/io: {}\nCgroup v2: {}\n{}\n",
+             cpu_psi.as_str(),
+             cpu_psi.explanation(),
+             cpu.host_cpu.as_str(),
+@@ -70,6 +77,8 @@ pub fn capabilities(
+             io_psi.explanation(),
+             io.diskstats.as_str(),
+             io.process_io.as_str(),
++            cgroup.as_str(),
++            cgroup_capability_explanation(cgroup),
+         ),
+         OutputFormat::Json => to_json(&CapabilitiesJson {
+             schema_version: 1,
+@@ -98,6 +107,10 @@ pub fn capabilities(
+                 },
+                 diskstats: io.diskstats.as_str(),
+                 process_io: io.process_io.as_str(),
++                cgroup_v2: CapabilityJson {
++                    state: cgroup.as_str(),
++                    message: cgroup_capability_explanation(cgroup),
++                },
+             },
+         }),
+     }
+@@ -141,6 +154,12 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
+     if let Some(io) = result.io {
+         outputs.push((io_rank, 2, io_hunt_text(options, io)));
+     }
++    if let Some(cgroup) = result.cgroup.as_ref() {
++        let output = cgroup_hunt_text(cgroup);
++        if !output.is_empty() {
++            outputs.push(((0, 0), 3, output));
++        }
++    }
+     outputs.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+     outputs
+         .into_iter()
+@@ -149,6 +168,50 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
+         .join("\n")
+ }
+ 
++fn cgroup_hunt_text(cgroup: &CgroupHuntObservation) -> String {
++    let Ok(observation) = &cgroup.observation else {
++        return "Scoped cgroup findings\nCgroup v2 assessment unavailable.\n".into();
++    };
++    let analysis = analysis::analyze_cgroups(Some(observation));
++    let pressured: Vec<_> = analysis
++        .findings
++        .iter()
++        .filter(|finding| finding.kind == CgroupAssessmentKind::Pressure)
++        .take(10)
++        .collect();
++    if pressured.is_empty() {
++        return "Scoped cgroup findings\nNo scoped cgroup pressure findings are prominent; healthy, unavailable, and short-window groups are omitted from this bounded text summary.\n".into();
++    }
++    let mut output = String::from("Scoped cgroup findings\n");
++    for finding in pressured {
++        output.push_str(&format!(
++            "- {} · {} · severity {} · confidence {}\n",
++            finding.path,
++            finding.summary,
++            severity_name(finding.severity),
++            confidence_name(finding.resource_confidence)
++        ));
++        if let Some(unit) = &finding.systemd_unit_candidate {
++            output.push_str(&format!(
++                "  systemd path candidate: {unit} (not authoritative)\n"
++            ));
++        }
++        if !finding.members.is_empty() {
++            output.push_str(&format!(
++                "  stable members: {}\n",
++                finding
++                    .members
++                    .iter()
++                    .map(|member| member.name.as_str())
++                    .collect::<Vec<_>>()
++                    .join(", ")
++            ));
++        }
++    }
++    output.push_str("Scoped findings are not host-causality claims; overlapping ancestor and child scopes are not summed.\n");
++    output
++}
++
+ fn cpu_hunt_text(
+     options: &HuntOptions,
+     psi: Result<CpuPsiObservation, crate::psi::CpuPsiError>,
+@@ -758,6 +821,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
+     let cpu = cpu_json_parts(result.psi, result.cpu);
+     let memory = memory_json_parts(result.memory.as_ref());
+     let io = io_json_parts(result.io.as_ref());
++    let cgroup = cgroup_json_parts(result.cgroup.as_ref());
+     let status = if cpu.complete && memory.complete && io.complete {
+         "observed"
+     } else {
+@@ -774,6 +838,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
+         || io.psi.is_some()
+         || io.diskstats_observation.is_some()
+         || io.processes.is_some()
++        || cgroup.observation.is_some()
+     {
+         Some(ObservationJson::from_parts(
+             cpu.psi,
+@@ -783,6 +848,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
+             io.psi,
+             io.diskstats_observation,
+             io.processes,
++            cgroup.observation,
+         ))
+     } else {
+         None
+@@ -818,12 +884,57 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
+             },
+             diskstats: io.diskstats,
+             process_io: io.process_io,
++            cgroup_v2: CapabilityJson {
++                state: cgroup.state,
++                message: cgroup.message,
++            },
+         },
+         findings,
++        cgroup_findings: cgroup.analysis.findings,
+         qualifiers,
+     })
+ }
+ 
++struct CgroupJsonParts {
++    observation: Option<CgroupObservation>,
++    state: &'static str,
++    message: &'static str,
++    analysis: crate::analysis::CgroupAnalysisResult,
++}
++fn cgroup_json_parts(cgroup: Option<&CgroupHuntObservation>) -> CgroupJsonParts {
++    match cgroup {
++        None => CgroupJsonParts {
++            observation: None,
++            state: "not_observed",
++            message: "cgroup telemetry was not included in this injected observation.",
++            analysis: Default::default(),
++        },
++        Some(CgroupHuntObservation {
++            observation: Ok(value),
++        }) => CgroupJsonParts {
++            observation: Some(value.clone()),
++            state: "available",
++            message: "bounded cgroup v2 context was collected.",
++            analysis: analysis::analyze_cgroups(Some(value)),
++        },
++        Some(CgroupHuntObservation {
++            observation: Err(error),
++        }) => {
++            let capability = match error {
++                crate::cgroup::CgroupError::Unsupported => CgroupCapability::Unsupported,
++                crate::cgroup::CgroupError::PermissionDenied => CgroupCapability::PermissionDenied,
++                _ => CgroupCapability::Failed,
++            };
++            CgroupJsonParts {
++                observation: None,
++                state: capability.as_str(),
++                message: cgroup_capability_explanation(capability),
++                analysis: Default::default(),
++            }
++        }
++    }
++}
++
+ struct IoJsonParts {
+     psi: Option<IoPsiObservation>,
+     diskstats_observation: Option<crate::io::DiskstatsObservation>,
+@@ -1119,6 +1230,7 @@ struct HuntJson<'a> {
+     observation: Option<ObservationJson>,
+     capabilities: CapabilitiesJsonValue<'a>,
+     findings: Vec<crate::analysis::Finding>,
++    cgroup_findings: Vec<crate::analysis::CgroupFinding>,
+     qualifiers: Vec<QualifierJson<'a>>,
+ }
+ 
+@@ -1150,9 +1262,12 @@ struct ObservationJson {
+     diskstats: Option<crate::io::DiskstatsObservation>,
+     process_io_duration_us: Option<u128>,
+     process_io: Option<ProcessIoObservation>,
++    cgroup_duration_us: Option<u128>,
++    cgroup: Option<CgroupObservation>,
+ }
+ 
+ impl ObservationJson {
++    #[allow(clippy::too_many_arguments)]
+     fn from_parts(
+         psi: Option<CpuPsiObservation>,
+         cpu: Option<CpuProcessObservation>,
+@@ -1161,6 +1276,7 @@ impl ObservationJson {
+         io_psi: Option<IoPsiObservation>,
+         diskstats: Option<crate::io::DiskstatsObservation>,
+         process_io: Option<ProcessIoObservation>,
++        cgroup: Option<CgroupObservation>,
+     ) -> Self {
+         let (psi_duration_us, cpu_psi) = match psi {
+             Some(observation) => (
+@@ -1257,6 +1373,7 @@ impl ObservationJson {
+         };
+         let diskstats_duration_us = diskstats.as_ref().map(|value| value.elapsed.as_micros());
+         let process_io_duration_us = process_io.as_ref().map(|value| value.elapsed.as_micros());
++        let cgroup_duration_us = cgroup.as_ref().map(|value| value.elapsed.as_micros());
+         match cpu {
+             Some(cpu) => Self {
+                 psi_duration_us,
+@@ -1280,6 +1397,8 @@ impl ObservationJson {
+                 diskstats,
+                 process_io_duration_us,
+                 process_io,
++                cgroup_duration_us,
++                cgroup,
+             },
+             None => Self {
+                 psi_duration_us,
+@@ -1303,6 +1422,8 @@ impl ObservationJson {
+                 diskstats,
+                 process_io_duration_us,
+                 process_io,
++                cgroup_duration_us,
++                cgroup,
+             },
+         }
+     }
+@@ -1364,6 +1485,7 @@ struct CapabilitiesJsonValue<'a> {
+     io_psi: CapabilityJson<'a>,
+     diskstats: &'a str,
+     process_io: &'a str,
++    cgroup_v2: CapabilityJson<'a>,
+ }
+ 
+ #[derive(Serialize)]
+@@ -1504,6 +1626,7 @@ mod tests {
+             }),
+             memory: None,
+             io: None,
++            cgroup: None,
+         }
+     }
+ 
+@@ -1768,6 +1891,7 @@ mod tests {
+                 cpu: Err(crate::cpu::CpuError::Unreadable),
+                 memory: None,
+                 io: None,
++                cgroup: None,
+             },
+         ))
+         .unwrap();
+@@ -1786,6 +1910,7 @@ mod tests {
+                 cpu: Err(crate::cpu::CpuError::Unreadable),
+                 memory: None,
+                 io: None,
++                cgroup: None,
+             },
+         );
+         assert!(partial_text.contains("CPU interval context is unavailable"));
+@@ -1942,6 +2067,7 @@ mod tests {
+                 cpu: Err(crate::cpu::CpuError::Malformed),
+                 memory: None,
+                 io: None,
++                cgroup: None,
+             },
+         );
+         assert!(output.contains("Capability: CPU PSI failed"));
+@@ -1960,6 +2086,7 @@ mod tests {
+                 cpu: hunt_observation().cpu,
+                 memory: None,
+                 io: None,
++                cgroup: None,
+             },
+         );
+         assert!(output.contains("CPU assessment unavailable"));
+@@ -2203,6 +2330,7 @@ mod tests {
+                 cpu: Ok(cpu),
+                 memory: None,
+                 io: None,
++                cgroup: None,
+             },
+         );
+         assert_eq!(
+@@ -2241,6 +2369,7 @@ mod tests {
+                     diskstats: IoCapability::Available,
+                     process_io: IoCapability::Available,
+                 },
++                CgroupCapability::Available,
+             );
+             assert!(output.contains(&format!("CPU PSI: {}", capability.as_str())));
+             assert!(output.contains(capability.explanation()));
+diff --git a/tests/cli.rs b/tests/cli.rs
+index 023c789..68f4e10 100644
+--- a/tests/cli.rs
++++ b/tests/cli.rs
+@@ -56,6 +56,7 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
+     assert_eq!(json["schema_version"], 1);
+     assert_eq!(json["requested_observation"]["duration_ms"], 100);
+     assert!(json["findings"].is_array());
++    assert!(json["cgroup_findings"].is_array());
+ 
+     let capability = json["capabilities"]["cpu_psi"]["state"]
+         .as_str()
+@@ -88,6 +89,10 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
+         json["capabilities"]["process_io"].as_str(),
+         Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+     ));
++    assert!(matches!(
++        json["capabilities"]["cgroup_v2"]["state"].as_str(),
++        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
++    ));
+     assert!(matches!(
+         capability,
+         "available" | "unsupported" | "permission_denied" | "failed"
+@@ -169,6 +174,7 @@ fn capabilities_json_reports_the_actual_cpu_psi_probe_state() {
+         json["capabilities"]["process_io"].as_str(),
+         Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+     ));
++    assert!(json["capabilities"]["cgroup_v2"]["message"].is_string());
+ }
+ 
+ #[test]

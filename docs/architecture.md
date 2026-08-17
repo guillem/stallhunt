@@ -208,6 +208,15 @@ map processes to devices, or claim a causal path. Its controlled acceptance
 validates that bounded rootless competing I/O can produce the PSI-backed resource
 finding and candidates, not those unsupported attribution claims.
 
+M4 is designed but not implemented. ADR-0006 defines a cgroup-v2-only,
+membership-first collector: discover the actual cgroup2 mount from mountinfo,
+read the unified `0::` membership form, then map a bounded selected PID set by
+`stat` → cgroup → `stat` identity checks. It will collect only mapped cgroups
+and ancestors under explicit PID, group, depth, path, and file-byte budgets.
+Per-cgroup exact PSI will be an explicitly scoped verdict; controller counters
+will remain context. Path-derived systemd names will be optional inferred
+metadata, without D-Bus or a systemd runtime dependency.
+
 ## Observation lifecycle
 
 A bounded hunt might behave as follows:
@@ -306,7 +315,9 @@ Do not sum unrelated short-lived processes solely by command name without making
 
 ## Cgroup design
 
-Prefer cgroup v2.
+M4 will use cgroup v2 only (ADR-0006). It will discover the mounted hierarchy rather
+than assuming `/sys/fs/cgroup`, uses the unified `0::` membership entry, and
+reads selected mapped cgroups plus ancestors rather than an arbitrary tree.
 
 Cgroups are important because a "cause" or "victim" is often better expressed as:
 
@@ -316,7 +327,11 @@ system.slice/postgresql.service
 
 than as dozens of PIDs.
 
-Early releases may implement process-level findings first, but normalized identifiers should not make cgroup-aware findings impossible later.
+Exact per-cgroup PSI is a finding only about that cgroup's scope. CPU, memory,
+and I/O controller counters provide scoped context but do not create a pressure
+verdict by themselves. A cgroup path or path-derived systemd unit candidate is
+not evidence that the cgroup caused any other cgroup's delay. Missing controllers
+and permissions are capability/collection qualifiers.
 
 ## Evidence graph
 

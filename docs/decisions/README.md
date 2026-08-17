@@ -47,3 +47,4 @@ What credible options were rejected and why?
 - [`0003-procfs-first-ebpf-later.md`](0003-procfs-first-ebpf-later.md)
 - [`0004-evidence-not-certainty.md`](0004-evidence-not-certainty.md)
 - [`0005-git-as-project-memory.md`](0005-git-as-project-memory.md)
+- [`0006-cgroup-v2-scoped-attribution.md`](0006-cgroup-v2-scoped-attribution.md)

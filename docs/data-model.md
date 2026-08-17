@@ -98,7 +98,10 @@ struct ThreadKey {
 
 ### Cgroup
 
-Use normalized cgroup-v2 path plus mount identity if necessary.
+M4's intended key is a normalized cgroup-v2 path plus discovered mount identity.
+It is not implemented yet. Preserve scope separately from an optional
+path-derived systemd unit candidate; the latter is presentation metadata, not a
+stable identity or authoritative manager lookup.
 
 ### Block device
 
@@ -118,6 +121,10 @@ struct Capabilities {
     process_schedstat: CapabilityState,
     process_io: CapabilityState,
     cgroup_v2: CapabilityState,
+    cgroup_cpu: CapabilityState,
+    cgroup_memory: CapabilityState,
+    cgroup_io: CapabilityState,
+    cgroup_psi: CapabilityState,
     delay_accounting: CapabilityState,
 }
 ```
@@ -237,6 +244,14 @@ time. Diskstats sectors remain raw 512-byte-sector units, `in_flight` remains an
 end-snapshot gauge, and each counter delta may be absent after reset. The two
 candidate lists are correlation-only same-window context, not a process-to-device
 mapping, causal chain, or victim model.
+
+M4 is intended to add an additive `CgroupObservation` to pre-1.0 JSON: mount
+identity, stable process-to-cgroup memberships, bounded snapshots, per-scope
+PSI intervals, controller context, inferred unit candidates, and typed
+collection issues. Membership retains the process key proven by a
+stat-cgroup-stat sequence. A cgroup PSI finding carries cgroup scope and must
+not be merged with or substituted for a host finding; no model edge implies a
+process-to-device or cross-cgroup causal relation.
 
 ## Confidence
 

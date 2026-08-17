@@ -40,13 +40,19 @@ Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
 Implement M4 cgroup/service attribution as the smallest coherent vertical
-slice. Use cgroup v2 only where it is mounted and readable; keep collection
-bounded and permission-aware.
+slice. Follow ADR-0006: use cgroup v2 only, discover the mount from mountinfo
+and membership from `0::`, retain stable stat-cgroup-stat mappings for no more
+than 1,024 PIDs, and inspect only mapped cgroups plus ancestors (at most 2,048
+groups under depth/path/file-byte budgets). Keep collection bounded and
+permission-aware.
 
 Requirements:
 - preserve host PSI verdicts and existing finding-first text/full JSON evidence,
 - present cgroup/service membership and resource activity as scoped context, not
   proof that a workload caused another workload's delay,
+- make per-cgroup exact PSI a verdict only for its own scope; controller counters
+  are context, and path-derived systemd names are inferred metadata without a
+  D-Bus/runtime dependency,
 - retain M3's exact I/O PSI `some` verdict and non-additive `full` context; do
   not infer device/process mapping, victims, or causality from activity,
 - leave M2's controlled harmful-memory-pressure validation as explicit

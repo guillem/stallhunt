@@ -55,6 +55,20 @@ Later I/O hypotheses:
 - device-level latency/saturation,
 - likely process/cgroup contributor.
 
+## Planned M4 cgroup scope rule
+
+M4 will add bounded cgroup-v2 evidence without changing the existing host
+verdict rules. A valid exact interval from a cgroup's own PSI file supports a
+finding about that cgroup scope; it does not establish host pressure, or vice
+versa. Per-cgroup `full` is non-additive subset context.
+
+Per-cgroup `cpu.stat`, memory, and I/O controller measurements will rank or
+explain activity only after a scoped PSI verdict, subject to collection
+qualifiers. Membership and same-window activity may identify a scoped workload
+for the operator, but cannot prove it caused another cgroup's delay. An inferred
+systemd unit name remains label metadata, not a causal or manager-authoritative
+claim.
+
 ## CPU v0.1 inference
 
 ### Step 1: establish contention

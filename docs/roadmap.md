@@ -172,8 +172,9 @@ overclaiming victim or causal mapping.
 
 ## Milestone 4 — Cgroup/systemd awareness
 
-Status: next implementation milestone. M2's controlled harmful-memory-pressure
-validation remains an outstanding cross-cutting validation debt.
+Status: in progress (design accepted in ADR-0006; implementation and validation
+are not yet complete). M2's controlled harmful-memory-pressure validation
+remains an outstanding cross-cutting validation debt.
 
 Goal:
 
@@ -181,11 +182,16 @@ Make findings useful on modern service/container hosts.
 
 Deliver:
 
-- cgroup v2 discovery,
-- per-cgroup CPU/memory/I/O/PSI where available,
-- mapping processes to cgroups,
-- aggregate findings,
-- optional systemd unit metadata without hard dependency if feasible.
+- cgroup-v2 mount discovery using mountinfo and `0::` unified membership only;
+- stat-cgroup-stat stable mapping for at most 1,024 selected PIDs;
+- mapped cgroups plus ancestors only, capped at 2,048 groups with depth/path/
+  file-byte budgets;
+- scoped per-cgroup PSI verdicts plus CPU/memory/I/O controller context where
+  readable;
+- additive pre-1.0 JSON and explicit partial-permission/controller qualifiers;
+- optional path-derived, explicitly inferred systemd unit candidate without
+  D-Bus or a runtime dependency;
+- no whole-tree scan, cgroup-v1 support, or cross-cgroup causal attribution.
 
 ## Milestone 5 — Recording and replay
 

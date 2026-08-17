@@ -22,7 +22,7 @@ The first implementation should use kernel/user-space interfaces that are alread
 | Disk counters | `/proc/diskstats` | device | P1 | device-level activity/queue context |
 | Memory | `/proc/meminfo` | host | P1 | occupancy/reclaim/swap context |
 | VM counters | `/proc/vmstat` | host | P1 | reclaim, swap, fault context |
-| cgroups | `/sys/fs/cgroup` | cgroup | P1/P2 | service/container grouping |
+| cgroups | discovered cgroup2 mount | cgroup | P1/P2 | bounded service/container grouping |
 
 Priority:
 - P0: CPU vertical slice
@@ -281,12 +281,31 @@ Device-level saturation can be high confidence while process attribution remains
 
 ## Cgroup v2
 
-Eventually collect per-cgroup:
+M4 is planned under ADR-0006 and is not implemented yet. It will support only
+cgroup v2: locate its mount from `/proc/self/mountinfo`, and use the unified
+`0::` record from `/proc/<pid>/cgroup` rather than assuming a fixed mount path.
+Membership is checked as `stat` → cgroup → `stat`, retaining it only when PID
+plus start time remains stable.
+
+The collector will select at most 1,024 PIDs per endpoint and retain at most
+2,048 mapped cgroups including ancestors. It will not recursively enumerate an
+arbitrary tree. Normalized paths, depth, and each cgroup-file read will have
+explicit byte budgets; caps, namespace visibility, permissions, controller
+absence, movement, and parse errors will be typed qualifiers.
+
+For retained cgroups, it is intended to collect:
 
 - CPU statistics,
 - memory events/current,
 - I/O statistics,
 - PSI files where available.
+
+Exact per-cgroup PSI `some` will establish a verdict for that scope only.
+`full` remains non-additive subset context, while `cpu.stat`, memory, and I/O
+controller files contextualize it. Membership and counters cannot establish
+cross-cgroup causality. Recognizable systemd-looking path components may produce
+an explicitly inferred unit candidate; no D-Bus, libsystemd, or manager is
+required.
 
 Benefits:
 
@@ -389,7 +408,7 @@ Memory PSI               yes
 I/O PSI                  yes
 Per-process schedstat    yes
 Per-process I/O          partial (permission-limited)
-cgroup v2                yes
+cgroup v2                yes / partial / unavailable
 eBPF tracing             unavailable (not required)
 ```
 

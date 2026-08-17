@@ -1,0 +1,35 @@
+On branch main
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   ../README.md
+	modified:   ../docs/architecture.md
+	modified:   ../docs/codex-workflow.md
+	modified:   ../docs/data-model.md
+	modified:   ../docs/decisions/README.md
+	modified:   ../docs/inference-engine.md
+	modified:   ../docs/references.md
+	modified:   ../docs/roadmap.md
+	modified:   ../docs/security-privileges.md
+	modified:   ../docs/status.md
+	modified:   ../docs/telemetry.md
+	modified:   ../docs/testing.md
+	modified:   ../src/analysis.rs
+	modified:   ../src/main.rs
+	modified:   ../src/observe.rs
+	modified:   ../src/render.rs
+	modified:   ../tests/cli.rs
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	../docs/decisions/0006-cgroup-v2-scoped-attribution.md
+	./
+	../src/cgroup.rs
+	../tests/fixtures/cgroup-cpu-stat-valid
+	../tests/fixtures/cgroup-io-stat-valid
+	../tests/fixtures/cgroup-memory-events-valid
+	../tests/fixtures/cgroup-pressure-valid
+	../tests/fixtures/proc-pid-cgroup-unified
+	../tests/fixtures/proc-self-mountinfo-cgroup2
+
+no changes added to commit (use "git add" and/or "git commit -a")

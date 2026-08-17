@@ -194,3 +194,11 @@ candidates are not victims, are not mapped to one another, and do not establish
 causality. High I/O activity with low PSI remains a healthy/no-contention result.
 M2 controlled harmful-memory-pressure validation remains outstanding; the next
 implementation milestone is M4 cgroup/service attribution.
+
+M4's implementation design is accepted in ADR-0006 but has not landed yet. It
+will use cgroup v2 only, discover the mounted unified hierarchy rather than
+assuming a fixed path, and map at most 1,024 stable process identities to their
+current `0::` cgroups. It will read only those groups and ancestors (at most
+2,048 groups under depth/path/file-byte budgets). Per-cgroup PSI will be a
+verdict about that scope only; controller activity and path-derived systemd unit
+candidates will be qualified context, never cross-cgroup causal proof.

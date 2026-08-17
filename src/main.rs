@@ -1,4 +1,5 @@
 mod analysis;
+mod cgroup;
 mod cli;
 mod cpu;
 mod io;
@@ -25,6 +26,7 @@ fn main() -> ExitCode {
                     memory::probe_memory_context(),
                     psi::probe_io_psi(),
                     io::probe_io_context(),
+                    cgroup::probe_cgroup_v2(),
                 ),
                 Command::Help(topic) => render::help(topic).to_owned(),
                 Command::Version => render::version(),

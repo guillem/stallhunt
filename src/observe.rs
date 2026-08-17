@@ -8,6 +8,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::cgroup::{self, CgroupError, CgroupObservation};
 use crate::cpu::{self, CpuError, CpuProcessObservation};
 use crate::io::{self as block_io, DiskstatsError, DiskstatsObservation, ProcessIoObservation};
 use crate::memory::{self, MemoryContextError, MemoryContextObservation};
@@ -28,6 +29,10 @@ pub struct IoHuntObservation {
     pub diskstats: Result<DiskstatsObservation, DiskstatsError>,
     pub processes: Result<ProcessIoObservation, DiskstatsError>,
 }
+#[derive(Debug)]
+pub struct CgroupHuntObservation {
+    pub observation: Result<CgroupObservation, CgroupError>,
+}
 
 #[derive(Debug)]
 pub struct HuntObservation {
@@ -39,6 +44,9 @@ pub struct HuntObservation {
     /// `None` is reserved for injected pre-M3 fixtures. Live hunts always
     /// populate I/O observation independently of other resource availability.
     pub io: Option<IoHuntObservation>,
+    /// `None` is reserved for injected pre-M4 fixtures. Live hunts always
+    /// collect bounded cgroup-v2 context independently of host resources.
+    pub cgroup: Option<CgroupHuntObservation>,
 }
 
 pub fn observe_hunt(requested: Duration) -> HuntObservation {
@@ -54,6 +62,9 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
                 psi: Err(IoPsiError::EmptyInterval),
                 diskstats: Err(DiskstatsError::EmptyInterval),
                 processes: Err(DiskstatsError::EmptyInterval),
+            }),
+            cgroup: Some(CgroupHuntObservation {
+                observation: Err(CgroupError::EmptyInterval),
             }),
         };
     }
@@ -72,6 +83,8 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
     let diskstats_started_at = Instant::now();
     let process_io_start = block_io::read_process_io_snapshot_at(Path::new("/proc"));
     let process_io_started_at = Instant::now();
+    let cgroup_start = cgroup::read_cgroup_snapshot_at(Path::new("/proc"));
+    let cgroup_started_at = Instant::now();
 
     thread::sleep(requested);
 
@@ -89,6 +102,8 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
     let io_psi_ended_at = Instant::now();
     let cpu_psi_end = psi::read_cpu_psi();
     let cpu_psi_ended_at = Instant::now();
+    let cgroup_end = cgroup::read_cgroup_snapshot_at(Path::new("/proc"));
+    let cgroup_ended_at = Instant::now();
 
     let psi = match (cpu_psi_start, cpu_psi_end) {
         (Ok(start), Ok(end)) => psi::interval_from_raw(
@@ -153,6 +168,14 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
         process_io_end,
         process_io_ended_at.duration_since(process_io_started_at),
     );
+    let cgroup = match (cgroup_start, cgroup_end) {
+        (Ok(start), Ok(end)) => cgroup::cgroup_interval_from_snapshots(
+            start,
+            end,
+            cgroup_ended_at.duration_since(cgroup_started_at),
+        ),
+        (Err(error), _) | (_, Err(error)) => Err(error),
+    };
 
     HuntObservation {
         psi,
@@ -165,6 +188,9 @@ pub fn observe_hunt(requested: Duration) -> HuntObservation {
             psi: io_psi,
             diskstats,
             processes,
+        }),
+        cgroup: Some(CgroupHuntObservation {
+            observation: cgroup,
         }),
     }
 }

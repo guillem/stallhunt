@@ -2,14 +2,19 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::analysis::{self, AnalysisResult, AssessmentKind, IoAssessmentKind};
+use crate::analysis::{
+    self, AnalysisResult, AssessmentKind, CgroupAssessmentKind, IoAssessmentKind,
+};
+use crate::cgroup::{CgroupCapability, CgroupObservation, cgroup_capability_explanation};
 use crate::cli::{CapabilitiesOptions, HelpTopic, HuntOptions, OutputFormat};
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
 use crate::io::{DiskstatsError, IoCapabilities, IoCapability, ProcessIoObservation};
 use crate::memory::{
     MemoryContextCapabilities, MemoryContextCapability, MemoryContextObservation, VmstatCounter,
 };
-use crate::observe::{HuntObservation, IoHuntObservation, MemoryHuntObservation};
+use crate::observe::{
+    CgroupHuntObservation, HuntObservation, IoHuntObservation, MemoryHuntObservation,
+};
 use crate::psi::{
     CpuPsiCapability, CpuPsiObservation, IoPsiCapability, IoPsiFullInterval, IoPsiObservation,
     MemoryPsiCapability, MemoryPsiFullInterval, MemoryPsiObservation,
@@ -44,6 +49,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn capabilities(
     options: &CapabilitiesOptions,
     cpu_psi: CpuPsiCapability,
@@ -52,10 +58,11 @@ pub fn capabilities(
     memory: MemoryContextCapabilities,
     io_psi: IoPsiCapability,
     io: IoCapabilities,
+    cgroup: CgroupCapability,
 ) -> String {
     match options.output {
         OutputFormat::Text => format!(
-            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\nMemory PSI: {}\n{}\nHost /proc/meminfo: {}\nHost /proc/vmstat: {}\nI/O PSI: {}\n{}\nHost /proc/diskstats: {}\nProcess /proc/<pid>/io: {}\n",
+            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\nMemory PSI: {}\n{}\nHost /proc/meminfo: {}\nHost /proc/vmstat: {}\nI/O PSI: {}\n{}\nHost /proc/diskstats: {}\nProcess /proc/<pid>/io: {}\nCgroup v2: {}\n{}\n",
             cpu_psi.as_str(),
             cpu_psi.explanation(),
             cpu.host_cpu.as_str(),
@@ -70,6 +77,8 @@ pub fn capabilities(
             io_psi.explanation(),
             io.diskstats.as_str(),
             io.process_io.as_str(),
+            cgroup.as_str(),
+            cgroup_capability_explanation(cgroup),
         ),
         OutputFormat::Json => to_json(&CapabilitiesJson {
             schema_version: 1,
@@ -98,6 +107,10 @@ pub fn capabilities(
                 },
                 diskstats: io.diskstats.as_str(),
                 process_io: io.process_io.as_str(),
+                cgroup_v2: CapabilityJson {
+                    state: cgroup.as_str(),
+                    message: cgroup_capability_explanation(cgroup),
+                },
             },
         }),
     }
@@ -141,12 +154,62 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
     if let Some(io) = result.io {
         outputs.push((io_rank, 2, io_hunt_text(options, io)));
     }
+    if let Some(cgroup) = result.cgroup.as_ref() {
+        let output = cgroup_hunt_text(cgroup);
+        if !output.is_empty() {
+            outputs.push(((0, 0), 3, output));
+        }
+    }
     outputs.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
     outputs
         .into_iter()
         .map(|(_, _, output)| output)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn cgroup_hunt_text(cgroup: &CgroupHuntObservation) -> String {
+    let Ok(observation) = &cgroup.observation else {
+        return "Scoped cgroup findings\nCgroup v2 assessment unavailable.\n".into();
+    };
+    let analysis = analysis::analyze_cgroups(Some(observation));
+    let pressured: Vec<_> = analysis
+        .findings
+        .iter()
+        .filter(|finding| finding.kind == CgroupAssessmentKind::Pressure)
+        .take(10)
+        .collect();
+    if pressured.is_empty() {
+        return "Scoped cgroup findings\nNo scoped cgroup pressure findings are prominent; healthy, unavailable, and short-window groups are omitted from this bounded text summary.\n".into();
+    }
+    let mut output = String::from("Scoped cgroup findings\n");
+    for finding in pressured {
+        output.push_str(&format!(
+            "- {} · {} · severity {} · confidence {}\n",
+            finding.path,
+            finding.summary,
+            severity_name(finding.severity),
+            confidence_name(finding.resource_confidence)
+        ));
+        if let Some(unit) = &finding.systemd_unit_candidate {
+            output.push_str(&format!(
+                "  systemd path candidate: {unit} (not authoritative)\n"
+            ));
+        }
+        if !finding.members.is_empty() {
+            output.push_str(&format!(
+                "  stable members: {}\n",
+                finding
+                    .members
+                    .iter()
+                    .map(|member| member.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    output.push_str("Scoped findings are not host-causality claims; overlapping ancestor and child scopes are not summed.\n");
+    output
 }
 
 fn cpu_hunt_text(
@@ -758,6 +821,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
     let cpu = cpu_json_parts(result.psi, result.cpu);
     let memory = memory_json_parts(result.memory.as_ref());
     let io = io_json_parts(result.io.as_ref());
+    let cgroup = cgroup_json_parts(result.cgroup.as_ref());
     let status = if cpu.complete && memory.complete && io.complete {
         "observed"
     } else {
@@ -774,6 +838,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
         || io.psi.is_some()
         || io.diskstats_observation.is_some()
         || io.processes.is_some()
+        || cgroup.observation.is_some()
     {
         Some(ObservationJson::from_parts(
             cpu.psi,
@@ -783,6 +848,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
             io.psi,
             io.diskstats_observation,
             io.processes,
+            cgroup.observation,
         ))
     } else {
         None
@@ -818,10 +884,55 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
             },
             diskstats: io.diskstats,
             process_io: io.process_io,
+            cgroup_v2: CapabilityJson {
+                state: cgroup.state,
+                message: cgroup.message,
+            },
         },
         findings,
+        cgroup_findings: cgroup.analysis.findings,
         qualifiers,
     })
+}
+
+struct CgroupJsonParts {
+    observation: Option<CgroupObservation>,
+    state: &'static str,
+    message: &'static str,
+    analysis: crate::analysis::CgroupAnalysisResult,
+}
+fn cgroup_json_parts(cgroup: Option<&CgroupHuntObservation>) -> CgroupJsonParts {
+    match cgroup {
+        None => CgroupJsonParts {
+            observation: None,
+            state: "not_observed",
+            message: "cgroup telemetry was not included in this injected observation.",
+            analysis: Default::default(),
+        },
+        Some(CgroupHuntObservation {
+            observation: Ok(value),
+        }) => CgroupJsonParts {
+            observation: Some(value.clone()),
+            state: "available",
+            message: "bounded cgroup v2 context was collected.",
+            analysis: analysis::analyze_cgroups(Some(value)),
+        },
+        Some(CgroupHuntObservation {
+            observation: Err(error),
+        }) => {
+            let capability = match error {
+                crate::cgroup::CgroupError::Unsupported => CgroupCapability::Unsupported,
+                crate::cgroup::CgroupError::PermissionDenied => CgroupCapability::PermissionDenied,
+                _ => CgroupCapability::Failed,
+            };
+            CgroupJsonParts {
+                observation: None,
+                state: capability.as_str(),
+                message: cgroup_capability_explanation(capability),
+                analysis: Default::default(),
+            }
+        }
+    }
 }
 
 struct IoJsonParts {
@@ -1119,6 +1230,7 @@ struct HuntJson<'a> {
     observation: Option<ObservationJson>,
     capabilities: CapabilitiesJsonValue<'a>,
     findings: Vec<crate::analysis::Finding>,
+    cgroup_findings: Vec<crate::analysis::CgroupFinding>,
     qualifiers: Vec<QualifierJson<'a>>,
 }
 
@@ -1150,9 +1262,12 @@ struct ObservationJson {
     diskstats: Option<crate::io::DiskstatsObservation>,
     process_io_duration_us: Option<u128>,
     process_io: Option<ProcessIoObservation>,
+    cgroup_duration_us: Option<u128>,
+    cgroup: Option<CgroupObservation>,
 }
 
 impl ObservationJson {
+    #[allow(clippy::too_many_arguments)]
     fn from_parts(
         psi: Option<CpuPsiObservation>,
         cpu: Option<CpuProcessObservation>,
@@ -1161,6 +1276,7 @@ impl ObservationJson {
         io_psi: Option<IoPsiObservation>,
         diskstats: Option<crate::io::DiskstatsObservation>,
         process_io: Option<ProcessIoObservation>,
+        cgroup: Option<CgroupObservation>,
     ) -> Self {
         let (psi_duration_us, cpu_psi) = match psi {
             Some(observation) => (
@@ -1257,6 +1373,7 @@ impl ObservationJson {
         };
         let diskstats_duration_us = diskstats.as_ref().map(|value| value.elapsed.as_micros());
         let process_io_duration_us = process_io.as_ref().map(|value| value.elapsed.as_micros());
+        let cgroup_duration_us = cgroup.as_ref().map(|value| value.elapsed.as_micros());
         match cpu {
             Some(cpu) => Self {
                 psi_duration_us,
@@ -1280,6 +1397,8 @@ impl ObservationJson {
                 diskstats,
                 process_io_duration_us,
                 process_io,
+                cgroup_duration_us,
+                cgroup,
             },
             None => Self {
                 psi_duration_us,
@@ -1303,6 +1422,8 @@ impl ObservationJson {
                 diskstats,
                 process_io_duration_us,
                 process_io,
+                cgroup_duration_us,
+                cgroup,
             },
         }
     }
@@ -1364,6 +1485,7 @@ struct CapabilitiesJsonValue<'a> {
     io_psi: CapabilityJson<'a>,
     diskstats: &'a str,
     process_io: &'a str,
+    cgroup_v2: CapabilityJson<'a>,
 }
 
 #[derive(Serialize)]
@@ -1504,6 +1626,7 @@ mod tests {
             }),
             memory: None,
             io: None,
+            cgroup: None,
         }
     }
 
@@ -1768,6 +1891,7 @@ mod tests {
                 cpu: Err(crate::cpu::CpuError::Unreadable),
                 memory: None,
                 io: None,
+                cgroup: None,
             },
         ))
         .unwrap();
@@ -1786,6 +1910,7 @@ mod tests {
                 cpu: Err(crate::cpu::CpuError::Unreadable),
                 memory: None,
                 io: None,
+                cgroup: None,
             },
         );
         assert!(partial_text.contains("CPU interval context is unavailable"));
@@ -1942,6 +2067,7 @@ mod tests {
                 cpu: Err(crate::cpu::CpuError::Malformed),
                 memory: None,
                 io: None,
+                cgroup: None,
             },
         );
         assert!(output.contains("Capability: CPU PSI failed"));
@@ -1960,6 +2086,7 @@ mod tests {
                 cpu: hunt_observation().cpu,
                 memory: None,
                 io: None,
+                cgroup: None,
             },
         );
         assert!(output.contains("CPU assessment unavailable"));
@@ -2203,6 +2330,7 @@ mod tests {
                 cpu: Ok(cpu),
                 memory: None,
                 io: None,
+                cgroup: None,
             },
         );
         assert_eq!(
@@ -2241,6 +2369,7 @@ mod tests {
                     diskstats: IoCapability::Available,
                     process_io: IoCapability::Available,
                 },
+                CgroupCapability::Available,
             );
             assert!(output.contains(&format!("CPU PSI: {}", capability.as_str())));
             assert!(output.contains(capability.explanation()));

@@ -4,6 +4,9 @@ use std::time::Duration;
 
 use serde::Serialize;
 
+use crate::cgroup::{
+    CgroupFileState, CgroupObservation, CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
+};
 use crate::cpu::{
     self, CpuProcessObservation, ProcessKey, ProcessSchedulerDelayInterval, SchedstatCapability,
 };
@@ -22,6 +25,54 @@ pub const IO_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
 /// possible-thrashing heuristic. These counters are pages, not bytes.
 const THRASHING_MIN_PAGE_RATE_PER_SEC: u64 = 1_024;
 const SUSPECT_MIN_FRACTION: f64 = 0.25;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CgroupResourceKind {
+    Cpu,
+    Memory,
+    Io,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CgroupAssessmentKind {
+    NoMeaningfulPressure,
+    Pressure,
+    InsufficientObservation,
+}
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CgroupEvidence {
+    pub psi_some_fraction: Option<f64>,
+    pub psi_some_total_delta_us: Option<u64>,
+    pub psi_full_fraction: Option<f64>,
+    pub psi_full_total_delta_us: Option<u64>,
+    pub psi_window_us: u128,
+    pub psi_state: CgroupFileState,
+}
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CgroupFinding {
+    pub path: String,
+    pub resource: CgroupResourceKind,
+    pub kind: CgroupAssessmentKind,
+    pub severity: Severity,
+    pub resource_confidence: Confidence,
+    pub summary: String,
+    pub evidence: CgroupEvidence,
+    pub systemd_unit_candidate: Option<String>,
+    pub members: Vec<CgroupMember>,
+    pub qualifiers: Vec<Qualifier>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct CgroupMember {
+    pub key: ProcessKey,
+    pub name: String,
+    pub label: &'static str,
+}
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct CgroupAnalysisResult {
+    pub findings: Vec<CgroupFinding>,
+    pub qualifiers: Vec<Qualifier>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -953,6 +1004,239 @@ const fn no_io_victim_attribution_qualifier() -> Qualifier {
     }
 }
 
+/// Analyze scoped cgroup PSI independently of host findings.  Cgroup-local
+/// pressure is not evidence that the group caused host-wide pressure.
+pub fn analyze_cgroups(observation: Option<&CgroupObservation>) -> CgroupAnalysisResult {
+    let Some(observation) = observation else {
+        return CgroupAnalysisResult::default();
+    };
+    let mut all_findings = Vec::new();
+    for group in &observation.groups {
+        for (resource, psi) in [
+            (CgroupResourceKind::Cpu, &group.cpu_pressure),
+            (CgroupResourceKind::Memory, &group.memory_pressure),
+            (CgroupResourceKind::Io, &group.io_pressure),
+        ] {
+            all_findings.push(cgroup_finding(group, resource, psi, observation));
+        }
+    }
+    all_findings.sort_by(|left, right| {
+        severity_rank(right.severity)
+            .cmp(&severity_rank(left.severity))
+            .then_with(|| {
+                confidence_rank(right.resource_confidence)
+                    .cmp(&confidence_rank(left.resource_confidence))
+            })
+            .then_with(|| {
+                right
+                    .evidence
+                    .psi_some_fraction
+                    .partial_cmp(&left.evidence.psi_some_fraction)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| {
+                cgroup_resource_rank(left.resource).cmp(&cgroup_resource_rank(right.resource))
+            })
+    });
+    let mut findings: Vec<_> = all_findings
+        .iter()
+        .filter(|finding| finding.kind == CgroupAssessmentKind::Pressure)
+        .cloned()
+        .collect();
+    findings.truncate(64);
+    if findings.is_empty()
+        && let Some(summary) = all_findings.into_iter().next()
+    {
+        findings.push(summary);
+    }
+    CgroupAnalysisResult {
+        findings,
+        qualifiers: vec![],
+    }
+}
+
+fn cgroup_resource_rank(resource: CgroupResourceKind) -> u8 {
+    match resource {
+        CgroupResourceKind::Cpu => 0,
+        CgroupResourceKind::Memory => 1,
+        CgroupResourceKind::Io => 2,
+    }
+}
+
+fn cgroup_finding(
+    group: &crate::cgroup::CgroupInterval,
+    resource: CgroupResourceKind,
+    psi: &CgroupResource<CgroupPsiInterval>,
+    observation: &CgroupObservation,
+) -> CgroupFinding {
+    let mut qualifiers = vec![
+        Qualifier {
+            kind: "cgroup_scoped_evidence",
+            message: "This is cgroup-scoped PSI evidence. It does not establish that this cgroup caused host pressure or that host pressure affected this cgroup.",
+        },
+        Qualifier {
+            kind: "cgroup_context_not_causality",
+            message: "CPU, memory, I/O counters, gauges, and stable membership are context only; they do not establish a cross-resource or process causal relationship.",
+        },
+        Qualifier {
+            kind: "cgroup_hierarchy_overlaps",
+            message: "Ancestor and child cgroup scopes can overlap because parent controller and PSI data may include descendants; findings are not independent and are never summed.",
+        },
+        Qualifier {
+            kind: "cgroup_path_lifetime_uncertain",
+            message: "A stable cgroup path has no generation counter, so deletion and recreation at the same path cannot be ruled out.",
+        },
+    ];
+    if group.systemd_unit_candidate.is_some() {
+        qualifiers.push(Qualifier { kind: "systemd_unit_candidate", message: "The systemd-looking final path component is a presentation-only candidate, not authoritative unit identity." });
+    }
+    if observation.issues.members_moved != 0
+        || observation.issues.members_reused != 0
+        || observation.issues.members_appeared != 0
+        || observation.issues.members_exited != 0
+    {
+        qualifiers.push(Qualifier { kind: "cgroup_membership_changed", message: "Membership changed during the interval; only stable same-path members are retained, so membership context is partial." });
+    }
+    if observation.issues.process_limit_reached
+        || observation.issues.cgroup_limit_reached
+        || observation.issues.process_permission_denied != 0
+        || observation.issues.cgroup_permission_denied != 0
+    {
+        qualifiers.push(Qualifier {
+            kind: "cgroup_collection_partial",
+            message: "Bounded collection or permissions made cgroup context partial.",
+        });
+    }
+    let window = psi.value.as_ref().and_then(|interval| interval.elapsed);
+    let window_us = window.map(|duration| duration.as_micros()).unwrap_or(0);
+    let members = observation
+        .members
+        .iter()
+        .filter(|member| {
+            member.cgroup_path == group.path
+                || (group.path == "/"
+                    || member
+                        .cgroup_path
+                        .strip_prefix(&group.path)
+                        .is_some_and(|rest| rest.starts_with('/')))
+        })
+        .take(5)
+        .map(|member| CgroupMember {
+            key: member.key,
+            name: member.name.clone(),
+            label: if member.cgroup_path == group.path {
+                "stable_direct_cgroup_member"
+            } else {
+                "stable_descendant_cgroup_member"
+            },
+        })
+        .collect();
+    let (some, full, state) = match &psi.value {
+        Some(interval) => {
+            let some = interval
+                .some_total_usec
+                .zip(window.filter(|duration| !duration.is_zero()))
+                .map(|(value, duration)| value as f64 / duration.as_micros() as f64);
+            let full = interval
+                .full_total_usec
+                .zip(window.filter(|duration| !duration.is_zero()))
+                .map(|(value, duration)| value as f64 / duration.as_micros() as f64);
+            (some, full, interval.state)
+        }
+        None => (None, None, CgroupPsiIntervalState::Partial),
+    };
+    let insufficient = window.is_none_or(|duration| duration < MIN_DIAGNOSIS_WINDOW);
+    let some_exceeds_window = psi
+        .value
+        .as_ref()
+        .and_then(|value| value.some_total_usec)
+        .is_some_and(|value| u128::from(value) > window_us);
+    let valid_some = matches!(
+        state,
+        CgroupPsiIntervalState::Available
+            | CgroupPsiIntervalState::Partial
+            | CgroupPsiIntervalState::FullExceedsSome
+    ) && some.is_some()
+        && !some_exceeds_window;
+    let severity = if valid_some && !insufficient {
+        severity_for_psi(some.unwrap_or(0.0))
+    } else {
+        Severity::None
+    };
+    if !valid_some {
+        qualifiers.push(Qualifier { kind: "cgroup_psi_unavailable_or_invalid", message: "This cgroup PSI interval is unavailable or its `some` counter regressed; no pressure verdict was made." });
+    }
+    if some_exceeds_window {
+        qualifiers.push(Qualifier { kind: "cgroup_some_exceeds_window", message: "Cgroup PSI `some` exceeded its measured interval and was rejected as inconsistent; no pressure verdict was made." });
+    }
+    if matches!(
+        state,
+        CgroupPsiIntervalState::Partial | CgroupPsiIntervalState::FullExceedsSome
+    ) {
+        qualifiers.push(Qualifier { kind: "cgroup_full_partial", message: "Cgroup PSI `full` is partial or inconsistent; valid `some` remains the sole pressure verdict." });
+    }
+    if insufficient {
+        qualifiers.push(Qualifier {
+            kind: "insufficient_observation",
+            message: "A measured cgroup PSI interval of at least 1s is required for a diagnosis.",
+        });
+    }
+    let kind = if insufficient || !valid_some {
+        CgroupAssessmentKind::InsufficientObservation
+    } else if severity == Severity::None {
+        CgroupAssessmentKind::NoMeaningfulPressure
+    } else {
+        CgroupAssessmentKind::Pressure
+    };
+    let confidence = if kind == CgroupAssessmentKind::InsufficientObservation {
+        Confidence::Low
+    } else if window.is_some_and(|duration| duration >= Duration::from_secs(5)) {
+        Confidence::High
+    } else {
+        Confidence::Medium
+    };
+    let resource_name = match resource {
+        CgroupResourceKind::Cpu => "CPU",
+        CgroupResourceKind::Memory => "memory",
+        CgroupResourceKind::Io => "I/O",
+    };
+    let summary = match kind {
+        CgroupAssessmentKind::Pressure => format!(
+            "Scoped {resource_name} pressure observed in {} ({:.2}% cgroup PSI some).",
+            group.path,
+            some.unwrap_or(0.0) * 100.0
+        ),
+        CgroupAssessmentKind::NoMeaningfulPressure => format!(
+            "No meaningful scoped {resource_name} pressure observed in {}.",
+            group.path
+        ),
+        CgroupAssessmentKind::InsufficientObservation => format!(
+            "Scoped {resource_name} assessment for {} is insufficient or unavailable.",
+            group.path
+        ),
+    };
+    CgroupFinding {
+        path: group.path.clone(),
+        resource,
+        kind,
+        severity,
+        resource_confidence: confidence,
+        summary,
+        evidence: CgroupEvidence {
+            psi_some_fraction: some,
+            psi_some_total_delta_us: psi.value.as_ref().and_then(|x| x.some_total_usec),
+            psi_full_fraction: full,
+            psi_full_total_delta_us: psi.value.as_ref().and_then(|x| x.full_total_usec),
+            psi_window_us: window_us,
+            psi_state: psi.state,
+        },
+        systemd_unit_candidate: group.systemd_unit_candidate.clone(),
+        members,
+        qualifiers,
+    }
+}
+
 pub fn analyze_cpu(
     psi: Option<&CpuPsiObservation>,
     cpu: Option<&CpuProcessObservation>,
@@ -1175,6 +1459,7 @@ fn process_coverage_partial(cpu: &CpuProcessObservation) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cgroup::{CgroupCollectionIssues, CgroupInterval, CgroupPsiIntervalState};
     use crate::cpu::{
         HostCpuInterval, LoadAverageAvailability, ProcessCollectionIssues, ProcessCpuInterval,
         SchedstatCollectionIssues,
@@ -1189,6 +1474,110 @@ mod tests {
     };
     use serde::Deserialize;
     use std::collections::BTreeMap;
+
+    fn cgroup_observation(
+        some_us: Option<u64>,
+        elapsed: Duration,
+        state: CgroupPsiIntervalState,
+    ) -> CgroupObservation {
+        let psi = CgroupResource {
+            state: CgroupFileState::Available,
+            value: Some(CgroupPsiInterval {
+                elapsed: Some(elapsed),
+                some_total_usec: some_us,
+                full_total_usec: None,
+                state,
+            }),
+        };
+        CgroupObservation {
+            elapsed,
+            members: vec![],
+            issues: CgroupCollectionIssues::default(),
+            groups: vec![CgroupInterval {
+                path: "/demo.service".into(),
+                cpu: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                memory_current_end: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                memory_events: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                io: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                cpu_pressure: psi,
+                memory_pressure: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                io_pressure: CgroupResource {
+                    state: CgroupFileState::Missing,
+                    value: None,
+                },
+                systemd_unit_candidate: Some("demo.service".into()),
+            }],
+        }
+    }
+
+    #[test]
+    fn cgroup_pressure_is_scoped_and_never_a_host_causal_claim() {
+        let observation = cgroup_observation(
+            Some(100_000),
+            Duration::from_secs(1),
+            CgroupPsiIntervalState::Available,
+        );
+        let finding = &analyze_cgroups(Some(&observation)).findings[0];
+        assert_eq!(finding.kind, CgroupAssessmentKind::Pressure);
+        assert_eq!(finding.severity, Severity::Moderate);
+        assert_eq!(
+            finding.systemd_unit_candidate.as_deref(),
+            Some("demo.service")
+        );
+        assert!(
+            finding
+                .qualifiers
+                .iter()
+                .any(|q| q.kind == "cgroup_scoped_evidence")
+        );
+        assert!(
+            finding
+                .qualifiers
+                .iter()
+                .any(|q| q.kind == "systemd_unit_candidate")
+        );
+        assert!(finding.qualifiers.iter().any(|q| {
+            q.message
+                .contains("does not establish that this cgroup caused host pressure")
+        }));
+    }
+
+    #[test]
+    fn cgroup_short_or_invalid_some_has_no_pressure_verdict() {
+        let short = cgroup_observation(
+            Some(5_000),
+            Duration::from_millis(500),
+            CgroupPsiIntervalState::Available,
+        );
+        assert_eq!(
+            analyze_cgroups(Some(&short)).findings[0].kind,
+            CgroupAssessmentKind::InsufficientObservation
+        );
+        let invalid = cgroup_observation(
+            None,
+            Duration::from_secs(1),
+            CgroupPsiIntervalState::SomeExceedsElapsed,
+        );
+        assert_eq!(
+            analyze_cgroups(Some(&invalid)).findings[0].kind,
+            CgroupAssessmentKind::InsufficientObservation
+        );
+    }
 
     fn psi(fraction: f64, elapsed: Duration) -> CpuPsiObservation {
         CpuPsiObservation {

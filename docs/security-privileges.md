@@ -35,6 +35,19 @@ Future eBPF/perf/tracepoint capabilities may require:
 
 Do not make this the default execution mode.
 
+### Planned M4 cgroup-v2 collection
+
+M4 reads only from the caller-visible cgroup2 mount and procfs membership files;
+it does not create, move, configure, or delete cgroups. Mount namespaces and
+delegation may intentionally hide ancestors or controller files. Such absence is
+reported as partial capability/context rather than worked around with privilege
+escalation. Bounded membership-first reads (1,024 PIDs, 2,048 groups plus depth,
+path, and file-byte limits) protect against a large or adversarial hierarchy.
+
+Cgroup paths and inferred unit names can disclose service, user, or container
+structure. They are sensitive collection output alongside process names and
+command lines.
+
 ## Degradation
 
 When access is denied:
