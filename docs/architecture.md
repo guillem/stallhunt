@@ -153,13 +153,14 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 ## Current implementation layout
 
-Milestone 1.2 adds only the CPU PSI boundary needed by the first telemetry
-slice:
+Milestone 1.3 adds the bounded CPU/process collector used by the first
+telemetry slice:
 
 ```text
 src/
   main.rs       # process entry point and exit behavior
   cli.rs        # command/options model and duration parsing
+  cpu.rs        # procfs CPU/process snapshots and interval normalization
   psi.rs        # CPU PSI parsing, capabilities, and interval normalization
   render.rs     # text and JSON rendering
 tests/
@@ -167,9 +168,9 @@ tests/
   fixtures/     # deterministic procfs parser fixtures
 ```
 
-There is no generic telemetry framework, inference engine, or process collector
-yet. `psi.rs` keeps CPU PSI collection and its narrow raw/interval model
-together until another collector creates a concrete shared boundary.
+There is no generic telemetry framework or inference engine. `cpu.rs` keeps
+the narrow procfs CPU/process raw and interval model together; it deliberately
+does not read schedstat or assign attribution roles.
 
 ## Observation lifecycle
 

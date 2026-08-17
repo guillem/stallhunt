@@ -1,4 +1,5 @@
 mod cli;
+mod cpu;
 mod psi;
 mod render;
 
@@ -11,9 +12,9 @@ fn main() -> ExitCode {
     match parse(env::args().skip(1)) {
         Ok(command) => {
             let output = match command {
-                Command::Hunt(options) => render::hunt(&options, psi::observe_cpu_psi),
+                Command::Hunt(options) => render::hunt(&options, cpu::observe_hunt),
                 Command::Capabilities(options) => {
-                    render::capabilities(&options, psi::probe_cpu_psi())
+                    render::capabilities(&options, psi::probe_cpu_psi(), cpu::probe_cpu_telemetry())
                 }
                 Command::Help(topic) => render::help(topic).to_owned(),
                 Command::Version => render::version(),

@@ -36,9 +36,10 @@ fn hunt_handles_every_cpu_psi_capability_state_without_claiming_a_diagnosis() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
-    if stdout.contains("CPU PSI observation complete") {
+    if stdout.contains("CPU telemetry observation complete") {
         assert!(stdout.contains("Requested observation duration: 100ms"));
         assert!(stdout.contains("CPU PSI some during interval:"));
+        assert!(stdout.contains("Host CPU:"));
         assert!(stdout.contains("not implemented yet"));
     } else {
         assert!(stdout.contains("CPU PSI observation unavailable"));
@@ -69,7 +70,15 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
             assert_eq!(capability, "available");
             assert!(json["observation"]["cpu_psi"]["some_fraction"].is_number());
         }
-        Some("incomplete") => assert!(json["observation"].is_null()),
+        Some("incomplete") => {
+            assert!(json["observation"].is_null() || json["observation"].is_object());
+            if json["observation"].is_object() {
+                assert!(
+                    json["observation"]["cpu_psi"].is_null()
+                        || json["observation"]["host_cpu"].is_null()
+                );
+            }
+        }
         status => panic!("unexpected hunt status: {status:?}"),
     }
 }

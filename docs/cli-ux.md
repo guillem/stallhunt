@@ -57,7 +57,7 @@ Standard version information.
 
 Delay `watch`, `record`, `replay`, `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
 
-## Current CPU PSI behavior
+## Current CPU telemetry behavior
 
 Milestone 1.1 implements:
 
@@ -67,15 +67,19 @@ bottleneck capabilities [--json]
 bottleneck version
 ```
 
-`hunt` takes two `/proc/pressure/cpu` snapshots around the requested sleep.
-It reports `some.total` delta divided by the actual monotonic elapsed interval,
-with `avg10`, `avg60`, and `avg300` from the end snapshot as context. A
-successful observation uses JSON `status: "observed"`; unavailable or invalid
-CPU PSI produces `status: "incomplete"`, `observation: null`, an explicit
-capability state, and no findings.
+`hunt` takes CPU PSI, host CPU/load, and bounded per-process `stat` snapshots
+around the requested sleep. It reports `some.total` delta divided by the actual
+monotonic elapsed interval, along with host CPU tick deltas, logical CPU count,
+load context, and process CPU deltas for stable `(pid, starttime)` identities.
+A successful observation uses JSON `status: "observed"`; unavailable or invalid
+CPU PSI or CPU/process collection produces `status: "incomplete"`, an
+explicit qualifier, and no findings. When either collector succeeds, its
+partial evidence remains in an `observation` object; it is `null` only when no
+complete evidence is available.
 
 This is evidence collection, not a CPU bottleneck finding: the output must not
 claim severity, healthy/no-contention status, victims, suspects, or causality.
+Process CPU consumption is explicitly concurrent context, not a causal claim.
 `capabilities` probes CPU PSI and reports `available`, `unsupported`,
 `permission_denied`, or `failed`.
 

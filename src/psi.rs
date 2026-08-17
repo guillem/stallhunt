@@ -1,7 +1,10 @@
 use std::fs;
 use std::io;
+#[cfg(test)]
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
 pub const CPU_PSI_PATH: &str = "/proc/pressure/cpu";
 
@@ -102,6 +105,7 @@ pub fn probe_cpu_psi() -> CpuPsiCapability {
     }
 }
 
+#[cfg(test)]
 pub fn observe_cpu_psi(requested: Duration) -> Result<CpuPsiObservation, CpuPsiError> {
     if requested.is_zero() {
         return Err(CpuPsiError::EmptyInterval);
@@ -148,7 +152,7 @@ pub fn interval_from_raw(
     })
 }
 
-fn read_cpu_psi() -> Result<CpuPsiRaw, CpuPsiError> {
+pub fn read_cpu_psi() -> Result<CpuPsiRaw, CpuPsiError> {
     let contents = fs::read_to_string(CPU_PSI_PATH).map_err(classify_read_error)?;
     parse_cpu_psi(&contents)
 }

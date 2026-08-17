@@ -31,24 +31,23 @@ them.
 
 ## Starting from the current implementation
 
-Milestones 1.1 and 1.2 are complete. The current recommended Codex session is:
+Milestones 1.1 through 1.3 are complete. The current recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Implement Milestone 1.3: CPU/process collection.
+Implement Milestone 1.4: scheduler-delay attribution.
 
 Requirements:
-- collect `/proc/stat` CPU counters and capacity context,
-- enumerate processes and robustly parse `/proc/<pid>/stat`,
-- model process identity with PID plus start time,
-- calculate process CPU deltas over the CPU PSI observation window,
-- handle process disappearance and partial permission failures explicitly,
-- do not add scheduler-delay attribution before M1.4.
+- collect `/proc/<pid>/schedstat` when available,
+- detect unavailable, unreadable, and malformed scheduler accounting,
+- calculate runnable-delay deltas only for stable process identities,
+- preserve process disappearance and partial permission behavior,
+- add victim evidence without CPU severity or suspect inference.
 
-Integrate only the smallest useful supporting data into the existing `hunt`
-observation and output.
+Integrate only the smallest useful scheduler-delay evidence into the existing
+`hunt` observation and output.
 Update docs/status.md and any affected design docs.
 ```
 

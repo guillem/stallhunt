@@ -127,16 +127,17 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Milestones 1.1 and 1.2 are complete. The repository contains a Rust binary
+Milestones 1.1 through 1.3 are complete. The repository contains a Rust binary
 with real `hunt`, `capabilities`, help, version, duration parsing, and
 text/JSON output boundaries.
 
-`hunt` reads `/proc/pressure/cpu` before and after the requested bounded
-interval, then reports CPU PSI `some` pressure from the cumulative `total`
-delta over the measured monotonic interval. It retains the kernel rolling
-averages as context. It does not yet infer contention severity, identify
-processes, or claim causal attribution. `capabilities` probes CPU PSI and
-reports available, unsupported, permission-denied, or failed states.
+`hunt` reads CPU PSI, `/proc/stat`, `/proc/loadavg`, and bounded process
+snapshots before and after the requested interval. It reports PSI, host CPU
+counter deltas, capacity/load context, and CPU deltas for processes that
+persisted with the same PID and start time across both snapshots. It does not
+yet infer contention severity, identify victims or suspects, or claim causal
+attribution. `capabilities` probes CPU PSI and reports available, unsupported,
+permission-denied, or failed states.
 
 Run the current binary with:
 
@@ -145,6 +146,6 @@ cargo run -- hunt --duration 1s
 cargo run -- capabilities
 ```
 
-The next task is the CPU/process collector (M1.3).
+The next task is scheduler-delay attribution (M1.4).
 
 See [`docs/status.md`](docs/status.md) and [`docs/roadmap.md`](docs/roadmap.md).

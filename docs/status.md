@@ -6,8 +6,9 @@ Last updated: 2026-08-17
 
 **Milestone 1 — CPU contention vertical slice**
 
-Milestones 1.1 (Rust/CLI bootstrap) and 1.2 (CPU PSI collection and
-normalization) are complete. Milestone 1.3 (CPU/process collector) is next.
+Milestones 1.1 (Rust/CLI bootstrap), 1.2 (CPU PSI collection and
+normalization), and 1.3 (CPU/process collector) are complete. Milestone 1.4
+(scheduler-delay attribution) is next.
 
 ## Implemented
 
@@ -30,6 +31,27 @@ normalization) are complete. Milestone 1.3 (CPU/process collector) is next.
   explicitly without producing findings.
 - Text and JSON output include typed CPU PSI interval evidence and rolling
   averages while explicitly limiting the result to raw evidence.
+- `hunt` also collects `/proc/stat`, `/proc/loadavg`, and bounded two-snapshot
+  `/proc/<pid>/stat` process data over the same observation window. It reports
+  host CPU counter deltas, logical CPU count, load context, and CPU deltas for
+  process identities that match on both PID and start-time ticks.
+- PSI and CPU/process pairs each use their own completed-snapshot monotonic
+  interval. `loadavg` is best-effort context and is explicitly optional rather
+  than invalidating CPU evidence.
+- `/proc/stat`, `/proc/loadavg`, and process-stat parsers reject malformed
+  required fields. Process-stat parsing handles spaces and `)` in `comm`; text
+  output sanitizes control characters and bounds names to 80 characters.
+- Host CPU accounting does not double-count guest counters. It preserves
+  iowait separately and falls back to non-iowait aggregate deltas when iowait
+  decreases, as Linux permits.
+- Process enumeration is sorted and capped at 4,096 PIDs per snapshot.
+  Disappearing, permission-denied, unreadable, malformed, directory-iteration,
+  cap-limited, and inconsistent process-counter observations are retained as
+  typed JSON collection context.
+  Hitting the cap makes process context incomplete; a failed global process
+  enumeration preserves host CPU evidence but marks process context failed.
+- `rustix` 1.x with only its `param` feature obtains `USER_HZ` safely for
+  process CPU fractions; raw ticks remain in the observation and JSON output.
 - `serde` and `serde_json` safely serialize dynamic structured output.
 - Invalid CLI invocations write to stderr and exit with status 2.
 - Unit tests cover command parsing, PSI parsing/fixtures, boundary and invalid
@@ -40,28 +62,30 @@ normalization) are complete. Milestone 1.3 (CPU/process collector) is next.
 
 ## Known limitations
 
-- CPU PSI is host-wide evidence only. There is no CPU severity/confidence
-  inference, no healthy/no-contention conclusion, and no process, victim, or
-  suspect attribution.
+- CPU PSI remains host-wide evidence only. There is no CPU severity/confidence
+  inference, no healthy/no-contention conclusion, and no victim or suspect
+  attribution. Process CPU consumption is concurrent context, not causal
+  evidence.
 - A hunt can be incomplete if CPU PSI becomes unreadable or invalid between
   snapshots; this is reported as an explicit capability/observation limit.
 - The JSON shape is bootstrap scaffolding and has no pre-1.0 compatibility
   promise beyond its explicit `schema_version` field.
-- CPU PSI is the only collector and normalized interval model. No general
-  telemetry framework, inference engine, or real finding exists yet.
+- Scheduler delay (`/proc/<pid>/schedstat`) is not collected yet, so there is
+  no direct per-process evidence of runnable delay. No general telemetry
+  framework, inference engine, or real finding exists yet.
 - No CI workflow or packaging configuration exists; validation is local.
 
 ## Current recommended next task
 
-Implement **Milestone 1.3: CPU/process collector**:
+Implement **Milestone 1.4: scheduler-delay attribution**:
 
-- collect `/proc/stat` CPU counters and CPU capacity context,
-- enumerate processes and robustly parse `/proc/<pid>/stat`,
-- use PID plus start time for process identity,
-- calculate process CPU deltas over the CPU PSI observation window,
-- retain explicit partial-permission/process-churn behavior.
+- collect `/proc/<pid>/schedstat` with explicit availability and read-failure
+  behavior,
+- calculate runnable-delay deltas for stable process identities,
+- retain process churn and permission qualifiers,
+- add raw runnable-delay evidence without severity or causal inference.
 
-Do not add scheduler-delay attribution until M1.4.
+Do not add M1.5 CPU severity, confidence, victim, or suspect inference.
 
 ## Current design risks
 
@@ -137,7 +161,7 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M1.2 validation ran:
+On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M1.3 validation ran:
 
 ```bash
 cargo fmt --all -- --check
@@ -145,12 +169,14 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-The sandbox could not reach the crates.io index, so validation used the locked
-dependency graph from the local Cargo cache. The emitted `hunt --json` output
-is structurally parsed in unit tests and was also smoke-tested against the host.
+Validation uses the locked dependency graph from the local Cargo cache. Parser
+and delta tests cover guest accounting, decreasing iowait, malformed procfs,
+process appearance/exit, PID reuse, and regressing process counters. The
+emitted `hunt --json` output is structurally parsed in unit tests and
+host-independent executable integration tests only assert supported shapes.
 
-## Next milestone after CPU PSI
+## Next milestone
 
-**Milestone 1.3 — CPU/process collector.**
+**Milestone 1.4 — Scheduler-delay attribution.**
 
 See `roadmap.md`.

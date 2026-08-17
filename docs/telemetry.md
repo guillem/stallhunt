@@ -77,6 +77,12 @@ Collect at least:
 
 Normalize CPU time over the observation window.
 
+The aggregate guest and guest_nice counters must not be added again because
+Linux already includes them in user and nice. Linux also documents iowait as
+unreliable and capable of decreasing; interval idle time should therefore be
+derived from aggregate total minus busy deltas rather than treating a declining
+iowait counter as a collector failure.
+
 CPU utilization contextualizes a CPU contention finding but does not create one by itself.
 
 ## `/proc/loadavg`
@@ -88,6 +94,9 @@ Load average is context, not a bottleneck verdict.
 The instantaneous runnable/total task field may be useful for the CPU slice.
 
 Do not interpret load average without CPU count.
+
+Load collection is best effort. An unreadable or malformed `/proc/loadavg` is
+explicit context loss, not a reason to discard otherwise valid CPU counters.
 
 ## `/proc/<pid>/stat`
 
@@ -111,6 +120,13 @@ Parsing must correctly handle `comm` enclosed in parentheses, including spaces a
 Do not parse by naive whitespace splitting from the beginning of the line.
 
 PID reuse protection should use `starttime`.
+
+For the initial collector, enumerate numeric `/proc` entries once per snapshot,
+retain only the lowest 4,096 PIDs with bounded heap storage, and read only
+`stat`. Missing entries after enumeration, permission-denied or unreadable
+reads, directory iteration errors, malformed entries, and hitting the cap are
+retained as collection qualifiers. Only matching `(pid, starttime)` pairs
+produce process CPU deltas; appearing, exiting, or reused PIDs do not.
 
 ## `/proc/<pid>/schedstat`
 
@@ -218,6 +234,11 @@ The MVP need not fully resolve container runtime metadata.
 A full snapshot cannot be perfectly atomic.
 
 Record per-collector or per-snapshot monotonic timestamps.
+
+M1.3 timestamps each completed PSI and CPU/process snapshot separately and
+normalizes each counter pair over its own elapsed interval. The snapshots are
+sequential, so there is bounded collection skew; no equivalence stronger than
+concurrent observation context is claimed.
 
 For initial polling, acceptable skew should be documented and bounded.
 
