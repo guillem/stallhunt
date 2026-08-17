@@ -118,3 +118,10 @@ is a diagnostic report, not a recording.
 A rolling observation interval produced by `watch`. Consecutive windows reuse
 the previous endpoint snapshot. Watch reports finding lifecycle rather than a
 resource dashboard.
+
+## Evidence chain
+
+A relation between already-produced findings when independent evidence
+supports a path. The first implemented chain says memory reclaim/swap
+pressure is `consistent with` block-I/O pressure. It is not a proof that one
+resource caused the other.

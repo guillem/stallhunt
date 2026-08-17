@@ -363,6 +363,13 @@ Do not make text strings the only machine-readable meaning.
 
 Use enums/typed fields plus optional explanatory text.
 
+M8 adds `evidence_chains` to hunt/replay JSON. An empty array means no
+defensible relation was found. A chain object uses `kind`
+`memory_mechanism_consistent_with_io`, `relation` `consistent_with`, typed
+`from`/`to` endpoints, compact linking evidence, and qualifiers. It is not a
+finding and is omitted from `findings`. Hunt text appends a `Related evidence`
+section only when a chain exists.
+
 ## Stable output policy
 
 Human output may evolve freely before 1.0.

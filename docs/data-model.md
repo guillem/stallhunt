@@ -373,6 +373,21 @@ Missing data leaves an active identity persistent and unconfirmed.
 Watch JSON `kind` is `bottleneck.watch_window`. It is not replayable as a
 recording and does not carry full evidence.
 
+## Evidence chains
+
+M8 adds an optional relation between already-produced findings (ADR-0009).
+
+A chain is not a resource verdict. The first implemented path is memory
+mechanism pressure plus host I/O pressure:
+
+- `from` is a memory finding labeled reclaim, swap, or possible thrashing,
+- `to` is an I/O pressure finding,
+- `relation` is `consistent_with`,
+- confidence is never high.
+
+Coincident PSI without a VM-counter mechanism does not create a chain. Host
+and cgroup findings are not linked. Watch does not track chain identities.
+
 ## Missing data
 
 Use `Option` only when "not present" is semantically sufficient.

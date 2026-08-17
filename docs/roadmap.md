@@ -233,8 +233,7 @@ Deliver:
 
 ## Milestone 7 — eBPF precision probes
 
-Status: not started. This is the next unimplemented product slice. Do not
-start it merely because eBPF is interesting.
+Status: not started. Do not start it merely because eBPF is interesting.
 
 Add probes to resolve concrete uncertainty.
 
@@ -249,6 +248,12 @@ Candidate sequence:
 Potential Rust ecosystem: Aya, subject to a current technical evaluation and ADR at implementation time.
 
 ## Milestone 8 — Evidence graph / multi-resource chains
+
+Status: first conservative slice complete. The implemented path relates a
+memory mechanism finding to host I/O pressure as `consistent_with` (ADR-0009).
+It does not claim causality, does not map processes to devices, does not link
+host and cgroup findings, and does not track chains in watch. Additional
+chains remain unimplemented.
 
 Goal:
 

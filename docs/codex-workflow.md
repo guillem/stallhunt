@@ -42,7 +42,9 @@ to resolve a concrete diagnostic uncertainty that the current collectors cannot
 answer. If no such question is ready, the next product work is Milestone 8
 evidence chains, still without treating correlation as certainty.
 
-M6 watch is available as a finding-lifecycle command. Update docs/status.md
+M6 `watch` is available as a finding-lifecycle command. If no eBPF question is
+ready, continue Milestone 8 only when another independent path is defensible.
+Do not treat same-window PSI coincidence as a chain. Update docs/status.md
 and any affected design docs.
 ```
 

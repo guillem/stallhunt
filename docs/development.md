@@ -3,7 +3,8 @@
 ## Current state
 
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
-block-I/O, M4 bounded cgroup/service, M5 recording/replay, and M6 watch slices.
+block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, and the
+first Milestone 8 evidence-chain slice.
 
 Build and run it from the repository root:
 

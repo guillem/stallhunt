@@ -199,6 +199,7 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
             .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
         })
         .unwrap_or((0, 0));
+    let chain_text = evidence_chain_hunt_text(&result);
     let cpu_output = cpu_hunt_text(options, result.psi, result.cpu);
     let mut outputs = vec![(cpu_rank, 0_u8, cpu_output)];
     if let Some(memory) = result.memory {
@@ -214,11 +215,83 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
         }
     }
     outputs.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
-    outputs
+    let mut text = outputs
         .into_iter()
         .map(|(_, _, output)| output)
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if let Some(chain_text) = chain_text {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&chain_text);
+    }
+    text
+}
+
+fn evidence_chain_hunt_text(result: &HuntObservation) -> Option<String> {
+    let chains = evidence_chains_from_observation(result);
+    if chains.is_empty() {
+        return None;
+    }
+    let mut output = String::from("Related evidence\n");
+    for chain in chains {
+        output.push_str(&format!(
+            "{}\nConfidence: {}\nIndependent evidence: {}.\n",
+            chain.summary,
+            confidence_name(chain.confidence),
+            chain_evidence_details(&chain.evidence),
+        ));
+        for qualifier in chain.qualifiers {
+            output.push_str(&format!("  {}\n", qualifier.message));
+        }
+    }
+    Some(output)
+}
+
+fn evidence_chains_from_observation(
+    result: &HuntObservation,
+) -> Vec<crate::analysis::EvidenceChain> {
+    let memory = result.memory.as_ref().and_then(|memory| {
+        analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok())
+            .findings
+            .into_iter()
+            .next()
+    });
+    let io = result.io.as_ref().and_then(|io| {
+        analysis::analyze_io(
+            io.psi.as_ref().ok(),
+            io.diskstats.as_ref().ok(),
+            io.processes.as_ref().ok(),
+        )
+        .findings
+        .into_iter()
+        .next()
+    });
+    analysis::analyze_evidence_chains(memory.as_ref(), io.as_ref())
+}
+
+fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
+    let mut parts = vec![
+        format!(
+            "memory PSI some {:.2}%",
+            evidence.memory_psi_some_fraction * 100.0
+        ),
+        format!("I/O PSI some {:.2}%", evidence.io_psi_some_fraction * 100.0),
+    ];
+    if let Some(pages) = evidence.scan_direct_pages.filter(|pages| *pages > 0) {
+        parts.push(format!("{pages} direct-reclaim scan pages"));
+    }
+    if let Some(pages) = evidence.steal_direct_pages.filter(|pages| *pages > 0) {
+        parts.push(format!("{pages} stolen pages"));
+    }
+    if let Some(pages) = evidence.swap_in_pages.filter(|pages| *pages > 0) {
+        parts.push(format!("{pages} swap-in pages"));
+    }
+    if let Some(pages) = evidence.swap_out_pages.filter(|pages| *pages > 0) {
+        parts.push(format!("{pages} swap-out pages"));
+    }
+    parts.join("; ")
 }
 
 fn cgroup_text_rank(cgroup: &CgroupHuntObservation) -> (u8, u8) {
@@ -943,6 +1016,10 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
     } else {
         "incomplete"
     };
+    let evidence_chains = analysis::analyze_evidence_chains(
+        memory.analysis.findings.first(),
+        io.analysis.findings.first(),
+    );
     let findings = analysis::ranked_findings_with_io(cpu.analysis, memory.analysis, io.analysis);
     let mut qualifiers = cpu.qualifiers;
     qualifiers.extend(memory.qualifiers);
@@ -1006,6 +1083,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
             },
         },
         findings,
+        evidence_chains,
         cgroup_findings: cgroup.analysis.findings,
         qualifiers,
     })
@@ -1353,6 +1431,7 @@ struct HuntJson<'a> {
     observation: Option<ObservationJson>,
     capabilities: CapabilitiesJsonValue<'a>,
     findings: Vec<crate::analysis::Finding>,
+    evidence_chains: Vec<crate::analysis::EvidenceChain>,
     cgroup_findings: Vec<crate::analysis::CgroupFinding>,
     qualifiers: Vec<QualifierJson<'a>>,
 }
@@ -2231,6 +2310,117 @@ mod tests {
             "permission_denied"
         );
         assert_eq!(json["status"], "incomplete");
+    }
+
+    fn chain_hunt_observation(memory_has_context: bool, io_pressured: bool) -> HuntObservation {
+        let mut observation = hunt_observation();
+        let cpu_psi = observation.psi.as_mut().unwrap();
+        cpu_psi.interval.some_fraction = 0.005;
+        cpu_psi.interval.total_delta_us = 50_000;
+        observation.memory = Some(memory_hunt_observation(
+            0.08,
+            Some(0.01),
+            memory_has_context,
+        ));
+        observation.io = Some(io_hunt_observation(if io_pressured { 0.08 } else { 0.005 }));
+        observation
+    }
+
+    #[test]
+    fn evidence_chain_is_rendered_only_when_independent_mechanism_supports_it() {
+        let text = hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+            },
+            |_| chain_hunt_observation(true, true),
+        );
+        let related = text
+            .split_once("Related evidence\n")
+            .map(|(prefix, related)| {
+                assert!(prefix.contains("reclaim pressure"));
+                assert!(prefix.contains("block-I/O pressure"));
+                format!("Related evidence\n{related}")
+            })
+            .expect("related evidence section");
+        assert_eq!(
+            related,
+            include_str!("../tests/fixtures/render/evidence-chain.txt")
+        );
+        assert!(
+            !related
+                .lines()
+                .nth(1)
+                .unwrap()
+                .to_lowercase()
+                .contains("cause")
+        );
+        assert!(related.contains("does not prove"));
+
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| chain_hunt_observation(true, true),
+        ))
+        .unwrap();
+        let chain = &json["evidence_chains"][0];
+        assert_eq!(chain["kind"], "memory_mechanism_consistent_with_io");
+        assert_eq!(chain["relation"], "consistent_with");
+        assert_eq!(chain["confidence"], "low");
+        assert_eq!(chain["from"]["resource"], "memory");
+        assert_eq!(chain["from"]["kind"], "memory_reclaim_pressure");
+        assert_eq!(chain["to"]["resource"], "io");
+        assert_eq!(chain["to"]["kind"], "io_pressure");
+        assert_eq!(chain["evidence"]["scan_direct_pages"], 100);
+        assert!(
+            chain["qualifiers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|qualifier| qualifier["kind"] == "chain_not_causal")
+        );
+
+        let coincident: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| chain_hunt_observation(false, true),
+        ))
+        .unwrap();
+        assert_eq!(coincident["evidence_chains"].as_array().unwrap().len(), 0);
+        assert!(
+            !hunt(
+                &HuntOptions {
+                    duration_ms: 10_000,
+                    output: OutputFormat::Text,
+                },
+                |_| chain_hunt_observation(false, true),
+            )
+            .contains("Related evidence")
+        );
+
+        let io_healthy: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| chain_hunt_observation(true, false),
+        ))
+        .unwrap();
+        assert_eq!(io_healthy["evidence_chains"].as_array().unwrap().len(), 0);
+
+        let cpu_only: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 1_000,
+                output: OutputFormat::Json,
+            },
+            |_| hunt_observation(),
+        ))
+        .unwrap();
+        assert_eq!(cpu_only["evidence_chains"].as_array().unwrap().len(), 0);
     }
 
     #[test]

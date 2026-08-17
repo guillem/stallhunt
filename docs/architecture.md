@@ -155,11 +155,12 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 Milestones 1–6 combine bounded CPU/process, memory-context, I/O-context, PSI,
 cgroup, recording/replay, and rolling watch paths with typed inference/output
-boundaries:
+boundaries. Milestone 8 adds a conservative evidence-chain relation over those
+findings:
 
 ```text
 src/
-  analysis.rs   # pure normalized CPU inference and typed findings
+  analysis.rs   # pure normalized inference, typed findings, and evidence chains
   main.rs       # process entry point and exit behavior
   cli.rs        # command/options model and duration parsing
   cpu.rs        # procfs CPU/process snapshots and interval normalization
@@ -235,6 +236,12 @@ persistent, or resolved. It keeps 16 compact history windows and does not
 retain full observations. TTY text refreshes by clearing the screen; JSON is
 one compact `bottleneck.watch_window` object per window, not a recording and
 not hunt JSON.
+
+M8 adds `analyze_evidence_chains` in `analysis.rs` (ADR-0009). It consumes
+already-produced memory and I/O findings and may emit a `consistent_with`
+relation when a memory mechanism label and I/O pressure coexist. Hunt text
+appends a related-evidence section; hunt JSON adds `evidence_chains`. The
+relation is not ranked as a resource finding and is not tracked by watch.
 
 ## Observation lifecycle
 

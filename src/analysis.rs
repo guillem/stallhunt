@@ -1,5 +1,5 @@
-//! Conservative CPU inference over normalized observations.  This module has
-//! no procfs or rendering dependencies so fixtures can exercise it directly.
+//! Conservative inference over normalized observations. This module has no
+//! procfs or rendering dependencies so fixtures can exercise it directly.
 use std::time::Duration;
 
 use serde::Serialize;
@@ -246,6 +246,108 @@ pub enum Finding {
     Cpu(CpuFinding),
     Memory(MemoryFinding),
     Io(IoFinding),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainKind {
+    MemoryMechanismConsistentWithIo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChainRelation {
+    ConsistentWith,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "resource", rename_all = "snake_case")]
+pub enum ChainEndpoint {
+    Memory { kind: MemoryAssessmentKind },
+    Io { kind: IoAssessmentKind },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ChainEvidence {
+    pub memory_psi_some_fraction: f64,
+    pub io_psi_some_fraction: f64,
+    pub swap_in_pages: Option<u64>,
+    pub swap_out_pages: Option<u64>,
+    pub scan_direct_pages: Option<u64>,
+    pub steal_direct_pages: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct EvidenceChain {
+    pub kind: ChainKind,
+    pub relation: ChainRelation,
+    pub confidence: Confidence,
+    pub summary: String,
+    pub from: ChainEndpoint,
+    pub to: ChainEndpoint,
+    pub evidence: ChainEvidence,
+    pub qualifiers: Vec<Qualifier>,
+}
+
+/// Relates already-produced findings only when independent evidence supports a
+/// path. Coincident PSI without a memory mechanism label is not a chain, and a
+/// chain never claims that one resource caused the other.
+pub fn analyze_evidence_chains(
+    memory: Option<&MemoryFinding>,
+    io: Option<&IoFinding>,
+) -> Vec<EvidenceChain> {
+    let Some(memory) = memory else {
+        return Vec::new();
+    };
+    let Some(io) = io else {
+        return Vec::new();
+    };
+    if io.kind != IoAssessmentKind::Pressure {
+        return Vec::new();
+    }
+    let (confidence, summary) = match memory.kind {
+        MemoryAssessmentKind::ReclaimPressure => (
+            Confidence::Low,
+            "Memory reclaim pressure is consistent with block-I/O pressure in the same window.",
+        ),
+        MemoryAssessmentKind::SwapPressure => (
+            Confidence::Low,
+            "Memory swap pressure is consistent with block-I/O pressure in the same window.",
+        ),
+        MemoryAssessmentKind::PossibleThrashing => (
+            Confidence::Medium,
+            "Possible thrashing is consistent with block-I/O pressure in the same window.",
+        ),
+        MemoryAssessmentKind::NoHarmfulPressure
+        | MemoryAssessmentKind::Pressure
+        | MemoryAssessmentKind::InsufficientObservation => return Vec::new(),
+    };
+    vec![EvidenceChain {
+        kind: ChainKind::MemoryMechanismConsistentWithIo,
+        relation: ChainRelation::ConsistentWith,
+        confidence,
+        summary: summary.into(),
+        from: ChainEndpoint::Memory { kind: memory.kind },
+        to: ChainEndpoint::Io { kind: io.kind },
+        evidence: ChainEvidence {
+            memory_psi_some_fraction: memory.evidence.psi_some_fraction,
+            io_psi_some_fraction: io.evidence.psi_some_fraction,
+            swap_in_pages: memory.evidence.swap_in_pages,
+            swap_out_pages: memory.evidence.swap_out_pages,
+            scan_direct_pages: memory.evidence.scan_direct_pages,
+            steal_direct_pages: memory.evidence.steal_direct_pages,
+        },
+        qualifiers: vec![
+            Qualifier {
+                kind: "chain_not_causal",
+                message: "Independent same-window PSI and VM-counter evidence can support a related path; it does not prove that memory reclaim or swap caused the I/O stalls.",
+            },
+            Qualifier {
+                kind: "no_process_device_mapping",
+                message: "The chain does not map processes to devices or identify which I/O was reclaim or swap traffic.",
+            },
+        ],
+    }]
 }
 
 /// Combines all currently normalized resource findings.
@@ -2460,6 +2562,187 @@ mod tests {
             ranked_findings_with_io(cpu, memory, IoAnalysisResult::default()).first(),
             Some(Finding::Memory(_))
         ));
+    }
+
+    fn evidence_chains_from(
+        memory_psi: &MemoryPsiObservation,
+        memory_context: Option<&MemoryContextObservation>,
+        io_psi: Option<&IoPsiObservation>,
+        diskstats: Option<&DiskstatsObservation>,
+        process_io: Option<&ProcessIoObservation>,
+    ) -> Vec<EvidenceChain> {
+        let memory = analyze_memory(Some(memory_psi), memory_context);
+        let io = analyze_io(io_psi, diskstats, process_io);
+        analyze_evidence_chains(memory.findings.first(), io.findings.first())
+    }
+
+    #[test]
+    fn memory_mechanism_and_io_pressure_form_a_non_causal_chain() {
+        let (diskstats, process_io) = io_context();
+        let mut reclaim_context = memory_context(0.8);
+        reclaim_context
+            .vmstat_deltas
+            .insert(VmstatCounter::ScanDirect, 10);
+        reclaim_context
+            .vmstat_deltas
+            .insert(VmstatCounter::StealDirect, 5);
+        let reclaim = evidence_chains_from(
+            &memory_psi(0.08, Some(0.01), Duration::from_secs(10)),
+            Some(&reclaim_context),
+            Some(&io_psi(0.08, Some(0.02), Duration::from_secs(10))),
+            Some(&diskstats),
+            Some(&process_io),
+        );
+        assert_eq!(reclaim.len(), 1);
+        assert_eq!(reclaim[0].kind, ChainKind::MemoryMechanismConsistentWithIo);
+        assert_eq!(reclaim[0].relation, ChainRelation::ConsistentWith);
+        assert_eq!(reclaim[0].confidence, Confidence::Low);
+        assert!(matches!(
+            reclaim[0].from,
+            ChainEndpoint::Memory {
+                kind: MemoryAssessmentKind::ReclaimPressure
+            }
+        ));
+        assert!(matches!(
+            reclaim[0].to,
+            ChainEndpoint::Io {
+                kind: IoAssessmentKind::Pressure
+            }
+        ));
+        assert!(
+            reclaim[0]
+                .qualifiers
+                .iter()
+                .any(|qualifier| qualifier.kind == "chain_not_causal")
+        );
+        assert!(!reclaim[0].summary.to_lowercase().contains("cause"));
+
+        reclaim_context
+            .vmstat_deltas
+            .insert(VmstatCounter::SwapIn, 4);
+        let swap = evidence_chains_from(
+            &memory_psi(0.08, Some(0.01), Duration::from_secs(10)),
+            Some(&reclaim_context),
+            Some(&io_psi(0.01, Some(0.002), Duration::from_secs(10))),
+            None,
+            None,
+        );
+        assert_eq!(swap.len(), 1);
+        assert!(matches!(
+            swap[0].from,
+            ChainEndpoint::Memory {
+                kind: MemoryAssessmentKind::SwapPressure
+            }
+        ));
+        assert_eq!(swap[0].confidence, Confidence::Low);
+        assert_eq!(swap[0].evidence.swap_in_pages, Some(4));
+
+        let mut thrash_context = memory_context(0.95);
+        thrash_context.elapsed = Duration::from_secs(5);
+        for counter in [
+            VmstatCounter::ScanDirect,
+            VmstatCounter::StealDirect,
+            VmstatCounter::SwapIn,
+            VmstatCounter::SwapOut,
+        ] {
+            thrash_context.vmstat_deltas.insert(counter, 5_120);
+        }
+        let thrash = evidence_chains_from(
+            &memory_psi(0.20, Some(0.02), Duration::from_secs(5)),
+            Some(&thrash_context),
+            Some(&io_psi(0.15, Some(0.04), Duration::from_secs(5))),
+            Some(&diskstats),
+            Some(&process_io),
+        );
+        assert_eq!(thrash.len(), 1);
+        assert!(matches!(
+            thrash[0].from,
+            ChainEndpoint::Memory {
+                kind: MemoryAssessmentKind::PossibleThrashing
+            }
+        ));
+        assert_eq!(thrash[0].confidence, Confidence::Medium);
+        assert_ne!(thrash[0].confidence, Confidence::High);
+    }
+
+    #[test]
+    fn coincident_or_incomplete_pressure_does_not_form_a_chain() {
+        let (diskstats, process_io) = io_context();
+        let healthy_memory = memory_context(0.95);
+        assert!(
+            evidence_chains_from(
+                &memory_psi(0.005, Some(0.001), Duration::from_secs(10)),
+                Some(&healthy_memory),
+                Some(&io_psi(0.20, Some(0.05), Duration::from_secs(10))),
+                Some(&diskstats),
+                Some(&process_io),
+            )
+            .is_empty()
+        );
+
+        let mut reclaim_context = memory_context(0.8);
+        reclaim_context
+            .vmstat_deltas
+            .insert(VmstatCounter::ScanDirect, 10);
+        reclaim_context
+            .vmstat_deltas
+            .insert(VmstatCounter::StealDirect, 5);
+        assert!(
+            evidence_chains_from(
+                &memory_psi(0.20, Some(0.02), Duration::from_secs(10)),
+                Some(&reclaim_context),
+                Some(&io_psi(0.005, Some(0.001), Duration::from_secs(10))),
+                Some(&diskstats),
+                Some(&process_io),
+            )
+            .is_empty()
+        );
+
+        let generic = memory_context(0.8);
+        assert!(
+            evidence_chains_from(
+                &memory_psi(0.20, Some(0.02), Duration::from_secs(10)),
+                Some(&generic),
+                Some(&io_psi(0.20, Some(0.05), Duration::from_secs(10))),
+                Some(&diskstats),
+                Some(&process_io),
+            )
+            .is_empty(),
+            "PSI coincidence without a VM-counter mechanism must not form a chain"
+        );
+
+        assert!(
+            evidence_chains_from(
+                &memory_psi(0.20, Some(0.02), Duration::from_secs(10)),
+                Some(&reclaim_context),
+                None,
+                None,
+                None,
+            )
+            .is_empty()
+        );
+        assert!(analyze_evidence_chains(None, None).is_empty());
+
+        assert!(
+            evidence_chains_from(
+                &memory_psi(0.20, Some(0.02), Duration::from_millis(999)),
+                Some(&reclaim_context),
+                Some(&io_psi(0.20, Some(0.05), Duration::from_secs(10))),
+                Some(&diskstats),
+                Some(&process_io),
+            )
+            .is_empty()
+        );
+        assert!(
+            evidence_chains_from(
+                &memory_psi(0.20, Some(0.02), Duration::from_secs(10)),
+                Some(&reclaim_context),
+                Some(&io_psi(0.20, Some(0.05), Duration::from_millis(999))),
+                Some(&diskstats),
+                Some(&process_io),
+            )
+            .is_empty()
+        );
     }
 
     #[test]

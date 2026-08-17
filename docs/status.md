@@ -4,17 +4,18 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 7 — eBPF precision probes (not started)**
+**Milestone 8 — evidence chains (first conservative slice complete)**
 
-Milestones 1–6 are functionally complete. M6 `watch` tracks rolling finding
-lifecycle over contiguous windows that reuse the previous endpoint snapshot.
-ADR-0008 defines the command as a lifecycle view, not a TUI, and keeps watch
-JSON distinct from hunt JSON and recordings. Do not start M7 merely because
-eBPF is interesting; add a probe only for a concrete diagnostic gap. M5
-recording and replay remain available for offline re-analysis. M4 remains
-implemented with opt-in live observational validation; that test still requires
-a caller-owned delegated subtree that already contains the test process and
-does not mutate the hierarchy.
+Milestones 1–6 are functionally complete. M8 relates a memory mechanism
+finding to host I/O pressure as `consistent_with` when both already exist
+(ADR-0009). It does not claim causality, does not merge the resource verdicts,
+and does not track chains in watch. Do not start M7 merely because eBPF is
+interesting; add a probe only for a concrete diagnostic gap. Additional M8
+chains should wait for independent linking evidence. M5 recording and replay
+remain available for offline re-analysis. M4 remains implemented with opt-in
+live observational validation; that test still requires a caller-owned
+delegated subtree that already contains the test process and does not mutate
+the hierarchy.
 
 ## Verified milestone assessment
 
@@ -47,7 +48,12 @@ does not mutate the hierarchy.
   contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
   keeps 16 history windows. It is not a TUI and does not store full evidence.
   SIGINT uses default termination; `--count` bounds scripted runs.
-- **M7–M8 not started:** no eBPF probe or evidence-chain implementation exists.
+- **M8 first slice complete:** hunt/replay can relate a memory reclaim, swap,
+  or possible-thrashing finding to host I/O pressure as `consistent_with`.
+  Coincident PSI without a VM-counter mechanism does not create a chain.
+  Confidence is never high. Watch does not track chain identities.
+- **M7 not started; remaining M8 chains not started:** no eBPF probe exists,
+  and no CPU–I/O, host–cgroup, or process-device chain exists.
 
 ## Implemented
 
@@ -199,6 +205,10 @@ does not mutate the hierarchy.
   finding. History is capped at 16 compact windows. TTY text clears the screen;
   JSON emits one `bottleneck.watch_window` object per window. Watch JSON is not
   hunt JSON and not a recording.
+- M8 relates a memory reclaim, swap, or possible-thrashing finding to host I/O
+  pressure as `consistent_with` when both exist. Hunt text appends a related-
+  evidence section; hunt JSON adds `evidence_chains`. Coincidence without a
+  VM-counter mechanism is not a chain, and the relation is never a causal claim.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -249,6 +259,11 @@ does not mutate the hierarchy.
   pressure. Unlimited `watch` without `--count` samples until interrupted and
   does not drain the current window on SIGINT. Consecutive 100 ms windows remain
   smoke observations, same as hunt.
+- M8's first chain is same-window correlation of independent PSI plus VM
+  counters. It does not prove reclaim or swap caused I/O stalls, does not map
+  processes to devices, does not link host and cgroup findings, and is not a
+  watch identity. Generic memory pressure coincident with I/O pressure remains
+  two findings with no chain.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -260,11 +275,12 @@ does not mutate the hierarchy.
 
 Do not start Milestone 7 unless a concrete diagnostic question cannot be
 answered with the current `/proc`, PSI, and cgroup collectors. If that bar is
-not met, begin Milestone 8 evidence chains conservatively: relate findings only
-when independent evidence supports a path, and keep uncertainty explicit.
+not met, add another Milestone 8 chain only when independent linking evidence
+already exists; do not treat coincident PSI as a path.
 
-M6 watch is available for rolling lifecycle; M5 recording/replay remains the
-offline evidence path.
+The implemented memory-mechanism-to-I/O chain is available on `hunt` and
+`replay`. M6 watch remains a lifecycle view of separate resource identities.
+M5 recording/replay remains the offline evidence path.
 
 ## Current design risks
 
@@ -275,6 +291,7 @@ The project can lose credibility if it equates "largest consumer" with "cause".
 Mitigation:
 - separate resource diagnosis confidence from suspect confidence,
 - retain evidence/qualifiers,
+- relate findings only when independent mechanism evidence exists,
 - introduce event telemetry only when needed.
 
 ### R2: Scope explosion
@@ -351,10 +368,10 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, M6 watch was validated with deterministic lifecycle tests
-(new/persistent/resolved, unconfirmed missing data, cgroup cap/history bounds,
-golden text, structural JSON) plus a live `watch --interval 100ms --count 1`
-text and JSON CLI path. Formatting and locked-offline Clippy passed:
+On 2026-08-17, M8's first evidence-chain slice was validated with deterministic
+analyzer coverage (reclaim/swap/thrashing positives; coincident PSI, healthy,
+missing, and short-window negatives) plus a checked-in related-evidence text
+fixture and structural hunt JSON. Formatting and locked-offline Clippy passed:
 
 ```bash
 cargo fmt --all -- --check
@@ -362,8 +379,13 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Default-gate coverage is 135 unit tests, ten CLI tests, and five ignored
+Default-gate coverage is 138 unit tests, ten CLI tests, and five ignored
 host-workload tests.
+
+Earlier the same day, M6 watch was validated with deterministic lifecycle tests
+(new/persistent/resolved, unconfirmed missing data, cgroup cap/history bounds,
+golden text, structural JSON) plus a live `watch --interval 100ms --count 1`
+text and JSON CLI path.
 
 Earlier the same day, M5 recording/replay was validated with deterministic
 round-trip and redaction tests plus a live 100 ms `record` → `replay --json` →

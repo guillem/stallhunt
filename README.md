@@ -136,7 +136,8 @@ Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
 ## Current state
 
-Milestones 1–6 are functionally complete. Milestone 2's host-memory slice is
+Milestones 1–6 are functionally complete. Milestone 8's first evidence-chain
+slice is implemented. Milestone 2's host-memory slice is
 implemented and has a recorded delegated-cgroup harmful-pressure acceptance.
 The repository contains a Rust binary with real `hunt`, `watch`, `record`,
 `replay`, `redact`, `capabilities`, help, version, duration parsing, and
@@ -219,3 +220,9 @@ findings as new, persistent, or resolved. TTY text refreshes the screen; JSON
 emits one compact `bottleneck.watch_window` object per window. Watch is not a
 TUI and is not a recording. Full evidence remains on `hunt --json` and
 `record`.
+
+M8 adds a conservative evidence chain: when memory reclaim, swap, or possible
+thrashing coexists with I/O pressure, hunt text and JSON may report that the
+memory finding is consistent with the I/O finding. Coincident PSI without a
+VM-counter mechanism is not a chain. The relation is not a causal claim and is
+not tracked by watch.

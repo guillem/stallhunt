@@ -336,7 +336,13 @@ memory pressure
             -> database victim
 ```
 
-Early versions can report multiple findings with qualifiers rather than infer full chains.
+Unimplemented paths still appear as independent findings with qualifiers.
+The first implemented relation (ADR-0009) is narrower: a memory mechanism
+label plus I/O pressure may be related as `consistent_with` when both findings
+already exist. Coincident PSI without VM-counter mechanism evidence does not
+create a chain. Confidence is never high. The relation does not replace the
+independent memory and I/O verdicts, map processes to devices, or prove that
+reclaim caused the I/O stalls.
 
 ## Baselines
 
