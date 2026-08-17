@@ -23,6 +23,9 @@ pub const MIN_DIAGNOSIS_WINDOW: Duration = Duration::from_secs(1);
 pub const CPU_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
 pub const MEMORY_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
 pub const IO_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
+/// Same-cgroup chains are bounded independently of the 64 displayed cgroup
+/// findings. Extra matching paths are dropped after severity-then-path order.
+const MAX_CGROUP_EVIDENCE_CHAINS: usize = 16;
 /// Provisional lower bound for calling VM churn material enough to support a
 /// possible-thrashing heuristic. These counters are pages, not bytes.
 const THRASHING_MIN_PAGE_RATE_PER_SEC: u64 = 1_024;
@@ -252,6 +255,7 @@ pub enum Finding {
 #[serde(rename_all = "snake_case")]
 pub enum ChainKind {
     MemoryMechanismConsistentWithIo,
+    CgroupMemoryConsistentWithIo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -263,8 +267,20 @@ pub enum ChainRelation {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "resource", rename_all = "snake_case")]
 pub enum ChainEndpoint {
-    Memory { kind: MemoryAssessmentKind },
-    Io { kind: IoAssessmentKind },
+    Memory {
+        kind: MemoryAssessmentKind,
+    },
+    Io {
+        kind: IoAssessmentKind,
+    },
+    CgroupMemory {
+        path: String,
+        kind: CgroupAssessmentKind,
+    },
+    CgroupIo {
+        path: String,
+        kind: CgroupAssessmentKind,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -275,6 +291,12 @@ pub struct ChainEvidence {
     pub swap_out_pages: Option<u64>,
     pub scan_direct_pages: Option<u64>,
     pub steal_direct_pages: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high_events: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_events: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -290,9 +312,20 @@ pub struct EvidenceChain {
 }
 
 /// Relates already-produced findings only when independent evidence supports a
-/// path. Coincident PSI without a memory mechanism label is not a chain, and a
-/// chain never claims that one resource caused the other.
+/// path. Coincident PSI without a memory mechanism is not a chain. Host and
+/// cgroup findings are never linked to each other, and a chain never claims
+/// that one resource caused the other.
 pub fn analyze_evidence_chains(
+    memory: Option<&MemoryFinding>,
+    io: Option<&IoFinding>,
+    cgroup_findings: &[CgroupFinding],
+) -> Vec<EvidenceChain> {
+    let mut chains = analyze_host_memory_io_chain(memory, io);
+    chains.extend(analyze_cgroup_memory_io_chains(cgroup_findings));
+    chains
+}
+
+fn analyze_host_memory_io_chain(
     memory: Option<&MemoryFinding>,
     io: Option<&IoFinding>,
 ) -> Vec<EvidenceChain> {
@@ -336,6 +369,9 @@ pub fn analyze_evidence_chains(
             swap_out_pages: memory.evidence.swap_out_pages,
             scan_direct_pages: memory.evidence.scan_direct_pages,
             steal_direct_pages: memory.evidence.steal_direct_pages,
+            path: None,
+            high_events: None,
+            max_events: None,
         },
         qualifiers: vec![
             Qualifier {
@@ -348,6 +384,113 @@ pub fn analyze_evidence_chains(
             },
         ],
     }]
+}
+
+fn analyze_cgroup_memory_io_chains(findings: &[CgroupFinding]) -> Vec<EvidenceChain> {
+    let mut memory_by_path = BTreeMap::new();
+    let mut io_by_path = BTreeMap::new();
+    for finding in findings {
+        if finding.kind != CgroupAssessmentKind::Pressure {
+            continue;
+        }
+        match finding.resource {
+            CgroupResourceKind::Memory => {
+                memory_by_path.insert(finding.path.as_str(), finding);
+            }
+            CgroupResourceKind::Io => {
+                io_by_path.insert(finding.path.as_str(), finding);
+            }
+            CgroupResourceKind::Cpu => {}
+        }
+    }
+    let mut candidates = Vec::new();
+    for (path, memory) in &memory_by_path {
+        let Some(io) = io_by_path.get(path) else {
+            continue;
+        };
+        if let Some(chain) = cgroup_memory_io_chain(memory, io) {
+            candidates.push(chain);
+        }
+    }
+    candidates.sort_by(|left, right| {
+        cgroup_chain_rank(right)
+            .cmp(&cgroup_chain_rank(left))
+            .then_with(|| left.evidence.path.cmp(&right.evidence.path))
+    });
+    candidates.truncate(MAX_CGROUP_EVIDENCE_CHAINS);
+    candidates
+}
+
+fn cgroup_chain_rank(chain: &EvidenceChain) -> (u8, u8) {
+    (
+        psi_fraction_rank(chain.evidence.memory_psi_some_fraction)
+            .max(psi_fraction_rank(chain.evidence.io_psi_some_fraction)),
+        confidence_rank(chain.confidence),
+    )
+}
+
+fn psi_fraction_rank(fraction: f64) -> u8 {
+    severity_rank(severity_for_psi(fraction))
+}
+
+fn cgroup_memory_io_chain(memory: &CgroupFinding, io: &CgroupFinding) -> Option<EvidenceChain> {
+    if memory.path != io.path {
+        return None;
+    }
+    let events = memory.evidence.memory_events.value.as_ref()?;
+    let high_events = events.high.filter(|value| *value > 0);
+    let max_events = events.max.filter(|value| *value > 0);
+    if high_events.is_none() && max_events.is_none() {
+        return None;
+    }
+    let memory_psi_some_fraction = memory.evidence.psi_some_fraction?;
+    let io_psi_some_fraction = io.evidence.psi_some_fraction?;
+    Some(EvidenceChain {
+        kind: ChainKind::CgroupMemoryConsistentWithIo,
+        relation: ChainRelation::ConsistentWith,
+        confidence: Confidence::Low,
+        summary: format!(
+            "Scoped memory pressure in {} is consistent with scoped I/O pressure in the same cgroup.",
+            memory.path
+        ),
+        from: ChainEndpoint::CgroupMemory {
+            path: memory.path.clone(),
+            kind: memory.kind,
+        },
+        to: ChainEndpoint::CgroupIo {
+            path: io.path.clone(),
+            kind: io.kind,
+        },
+        evidence: ChainEvidence {
+            memory_psi_some_fraction,
+            io_psi_some_fraction,
+            swap_in_pages: None,
+            swap_out_pages: None,
+            scan_direct_pages: None,
+            steal_direct_pages: None,
+            path: Some(memory.path.clone()),
+            high_events,
+            max_events,
+        },
+        qualifiers: vec![
+            Qualifier {
+                kind: "chain_not_causal",
+                message: "Independent same-cgroup PSI and memory.events evidence can support a related path; it does not prove that memory reclaim in this cgroup caused its I/O stalls.",
+            },
+            Qualifier {
+                kind: "same_cgroup_scope_only",
+                message: "The relation is limited to one cgroup path. It does not link host findings to cgroup findings or one cgroup to another, including ancestors and children.",
+            },
+            Qualifier {
+                kind: "cgroup_memory_events_not_vmstat",
+                message: "memory.events high/max counts are cgroup limit-reclaim signals, not host pgscan/pswpin proof, and may include descendant activity.",
+            },
+            Qualifier {
+                kind: "no_process_device_mapping",
+                message: "The chain does not map processes to devices or identify which I/O was reclaim or swap traffic.",
+            },
+        ],
+    })
 }
 
 /// Combines all currently normalized resource findings.
@@ -1639,6 +1782,87 @@ mod tests {
         }
     }
 
+    fn cgroup_psi(
+        some_us: Option<u64>,
+        elapsed: Duration,
+        state: CgroupPsiIntervalState,
+    ) -> CgroupResource<CgroupPsiInterval> {
+        CgroupResource {
+            state: if some_us.is_some() {
+                CgroupFileState::Available
+            } else {
+                CgroupFileState::Missing
+            },
+            value: some_us.map(|some_total_usec| CgroupPsiInterval {
+                elapsed: Some(elapsed),
+                some_total_usec: Some(some_total_usec),
+                full_total_usec: None,
+                state,
+            }),
+        }
+    }
+
+    fn missing_cgroup_resource<T>() -> CgroupResource<T> {
+        CgroupResource {
+            state: CgroupFileState::Missing,
+            value: None,
+        }
+    }
+
+    fn cgroup_events(high: Option<u64>, max: Option<u64>) -> CgroupResource<CgroupMemoryEventsRaw> {
+        match (high, max) {
+            (None, None) => missing_cgroup_resource(),
+            _ => CgroupResource {
+                state: CgroupFileState::Available,
+                value: Some(CgroupMemoryEventsRaw {
+                    low: Some(0),
+                    high,
+                    max,
+                    oom: Some(0),
+                    oom_kill: Some(0),
+                    oom_group_kill: Some(0),
+                }),
+            },
+        }
+    }
+
+    fn scoped_memory_io_group(
+        path: &str,
+        memory_some_us: Option<u64>,
+        io_some_us: Option<u64>,
+        cpu_some_us: Option<u64>,
+        events: CgroupResource<CgroupMemoryEventsRaw>,
+        elapsed: Duration,
+    ) -> CgroupInterval {
+        CgroupInterval {
+            path: path.into(),
+            cpu: missing_cgroup_resource(),
+            memory_current_end: missing_cgroup_resource(),
+            memory_events: events,
+            io: missing_cgroup_resource(),
+            cpu_pressure: cgroup_psi(cpu_some_us, elapsed, CgroupPsiIntervalState::Available),
+            memory_pressure: cgroup_psi(memory_some_us, elapsed, CgroupPsiIntervalState::Available),
+            io_pressure: cgroup_psi(io_some_us, elapsed, CgroupPsiIntervalState::Available),
+            systemd_unit_candidate: None,
+        }
+    }
+
+    fn scoped_memory_io_observation(
+        groups: Vec<CgroupInterval>,
+        elapsed: Duration,
+    ) -> CgroupObservation {
+        CgroupObservation {
+            elapsed,
+            members: vec![],
+            issues: CgroupCollectionIssues::default(),
+            groups,
+        }
+    }
+
+    fn cgroup_chains_from(observation: &CgroupObservation) -> Vec<EvidenceChain> {
+        analyze_evidence_chains(None, None, &analyze_cgroups(Some(observation)).findings)
+    }
+
     #[test]
     fn cgroup_pressure_is_scoped_and_never_a_host_causal_claim() {
         let observation = cgroup_observation(
@@ -2573,7 +2797,7 @@ mod tests {
     ) -> Vec<EvidenceChain> {
         let memory = analyze_memory(Some(memory_psi), memory_context);
         let io = analyze_io(io_psi, diskstats, process_io);
-        analyze_evidence_chains(memory.findings.first(), io.findings.first())
+        analyze_evidence_chains(memory.findings.first(), io.findings.first(), &[])
     }
 
     #[test]
@@ -2721,7 +2945,7 @@ mod tests {
             )
             .is_empty()
         );
-        assert!(analyze_evidence_chains(None, None).is_empty());
+        assert!(analyze_evidence_chains(None, None, &[]).is_empty());
 
         assert!(
             evidence_chains_from(
@@ -2742,6 +2966,235 @@ mod tests {
                 Some(&process_io),
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn same_cgroup_memory_and_io_pressure_form_a_non_causal_chain() {
+        let elapsed = Duration::from_secs(10);
+        let observation = scoped_memory_io_observation(
+            vec![scoped_memory_io_group(
+                "/workload.service",
+                Some(800_000),
+                Some(800_000),
+                None,
+                cgroup_events(Some(3), Some(0)),
+                elapsed,
+            )],
+            elapsed,
+        );
+        let chains = cgroup_chains_from(&observation);
+        assert_eq!(chains.len(), 1);
+        assert_eq!(chains[0].kind, ChainKind::CgroupMemoryConsistentWithIo);
+        assert_eq!(chains[0].relation, ChainRelation::ConsistentWith);
+        assert_eq!(chains[0].confidence, Confidence::Low);
+        assert_ne!(chains[0].confidence, Confidence::High);
+        assert!(matches!(
+            &chains[0].from,
+            ChainEndpoint::CgroupMemory {
+                path,
+                kind: CgroupAssessmentKind::Pressure
+            } if path == "/workload.service"
+        ));
+        assert!(matches!(
+            &chains[0].to,
+            ChainEndpoint::CgroupIo {
+                path,
+                kind: CgroupAssessmentKind::Pressure
+            } if path == "/workload.service"
+        ));
+        assert_eq!(
+            chains[0].evidence.path.as_deref(),
+            Some("/workload.service")
+        );
+        assert_eq!(chains[0].evidence.high_events, Some(3));
+        assert!(
+            chains[0]
+                .qualifiers
+                .iter()
+                .any(|qualifier| qualifier.kind == "chain_not_causal")
+        );
+        assert!(
+            chains[0]
+                .qualifiers
+                .iter()
+                .any(|qualifier| qualifier.kind == "same_cgroup_scope_only")
+        );
+        assert!(!chains[0].summary.to_lowercase().contains("cause"));
+
+        let max_only = scoped_memory_io_observation(
+            vec![scoped_memory_io_group(
+                "/workload.service",
+                Some(800_000),
+                Some(800_000),
+                None,
+                cgroup_events(Some(0), Some(2)),
+                elapsed,
+            )],
+            elapsed,
+        );
+        let max_chains = cgroup_chains_from(&max_only);
+        assert_eq!(max_chains.len(), 1);
+        assert_eq!(max_chains[0].evidence.max_events, Some(2));
+        assert_eq!(max_chains[0].evidence.high_events, None);
+
+        let nested = scoped_memory_io_observation(
+            vec![
+                scoped_memory_io_group(
+                    "/parent.scope",
+                    Some(1_500_000),
+                    Some(1_500_000),
+                    None,
+                    cgroup_events(Some(1), Some(0)),
+                    elapsed,
+                ),
+                scoped_memory_io_group(
+                    "/parent.scope/child.service",
+                    Some(800_000),
+                    Some(800_000),
+                    None,
+                    cgroup_events(Some(2), Some(0)),
+                    elapsed,
+                ),
+            ],
+            elapsed,
+        );
+        let nested_chains = cgroup_chains_from(&nested);
+        assert_eq!(nested_chains.len(), 2);
+        assert_eq!(
+            nested_chains[0].evidence.path.as_deref(),
+            Some("/parent.scope")
+        );
+        assert_eq!(
+            nested_chains[1].evidence.path.as_deref(),
+            Some("/parent.scope/child.service")
+        );
+        assert!(
+            nested_chains
+                .iter()
+                .all(|chain| match (&chain.from, &chain.to) {
+                    (
+                        ChainEndpoint::CgroupMemory { path: from, .. },
+                        ChainEndpoint::CgroupIo { path: to, .. },
+                    ) => from == to,
+                    _ => false,
+                })
+        );
+    }
+
+    #[test]
+    fn cgroup_coincident_or_cross_scope_pressure_does_not_form_a_chain() {
+        let elapsed = Duration::from_secs(10);
+        let coincident = scoped_memory_io_observation(
+            vec![scoped_memory_io_group(
+                "/workload.service",
+                Some(800_000),
+                Some(800_000),
+                None,
+                cgroup_events(Some(0), Some(0)),
+                elapsed,
+            )],
+            elapsed,
+        );
+        assert!(
+            cgroup_chains_from(&coincident).is_empty(),
+            "same-cgroup PSI coincidence without memory.events high/max must not form a chain"
+        );
+
+        let missing_events = scoped_memory_io_observation(
+            vec![scoped_memory_io_group(
+                "/workload.service",
+                Some(800_000),
+                Some(800_000),
+                None,
+                cgroup_events(None, None),
+                elapsed,
+            )],
+            elapsed,
+        );
+        assert!(cgroup_chains_from(&missing_events).is_empty());
+
+        let io_healthy = scoped_memory_io_observation(
+            vec![scoped_memory_io_group(
+                "/workload.service",
+                Some(800_000),
+                Some(5_000),
+                None,
+                cgroup_events(Some(3), Some(0)),
+                elapsed,
+            )],
+            elapsed,
+        );
+        assert!(cgroup_chains_from(&io_healthy).is_empty());
+
+        let cpu_and_io = scoped_memory_io_observation(
+            vec![scoped_memory_io_group(
+                "/workload.service",
+                None,
+                Some(800_000),
+                Some(800_000),
+                cgroup_events(Some(3), Some(0)),
+                elapsed,
+            )],
+            elapsed,
+        );
+        assert!(
+            cgroup_chains_from(&cpu_and_io).is_empty(),
+            "CPU plus I/O pressure must not form a chain"
+        );
+
+        let split_scopes = scoped_memory_io_observation(
+            vec![
+                scoped_memory_io_group(
+                    "/parent.scope",
+                    Some(800_000),
+                    None,
+                    None,
+                    cgroup_events(Some(4), Some(0)),
+                    elapsed,
+                ),
+                scoped_memory_io_group(
+                    "/parent.scope/child.service",
+                    None,
+                    Some(800_000),
+                    None,
+                    cgroup_events(Some(4), Some(0)),
+                    elapsed,
+                ),
+            ],
+            elapsed,
+        );
+        assert!(
+            cgroup_chains_from(&split_scopes).is_empty(),
+            "memory in one cgroup and I/O in another, including parent/child, must not form a chain"
+        );
+
+        let mut reclaim_context = memory_context(0.8);
+        reclaim_context
+            .vmstat_deltas
+            .insert(VmstatCounter::ScanDirect, 10);
+        reclaim_context
+            .vmstat_deltas
+            .insert(VmstatCounter::StealDirect, 5);
+        let host_memory = analyze_memory(
+            Some(&memory_psi(0.08, Some(0.01), elapsed)),
+            Some(&reclaim_context),
+        );
+        let host_io = analyze_io(Some(&io_psi(0.08, Some(0.02), elapsed)), None, None);
+        let host_and_other_cgroup = analyze_evidence_chains(
+            host_memory.findings.first(),
+            host_io.findings.first(),
+            &analyze_cgroups(Some(&split_scopes)).findings,
+        );
+        assert_eq!(host_and_other_cgroup.len(), 1);
+        assert_eq!(
+            host_and_other_cgroup[0].kind,
+            ChainKind::MemoryMechanismConsistentWithIo
+        );
+        assert!(
+            !host_and_other_cgroup
+                .iter()
+                .any(|chain| chain.kind == ChainKind::CgroupMemoryConsistentWithIo)
         );
     }
 

@@ -1,0 +1,8 @@
+Related evidence
+Scoped memory pressure in /workload.service is consistent with scoped I/O pressure in the same cgroup.
+Confidence: low
+Independent evidence: cgroup /workload.service; memory PSI some 8.00%; I/O PSI some 8.00%; 3 memory.high events.
+  Independent same-cgroup PSI and memory.events evidence can support a related path; it does not prove that memory reclaim in this cgroup caused its I/O stalls.
+  The relation is limited to one cgroup path. It does not link host findings to cgroup findings or one cgroup to another, including ancestors and children.
+  memory.events high/max counts are cgroup limit-reclaim signals, not host pgscan/pswpin proof, and may include descendant activity.
+  The chain does not map processes to devices or identify which I/O was reclaim or swap traffic.

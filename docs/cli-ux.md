@@ -364,11 +364,13 @@ Do not make text strings the only machine-readable meaning.
 Use enums/typed fields plus optional explanatory text.
 
 M8 adds `evidence_chains` to hunt/replay JSON. An empty array means no
-defensible relation was found. A chain object uses `kind`
-`memory_mechanism_consistent_with_io`, `relation` `consistent_with`, typed
-`from`/`to` endpoints, compact linking evidence, and qualifiers. It is not a
-finding and is omitted from `findings`. Hunt text appends a `Related evidence`
-section only when a chain exists.
+defensible relation was found. A host chain object uses `kind`
+`memory_mechanism_consistent_with_io`; a same-cgroup chain uses
+`cgroup_memory_consistent_with_io`. Both use `relation` `consistent_with`, typed
+`from`/`to` endpoints, compact linking evidence, and qualifiers. Same-cgroup
+endpoints carry the cgroup path and are never mixed with host endpoints. A chain
+is not a finding and is omitted from `findings`. Hunt text appends a `Related
+evidence` section only when a chain exists.
 
 ## Stable output policy
 

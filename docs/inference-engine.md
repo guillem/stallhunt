@@ -337,12 +337,13 @@ memory pressure
 ```
 
 Unimplemented paths still appear as independent findings with qualifiers.
-The first implemented relation (ADR-0009) is narrower: a memory mechanism
-label plus I/O pressure may be related as `consistent_with` when both findings
-already exist. Coincident PSI without VM-counter mechanism evidence does not
-create a chain. Confidence is never high. The relation does not replace the
-independent memory and I/O verdicts, map processes to devices, or prove that
-reclaim caused the I/O stalls.
+The implemented relations (ADR-0009, ADR-0010) are narrower: a host memory
+mechanism label plus I/O pressure, or same-cgroup memory plus I/O pressure with
+a `memory.events` high/max delta, may be related as `consistent_with` when those
+findings already exist. Coincident PSI without that independent mechanism does
+not create a chain. Confidence is never high. The relation does not replace the
+independent verdicts, map processes to devices, join host findings to cgroup
+findings, or prove that reclaim caused the I/O stalls.
 
 ## Baselines
 

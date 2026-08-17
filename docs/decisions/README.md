@@ -51,3 +51,4 @@ What credible options were rejected and why?
 - [`0007-recording-schema.md`](0007-recording-schema.md)
 - [`0008-watch-finding-lifecycle.md`](0008-watch-finding-lifecycle.md)
 - [`0009-evidence-chains.md`](0009-evidence-chains.md)
+- [`0010-same-cgroup-evidence-chains.md`](0010-same-cgroup-evidence-chains.md)

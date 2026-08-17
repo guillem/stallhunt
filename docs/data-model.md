@@ -375,18 +375,27 @@ recording and does not carry full evidence.
 
 ## Evidence chains
 
-M8 adds an optional relation between already-produced findings (ADR-0009).
+M8 adds an optional relation between already-produced findings (ADR-0009,
+ADR-0010).
 
-A chain is not a resource verdict. The first implemented path is memory
-mechanism pressure plus host I/O pressure:
+A chain is not a resource verdict. Two implemented paths exist:
 
-- `from` is a memory finding labeled reclaim, swap, or possible thrashing,
-- `to` is an I/O pressure finding,
+- host: `from` is a memory finding labeled reclaim, swap, or possible
+  thrashing, `to` is an I/O pressure finding, and VM-counter mechanism evidence
+  is required
+- same-cgroup: `from`/`to` are memory and I/O pressure findings that share one
+  cgroup path, and that memory finding has a positive `memory.events` `high` or
+  `max` delta
+
+In both cases:
+
 - `relation` is `consistent_with`,
-- confidence is never high.
+- confidence is never high,
+- coincident PSI without the independent mechanism does not create a chain.
 
-Coincident PSI without a VM-counter mechanism does not create a chain. Host
-and cgroup findings are not linked. Watch does not track chain identities.
+Host and cgroup findings are not linked to each other. Different cgroup paths,
+including ancestor and child, are not linked. CPU is not linked to I/O. At most
+16 same-cgroup chains are retained. Watch does not track chain identities.
 
 ## Missing data
 

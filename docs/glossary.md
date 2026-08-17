@@ -122,6 +122,7 @@ resource dashboard.
 ## Evidence chain
 
 A relation between already-produced findings when independent evidence
-supports a path. The first implemented chain says memory reclaim/swap
-pressure is `consistent with` block-I/O pressure. It is not a proof that one
-resource caused the other.
+supports a path. Implemented chains say host memory reclaim/swap pressure is
+`consistent with` host I/O pressure, or same-cgroup memory pressure is
+`consistent with` that cgroup's I/O pressure. Neither is a proof that one
+resource caused the other, and host findings are not linked to cgroup findings.

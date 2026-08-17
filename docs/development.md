@@ -4,7 +4,7 @@
 
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
 block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, and the
-first Milestone 8 evidence-chain slice.
+first two Milestone 8 evidence-chain slices.
 
 Build and run it from the repository root:
 

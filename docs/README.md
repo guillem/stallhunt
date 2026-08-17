@@ -2,9 +2,9 @@
 
 This directory is the durable design and project-memory layer.
 
-Milestones 1–6 are functionally complete. Milestone 8's first conservative
-evidence-chain slice relates memory mechanism pressure to I/O pressure without
-claiming causality. `status.md` is the
+Milestones 1–6 are functionally complete. Milestone 8's first two conservative
+evidence-chain slices relate memory mechanism pressure to I/O pressure, first
+host-wide and then same-cgroup, without claiming causality. `status.md` is the
 authoritative current-state record, while
 `experiments.md` retains the controlled validation and overhead evidence.
 
@@ -48,6 +48,7 @@ Accepted initial decisions:
 - ADR-0007: versioned normalized-observation recordings without a compatibility promise
 - ADR-0008: watch tracks finding lifecycle rather than providing a TUI monitor
 - ADR-0009: evidence chains require independent mechanism evidence and never claim causality
+- ADR-0010: same-cgroup memory plus I/O chains stay on one path and never join host findings
 
 ## Documentation rules
 

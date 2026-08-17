@@ -268,17 +268,28 @@ fn evidence_chains_from_observation(
         .into_iter()
         .next()
     });
-    analysis::analyze_evidence_chains(memory.as_ref(), io.as_ref())
+    let cgroup_findings = result
+        .cgroup
+        .as_ref()
+        .and_then(|cgroup| cgroup.observation.as_ref().ok())
+        .map(|observation| analysis::analyze_cgroups(Some(observation)).findings)
+        .unwrap_or_default();
+    analysis::analyze_evidence_chains(memory.as_ref(), io.as_ref(), &cgroup_findings)
 }
 
 fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
-    let mut parts = vec![
-        format!(
-            "memory PSI some {:.2}%",
-            evidence.memory_psi_some_fraction * 100.0
-        ),
-        format!("I/O PSI some {:.2}%", evidence.io_psi_some_fraction * 100.0),
-    ];
+    let mut parts = Vec::new();
+    if let Some(path) = &evidence.path {
+        parts.push(format!("cgroup {path}"));
+    }
+    parts.push(format!(
+        "memory PSI some {:.2}%",
+        evidence.memory_psi_some_fraction * 100.0
+    ));
+    parts.push(format!(
+        "I/O PSI some {:.2}%",
+        evidence.io_psi_some_fraction * 100.0
+    ));
     if let Some(pages) = evidence.scan_direct_pages.filter(|pages| *pages > 0) {
         parts.push(format!("{pages} direct-reclaim scan pages"));
     }
@@ -290,6 +301,12 @@ fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
     }
     if let Some(pages) = evidence.swap_out_pages.filter(|pages| *pages > 0) {
         parts.push(format!("{pages} swap-out pages"));
+    }
+    if let Some(events) = evidence.high_events.filter(|events| *events > 0) {
+        parts.push(format!("{events} memory.high events"));
+    }
+    if let Some(events) = evidence.max_events.filter(|events| *events > 0) {
+        parts.push(format!("{events} memory.max events"));
     }
     parts.join("; ")
 }
@@ -1019,6 +1036,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
     let evidence_chains = analysis::analyze_evidence_chains(
         memory.analysis.findings.first(),
         io.analysis.findings.first(),
+        &cgroup.analysis.findings,
     );
     let findings = analysis::ranked_findings_with_io(cpu.analysis, memory.analysis, io.analysis);
     let mut qualifiers = cpu.qualifiers;
@@ -1754,7 +1772,7 @@ mod tests {
     use super::*;
     use crate::cgroup::{
         CgroupCollectionIssues, CgroupCpuInterval, CgroupFileState, CgroupInterval,
-        CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
+        CgroupMemoryEventsRaw, CgroupPsiInterval, CgroupPsiIntervalState, CgroupResource,
     };
     use crate::cpu::{
         CpuProcessObservation, HostCpuInterval, LoadAverageAvailability, LoadAverageRaw,
@@ -2421,6 +2439,173 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(cpu_only["evidence_chains"].as_array().unwrap().len(), 0);
+    }
+
+    fn scoped_memory_io_cgroup_observation(
+        events: Option<CgroupMemoryEventsRaw>,
+        io_pressured: bool,
+    ) -> CgroupHuntObservation {
+        let elapsed = Duration::from_secs(10);
+        let memory_psi = cgroup_resource(
+            Some(CgroupPsiInterval {
+                elapsed: Some(elapsed),
+                some_total_usec: Some(800_000),
+                full_total_usec: None,
+                state: CgroupPsiIntervalState::Available,
+            }),
+            CgroupFileState::Available,
+        );
+        let io_psi = cgroup_resource(
+            Some(CgroupPsiInterval {
+                elapsed: Some(elapsed),
+                some_total_usec: Some(if io_pressured { 800_000 } else { 5_000 }),
+                full_total_usec: None,
+                state: CgroupPsiIntervalState::Available,
+            }),
+            CgroupFileState::Available,
+        );
+        CgroupHuntObservation {
+            observation: Ok(CgroupObservation {
+                elapsed,
+                members: vec![],
+                issues: CgroupCollectionIssues::default(),
+                groups: vec![CgroupInterval {
+                    path: "/workload.service".into(),
+                    cpu: cgroup_resource(None, CgroupFileState::Missing),
+                    memory_current_end: cgroup_resource(None, CgroupFileState::Missing),
+                    memory_events: match events {
+                        Some(value) => cgroup_resource(Some(value), CgroupFileState::Available),
+                        None => cgroup_resource(None, CgroupFileState::Missing),
+                    },
+                    io: cgroup_resource(None, CgroupFileState::Missing),
+                    cpu_pressure: cgroup_resource(None, CgroupFileState::Missing),
+                    memory_pressure: memory_psi,
+                    io_pressure: io_psi,
+                    systemd_unit_candidate: Some("workload.service".into()),
+                }],
+            }),
+        }
+    }
+
+    fn reclaim_events() -> CgroupMemoryEventsRaw {
+        CgroupMemoryEventsRaw {
+            low: Some(0),
+            high: Some(3),
+            max: Some(0),
+            oom: Some(0),
+            oom_kill: Some(0),
+            oom_group_kill: Some(0),
+        }
+    }
+
+    fn cgroup_chain_hunt_observation() -> HuntObservation {
+        let mut observation = hunt_observation();
+        observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+        observation.psi.as_mut().unwrap().interval.total_delta_us = 50_000;
+        observation.cgroup = Some(scoped_memory_io_cgroup_observation(
+            Some(reclaim_events()),
+            true,
+        ));
+        observation
+    }
+
+    #[test]
+    fn same_cgroup_evidence_chain_is_rendered_without_host_linking() {
+        let text = hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+            },
+            |_| cgroup_chain_hunt_observation(),
+        );
+        let related = text
+            .split_once("Related evidence\n")
+            .map(|(_, related)| format!("Related evidence\n{related}"))
+            .expect("related evidence section");
+        assert_eq!(
+            related,
+            include_str!("../tests/fixtures/render/evidence-chain-cgroup.txt")
+        );
+        assert!(
+            !related
+                .lines()
+                .nth(1)
+                .unwrap()
+                .to_lowercase()
+                .contains("cause")
+        );
+
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| cgroup_chain_hunt_observation(),
+        ))
+        .unwrap();
+        let chains = json["evidence_chains"].as_array().unwrap();
+        assert_eq!(chains.len(), 1);
+        let chain = &chains[0];
+        assert_eq!(chain["kind"], "cgroup_memory_consistent_with_io");
+        assert_eq!(chain["relation"], "consistent_with");
+        assert_eq!(chain["confidence"], "low");
+        assert_eq!(chain["from"]["resource"], "cgroup_memory");
+        assert_eq!(chain["from"]["path"], "/workload.service");
+        assert_eq!(chain["to"]["resource"], "cgroup_io");
+        assert_eq!(chain["to"]["path"], "/workload.service");
+        assert_eq!(chain["evidence"]["path"], "/workload.service");
+        assert_eq!(chain["evidence"]["high_events"], 3);
+        assert!(chain["evidence"]["scan_direct_pages"].is_null());
+        assert!(
+            chain["qualifiers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|qualifier| qualifier["kind"] == "same_cgroup_scope_only")
+        );
+
+        let mut coincident = hunt_observation();
+        coincident.cgroup = Some(scoped_memory_io_cgroup_observation(None, true));
+        let coincident_json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| coincident,
+        ))
+        .unwrap();
+        assert_eq!(
+            coincident_json["evidence_chains"].as_array().unwrap().len(),
+            0
+        );
+
+        let mut combined = chain_hunt_observation(true, true);
+        combined.cgroup = Some(scoped_memory_io_cgroup_observation(
+            Some(reclaim_events()),
+            true,
+        ));
+        let combined_json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| combined,
+        ))
+        .unwrap();
+        let combined_chains = combined_json["evidence_chains"].as_array().unwrap();
+        assert_eq!(combined_chains.len(), 2);
+        assert_eq!(
+            combined_chains[0]["kind"],
+            "memory_mechanism_consistent_with_io"
+        );
+        assert_eq!(
+            combined_chains[1]["kind"],
+            "cgroup_memory_consistent_with_io"
+        );
+        assert_ne!(
+            combined_chains[0]["from"]["resource"],
+            combined_chains[1]["from"]["resource"]
+        );
     }
 
     #[test]

@@ -4,18 +4,19 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 8 — evidence chains (first conservative slice complete)**
+**Milestone 8 — evidence chains (host and same-cgroup slices complete)**
 
 Milestones 1–6 are functionally complete. M8 relates a memory mechanism
-finding to host I/O pressure as `consistent_with` when both already exist
-(ADR-0009). It does not claim causality, does not merge the resource verdicts,
-and does not track chains in watch. Do not start M7 merely because eBPF is
-interesting; add a probe only for a concrete diagnostic gap. Additional M8
-chains should wait for independent linking evidence. M5 recording and replay
-remain available for offline re-analysis. M4 remains implemented with opt-in
-live observational validation; that test still requires a caller-owned
-delegated subtree that already contains the test process and does not mutate
-the hierarchy.
+finding to host I/O pressure, and same-cgroup memory plus I/O pressure, as
+`consistent_with` when those findings already exist (ADR-0009, ADR-0010). It
+does not claim causality, does not merge the resource verdicts, does not link
+host findings to cgroup findings, and does not track chains in watch. Do not
+start M7 merely because eBPF is interesting; add a probe only for a concrete
+diagnostic gap. Additional M8 chains should wait for independent linking
+evidence. M5 recording and replay remain available for offline re-analysis. M4
+remains implemented with opt-in live observational validation; that test still
+requires a caller-owned delegated subtree that already contains the test
+process and does not mutate the hierarchy.
 
 ## Verified milestone assessment
 
@@ -48,10 +49,12 @@ the hierarchy.
   contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
   keeps 16 history windows. It is not a TUI and does not store full evidence.
   SIGINT uses default termination; `--count` bounds scripted runs.
-- **M8 first slice complete:** hunt/replay can relate a memory reclaim, swap,
-  or possible-thrashing finding to host I/O pressure as `consistent_with`.
-  Coincident PSI without a VM-counter mechanism does not create a chain.
-  Confidence is never high. Watch does not track chain identities.
+- **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
+  reclaim, swap, or possible-thrashing finding to host I/O pressure, and can
+  relate same-cgroup memory plus I/O pressure when `memory.events` high or max
+  increased, as `consistent_with`. Coincident PSI without that independent
+  mechanism does not create a chain. Confidence is never high. Host findings
+  are not linked to cgroup findings. Watch does not track chain identities.
 - **M7 not started; remaining M8 chains not started:** no eBPF probe exists,
   and no CPU–I/O, host–cgroup, or process-device chain exists.
 
@@ -208,9 +211,12 @@ the hierarchy.
   JSON emits one `bottleneck.watch_window` object per window. Watch JSON is not
   hunt JSON and not a recording.
 - M8 relates a memory reclaim, swap, or possible-thrashing finding to host I/O
-  pressure as `consistent_with` when both exist. Hunt text appends a related-
-  evidence section; hunt JSON adds `evidence_chains`. Coincidence without a
-  VM-counter mechanism is not a chain, and the relation is never a causal claim.
+  pressure as `consistent_with` when both exist. It also relates same-cgroup
+  memory and I/O pressure when that path has a positive `memory.events` high or
+  max delta. Hunt text appends a related-evidence section; hunt JSON adds
+  `evidence_chains`. Coincidence without the independent mechanism is not a
+  chain, host findings are not linked to cgroup findings, and the relation is
+  never a causal claim.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -265,11 +271,13 @@ the hierarchy.
   pressure. Unlimited `watch` without `--count` samples until interrupted and
   does not drain the current window on SIGINT. Consecutive 100 ms windows remain
   smoke observations, same as hunt.
-- M8's first chain is same-window correlation of independent PSI plus VM
-  counters. It does not prove reclaim or swap caused I/O stalls, does not map
-  processes to devices, does not link host and cgroup findings, and is not a
-  watch identity. Generic memory pressure coincident with I/O pressure remains
-  two findings with no chain.
+- M8's chains are same-window correlation of independent PSI plus either host
+  VM counters or same-cgroup `memory.events` high/max deltas. They do not prove
+  reclaim or swap caused I/O stalls, do not map processes to devices, do not
+  link host and cgroup findings, and are not a watch identity. Generic memory
+  pressure coincident with I/O pressure remains two findings with no chain.
+  Same-cgroup chains also require a high or max event delta, so cgroups without
+  those limit-reclaim counts will not chain.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -282,8 +290,8 @@ the hierarchy.
 Do not start Milestone 7 unless a concrete diagnostic question cannot be
 answered with the current `/proc`, PSI, and cgroup collectors. If that bar is
 not met, add another Milestone 8 chain only when independent linking evidence
-already exists; do not treat coincident PSI as a path. Same-cgroup memory plus
-I/O pressure is the next defensible chain if one is added.
+already exists; do not treat coincident PSI as a path, and do not link host
+findings to cgroup findings.
 
 Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 4,096-PID or 16,384-task caps without a quota-aware setup.
@@ -375,16 +383,11 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, EXP-0007 measured a current release binary on Linux 7.1.5 with
-about 370 visible PIDs and ~1,587 stable tasks. Three one-second hunts used
-about 6 MiB RSS and 110--210 ms PSI-window skew; cgroup collection was already
-at its 256-PID cap. Adding 64 sleepers or 512 sleeping threads stayed under
-the CPU and process-I/O caps. `many_pids` now uses a Python helper so failed
-forks cannot retry into a sleeper leak.
-
-Earlier the same day, M8's first evidence-chain slice was validated with
-deterministic analyzer coverage plus a checked-in related-evidence text
-fixture and structural hunt JSON. Formatting and locked-offline Clippy passed:
+On 2026-08-17, M8's same-cgroup evidence-chain slice was validated with
+deterministic analyzer coverage (same-path positive, coincident PSI, missing
+events, parent/child split, CPU–I/O, and host-not-linked-to-cgroup) plus a
+checked-in related-evidence text fixture and structural hunt JSON. Formatting
+and locked-offline Clippy passed:
 
 ```bash
 cargo fmt --all -- --check
@@ -392,8 +395,19 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Default-gate coverage is 138 unit tests, ten CLI tests, and five ignored
+Default-gate coverage is 141 unit tests, ten CLI tests, and five ignored
 host-workload tests.
+
+Earlier the same day, EXP-0007 measured a current release binary on Linux
+7.1.5 with about 370 visible PIDs and ~1,587 stable tasks. Three one-second
+hunts used about 6 MiB RSS and 110--210 ms PSI-window skew; cgroup collection
+was already at its 256-PID cap. Adding 64 sleepers or 512 sleeping threads
+stayed under the CPU and process-I/O caps. `many_pids` now uses a Python helper
+so failed forks cannot retry into a sleeper leak.
+
+Earlier the same day, M8's first host evidence-chain slice was validated with
+deterministic analyzer coverage plus a checked-in related-evidence text
+fixture and structural hunt JSON.
 
 Earlier the same day, M6 watch was validated with deterministic lifecycle tests
 (new/persistent/resolved, unconfirmed missing data, cgroup cap/history bounds,
