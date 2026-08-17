@@ -46,6 +46,12 @@ pub enum CgroupAssessmentKind {
     Pressure,
     InsufficientObservation,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CgroupMemoryMechanism {
+    Reclaim,
+    Swap,
+}
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CgroupEvidence {
     pub psi_some_fraction: Option<f64>,
@@ -69,6 +75,10 @@ pub struct CgroupFinding {
     pub kind: CgroupAssessmentKind,
     pub severity: Severity,
     pub resource_confidence: Confidence,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mechanism: Option<CgroupMemoryMechanism>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mechanism_confidence: Option<Confidence>,
     pub summary: String,
     pub evidence: CgroupEvidence,
     pub systemd_unit_candidate: Option<String>,
@@ -1461,6 +1471,13 @@ fn cgroup_finding(
     } else {
         CgroupAssessmentKind::Pressure
     };
+    let (mechanism, mechanism_confidence) = cgroup_memory_mechanism_label(resource, kind, group);
+    if mechanism.is_some() {
+        qualifiers.push(Qualifier {
+            kind: "cgroup_memory_mechanism_same_window_correlation",
+            message: "Cgroup memory.stat page deltas occurred in the same window as scoped PSI pressure; they support a reclaim or swap label but do not prove causality.",
+        });
+    }
     let confidence = if kind == CgroupAssessmentKind::InsufficientObservation {
         Confidence::Low
     } else if window.is_some_and(|duration| duration >= Duration::from_secs(5)) {
@@ -1473,17 +1490,27 @@ fn cgroup_finding(
         CgroupResourceKind::Memory => "memory",
         CgroupResourceKind::Io => "I/O",
     };
-    let summary = match kind {
-        CgroupAssessmentKind::Pressure => format!(
+    let summary = match (kind, mechanism) {
+        (CgroupAssessmentKind::Pressure, Some(CgroupMemoryMechanism::Reclaim)) => format!(
+            "Scoped memory reclaim pressure observed in {} ({:.2}% cgroup PSI some).",
+            group.path,
+            some.unwrap_or(0.0) * 100.0
+        ),
+        (CgroupAssessmentKind::Pressure, Some(CgroupMemoryMechanism::Swap)) => format!(
+            "Scoped memory swap pressure observed in {} ({:.2}% cgroup PSI some).",
+            group.path,
+            some.unwrap_or(0.0) * 100.0
+        ),
+        (CgroupAssessmentKind::Pressure, None) => format!(
             "Scoped {resource_name} pressure observed in {} ({:.2}% cgroup PSI some).",
             group.path,
             some.unwrap_or(0.0) * 100.0
         ),
-        CgroupAssessmentKind::NoMeaningfulPressure => format!(
+        (CgroupAssessmentKind::NoMeaningfulPressure, _) => format!(
             "No meaningful scoped {resource_name} pressure observed in {}.",
             group.path
         ),
-        CgroupAssessmentKind::InsufficientObservation => format!(
+        (CgroupAssessmentKind::InsufficientObservation, _) => format!(
             "Scoped {resource_name} assessment for {} is insufficient or unavailable.",
             group.path
         ),
@@ -1494,6 +1521,8 @@ fn cgroup_finding(
         kind,
         severity,
         resource_confidence: confidence,
+        mechanism,
+        mechanism_confidence,
         summary,
         evidence: CgroupEvidence {
             psi_some_fraction: some,
@@ -1512,6 +1541,28 @@ fn cgroup_finding(
         members,
         qualifiers,
     }
+}
+
+fn cgroup_memory_mechanism_label(
+    resource: CgroupResourceKind,
+    kind: CgroupAssessmentKind,
+    group: &crate::cgroup::CgroupInterval,
+) -> (Option<CgroupMemoryMechanism>, Option<Confidence>) {
+    if resource != CgroupResourceKind::Memory || kind != CgroupAssessmentKind::Pressure {
+        return (None, None);
+    }
+    let Some(stat) = group.memory_stat.value.as_ref() else {
+        return (None, None);
+    };
+    if stat.pswpin.is_some_and(|value| value > 0) {
+        return (Some(CgroupMemoryMechanism::Swap), Some(Confidence::Low));
+    }
+    if stat.pgscan_direct.is_some_and(|value| value > 0)
+        && stat.pgsteal_direct.is_some_and(|value| value > 0)
+    {
+        return (Some(CgroupMemoryMechanism::Reclaim), Some(Confidence::Low));
+    }
+    (None, None)
 }
 
 pub fn analyze_cpu(
@@ -1971,6 +2022,120 @@ mod tests {
         assert_eq!(
             analyze_cgroups(Some(&invalid)).findings[0].kind,
             CgroupAssessmentKind::InsufficientObservation
+        );
+    }
+
+    fn memory_finding(observation: &CgroupObservation) -> CgroupFinding {
+        analyze_cgroups(Some(observation))
+            .findings
+            .into_iter()
+            .find(|finding| finding.resource == CgroupResourceKind::Memory)
+            .expect("memory finding")
+    }
+
+    #[test]
+    fn cgroup_memory_stat_labels_reclaim_or_swap_without_creating_pressure() {
+        let elapsed = Duration::from_secs(10);
+        let reclaim = scoped_memory_io_observation(
+            vec![with_cgroup_stat(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    Some(800_000),
+                    None,
+                    None,
+                    cgroup_events(None, None),
+                    elapsed,
+                ),
+                cgroup_stat(Some(12), Some(8), Some(0), Some(0)),
+            )],
+            elapsed,
+        );
+        let reclaim_finding = memory_finding(&reclaim);
+        assert_eq!(reclaim_finding.kind, CgroupAssessmentKind::Pressure);
+        assert_eq!(
+            reclaim_finding.mechanism,
+            Some(CgroupMemoryMechanism::Reclaim)
+        );
+        assert_eq!(reclaim_finding.mechanism_confidence, Some(Confidence::Low));
+        assert!(reclaim_finding.summary.contains("reclaim pressure"));
+        assert!(
+            reclaim_finding.qualifiers.iter().any(
+                |qualifier| qualifier.kind == "cgroup_memory_mechanism_same_window_correlation"
+            )
+        );
+
+        let swap = scoped_memory_io_observation(
+            vec![with_cgroup_stat(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    Some(800_000),
+                    None,
+                    None,
+                    cgroup_events(None, None),
+                    elapsed,
+                ),
+                cgroup_stat(Some(12), Some(8), Some(5), Some(2)),
+            )],
+            elapsed,
+        );
+        let swap_finding = memory_finding(&swap);
+        assert_eq!(swap_finding.mechanism, Some(CgroupMemoryMechanism::Swap));
+        assert!(swap_finding.summary.contains("swap pressure"));
+        assert!(!swap_finding.summary.to_lowercase().contains("cause"));
+
+        let unlabeled = scoped_memory_io_observation(
+            vec![scoped_memory_io_group(
+                "/workload.service",
+                Some(800_000),
+                None,
+                None,
+                cgroup_events(Some(3), Some(0)),
+                elapsed,
+            )],
+            elapsed,
+        );
+        let unlabeled_finding = memory_finding(&unlabeled);
+        assert_eq!(unlabeled_finding.kind, CgroupAssessmentKind::Pressure);
+        assert_eq!(unlabeled_finding.mechanism, None);
+
+        let scan_only = scoped_memory_io_observation(
+            vec![with_cgroup_stat(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    Some(800_000),
+                    None,
+                    None,
+                    cgroup_events(None, None),
+                    elapsed,
+                ),
+                cgroup_stat(Some(12), Some(0), Some(0), Some(0)),
+            )],
+            elapsed,
+        );
+        let scan_only_finding = memory_finding(&scan_only);
+        assert_eq!(scan_only_finding.kind, CgroupAssessmentKind::Pressure);
+        assert_eq!(scan_only_finding.mechanism, None);
+
+        let healthy = scoped_memory_io_observation(
+            vec![with_cgroup_stat(
+                scoped_memory_io_group(
+                    "/workload.service",
+                    Some(5_000),
+                    None,
+                    None,
+                    cgroup_events(None, None),
+                    elapsed,
+                ),
+                cgroup_stat(Some(12), Some(8), Some(5), Some(2)),
+            )],
+            elapsed,
+        );
+        assert!(
+            analyze_cgroups(Some(&healthy))
+                .findings
+                .iter()
+                .all(|finding| finding.kind != CgroupAssessmentKind::Pressure),
+            "page counters must not create a pressure verdict"
         );
     }
 

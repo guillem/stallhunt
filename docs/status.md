@@ -11,13 +11,12 @@ finding to host I/O pressure, and same-cgroup memory plus I/O pressure, as
 `consistent_with` when those findings already exist (ADR-0009, ADR-0010,
 ADR-0011). It does not claim causality, does not merge the resource verdicts,
 does not link host findings to cgroup findings, and does not track chains in
-watch. Do not
-start M7 merely because eBPF is interesting; add a probe only for a concrete
-diagnostic gap. Additional M8 chains should wait for independent linking
-evidence. M5 recording and replay remain available for offline re-analysis. M4
-remains implemented with opt-in live observational validation; that test still
-requires a caller-owned delegated subtree that already contains the test
-process and does not mutate the hierarchy.
+watch. Do not start M7 merely because eBPF is interesting; add a probe only for
+a concrete diagnostic gap. Additional M8 chains should wait for independent
+linking evidence. M5 recording and replay remain available for offline
+re-analysis. M4 remains implemented with opt-in live observational validation;
+that test still requires a caller-owned delegated subtree that already contains
+the test process and does not mutate the hierarchy.
 
 ## Verified milestone assessment
 
@@ -221,6 +220,13 @@ process and does not mutate the hierarchy.
   evidence section; hunt JSON adds `evidence_chains`. Coincidence without the
   independent mechanism is not a chain, host findings are not linked to cgroup
   findings, and the relation is never a causal claim.
+- Scoped memory pressure findings may be labeled reclaim or swap from already
+  collected `memory.stat` page deltas (`pswpin`, or `pgscan_direct` plus
+  `pgsteal_direct`). PSI still creates the verdict; `CgroupAssessmentKind`
+  remains `Pressure`. Mechanism confidence is low. `memory.events` high/max do
+  not label the finding. Scan without steal is unlabeled. Page counters without
+  PSI do not create pressure. There is no scoped thrashing label. Watch still
+  keys off `Pressure`.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -281,7 +287,8 @@ process and does not mutate the hierarchy.
   stalls, do not map processes to devices, do not link host and cgroup
   findings, and are not a watch identity. Generic memory pressure coincident
   with I/O pressure remains two findings with no chain. Direct scan without
-  steal is not a cgroup reclaim mechanism.
+  steal is not a cgroup reclaim mechanism. Scoped memory findings have no
+  thrashing label, and `memory.events` high/max do not label a finding.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -387,10 +394,11 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17, M8's cgroup `memory.stat` mechanism slice was validated with
-deterministic parser, interval, analyzer, and renderer coverage (direct
-reclaim, swap-in, scan-without-steal, events still sufficient, coincident PSI
-still insufficient). Formatting and locked-offline Clippy passed:
+On 2026-08-17, scoped cgroup memory reclaim/swap labels were validated with
+deterministic analyzer coverage (reclaim, swap-wins, unlabeled high events,
+scan-without-steal, page counters without PSI) plus hunt text/JSON rendering of
+the reclaim label and `memory.stat` controller context. Formatting and
+locked-offline Clippy passed:
 
 ```bash
 cargo fmt --all -- --check
@@ -398,8 +406,13 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-Default-gate coverage is 143 unit tests, ten CLI tests, and five ignored
+Default-gate coverage is 144 unit tests, ten CLI tests, and five ignored
 host-workload tests.
+
+Earlier the same day, M8's cgroup `memory.stat` mechanism slice was validated
+with deterministic parser, interval, analyzer, and renderer coverage (direct
+reclaim, swap-in, scan-without-steal, events still sufficient, coincident PSI
+still insufficient); default-gate coverage was then 143 unit tests.
 
 Earlier the same day, M8's same-cgroup evidence-chain slice was validated with
 deterministic analyzer coverage (same-path positive, coincident PSI, missing

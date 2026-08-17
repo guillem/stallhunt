@@ -217,9 +217,11 @@ membership form, and maps a bounded selected PID set by `stat` → cgroup →
 `stat` identity checks. It collects only mapped cgroups and ancestors under
 explicit PID, group, depth, path, and file-byte budgets. Per-cgroup exact PSI
 is an explicitly scoped verdict; CPU, memory, and I/O controller deltas remain
-qualified context. One typed completeness assessment drives standalone
-capabilities, hunt JSON, and hunt completeness, so partial controller files,
-permissions, budgets, and lifecycle loss cannot be presented as complete.
+qualified context. Selected `memory.stat` page deltas may label an already
+pressured scoped memory finding as reclaim or swap without changing the
+`Pressure` kind or creating a verdict. One typed completeness assessment drives
+standalone capabilities, hunt JSON, and hunt completeness, so partial controller
+files, permissions, budgets, and lifecycle loss cannot be presented as complete.
 Path-derived systemd names are optional inferred metadata, without D-Bus or a
 systemd runtime dependency.
 

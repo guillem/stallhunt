@@ -340,12 +340,19 @@ fn cgroup_hunt_text(cgroup: &CgroupHuntObservation) -> String {
     let mut output = String::from("Scoped cgroup findings\n");
     for finding in pressured {
         output.push_str(&format!(
-            "- {} · {} · severity {} · confidence {}\n",
+            "- {} · {} · severity {} · confidence {}",
             finding.path,
             finding.summary,
             severity_name(finding.severity),
             confidence_name(finding.resource_confidence)
         ));
+        if let Some(mechanism_confidence) = finding.mechanism_confidence {
+            output.push_str(&format!(
+                " · mechanism confidence {}",
+                confidence_name(mechanism_confidence)
+            ));
+        }
+        output.push('\n');
         if let Some(unit) = &finding.systemd_unit_candidate {
             output.push_str(&format!(
                 "  systemd path candidate: {unit} (not authoritative)\n"
@@ -395,6 +402,24 @@ fn cgroup_controller_context(finding: &crate::analysis::CgroupFinding) -> String
             }
         }
         lines.push(context);
+    }
+    if let Some(stat) = &evidence.memory_stat.value {
+        let mut parts = Vec::new();
+        if let Some(pages) = stat.pgscan_direct.filter(|pages| *pages > 0) {
+            parts.push(format!("{pages} direct-reclaim scan pages"));
+        }
+        if let Some(pages) = stat.pgsteal_direct.filter(|pages| *pages > 0) {
+            parts.push(format!("{pages} stolen pages"));
+        }
+        if let Some(pages) = stat.pswpin.filter(|pages| *pages > 0) {
+            parts.push(format!("{pages} swap-in pages"));
+        }
+        if let Some(pages) = stat.pswpout.filter(|pages| *pages > 0) {
+            parts.push(format!("{pages} swap-out pages"));
+        }
+        if !parts.is_empty() {
+            lines.push(parts.join("; "));
+        }
     }
     if let Some(io) = &evidence.io.value {
         let read = io.values().filter_map(|device| device.rbytes).sum::<u64>();
@@ -2642,6 +2667,20 @@ mod tests {
         assert_eq!(chain["evidence"]["scan_direct_pages"], 12);
         assert_eq!(chain["evidence"]["steal_direct_pages"], 8);
         assert!(chain["evidence"].get("high_events").is_none());
+        let memory = json["cgroup_findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["resource"] == "memory")
+            .expect("memory finding");
+        assert_eq!(memory["mechanism"], "reclaim");
+        assert_eq!(memory["mechanism_confidence"], "low");
+        assert!(
+            memory["summary"]
+                .as_str()
+                .unwrap()
+                .contains("reclaim pressure")
+        );
         let text = hunt(
             &HuntOptions {
                 duration_ms: 10_000,
@@ -2667,6 +2706,8 @@ mod tests {
                 observation
             },
         );
+        assert!(text.contains("Scoped memory reclaim pressure"));
+        assert!(text.contains("mechanism confidence low"));
         assert!(text.contains("12 direct-reclaim scan pages"));
         assert!(
             !text

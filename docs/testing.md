@@ -172,9 +172,15 @@ cross-scope and CPU–I/O negatives, checked-in related-evidence text
 fixtures, and structural hunt JSON. Chains are not causal claims and are not
 watch identities.
 
+Scoped cgroup memory findings may be labeled reclaim or swap from `memory.stat`
+page deltas. Tests cover reclaim, swap-wins, unlabeled pressure (including
+`memory.events` high without page deltas), scan-without-steal, and page
+counters that must not create a pressure verdict. Watch still keys off
+`Pressure` and does not gain a new identity.
+
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 143 unit tests and ten CLI
+The current normal deterministic gate contains 144 unit tests and ten CLI
 tests. Five host-workload acceptance tests are ignored by default and run only
 when intentionally requested.
 

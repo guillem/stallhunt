@@ -252,7 +252,11 @@ issues. Its capability state is derived from those issues and per-file states,
 not merely the presence of an observation. Membership retains the process key proven by a
 stat-cgroup-stat sequence. A cgroup PSI finding carries cgroup scope and must
 not be merged with or substituted for a host finding; no model edge implies a
-process-to-device or cross-cgroup causal relation.
+process-to-device or cross-cgroup causal relation. A scoped memory pressure
+finding may carry an optional `mechanism` of `reclaim` or `swap` with separate
+low `mechanism_confidence` when `memory.stat` page deltas are present in the
+same window. Those fields are omitted when unlabeled. `memory.events` high/max
+remain chain-only evidence and do not label the finding.
 
 ## Confidence
 

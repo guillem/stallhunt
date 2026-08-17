@@ -64,10 +64,16 @@ versa. Per-cgroup `full` is non-additive subset context.
 
 Per-cgroup `cpu.stat`, memory, and I/O controller measurements explain activity
 only after a scoped PSI verdict, subject to collection qualifiers. They do not
-rank findings independently of PSI. Membership and same-window activity may
-identify a scoped workload for the operator, but cannot prove it caused another
-cgroup's delay. An inferred systemd unit name remains label metadata, not a
-causal or manager-authoritative claim.
+rank findings independently of PSI. When a scoped memory finding is already
+`Pressure`, positive `memory.stat` `pswpin` labels correlated swap pressure, and
+positive `pgscan_direct` plus `pgsteal_direct` labels correlated reclaim
+pressure. Swap wins if both are present. Scan without steal is not reclaim.
+Those labels have low mechanism confidence and never create pressure from page
+counters or `memory.events` alone. There is no scoped thrashing label.
+Membership and same-window activity may identify a scoped workload for the
+operator, but cannot prove it caused another cgroup's delay. An inferred
+systemd unit name remains label metadata, not a causal or manager-authoritative
+claim.
 
 ## CPU v0.1 inference
 
