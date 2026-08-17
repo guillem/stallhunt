@@ -107,6 +107,13 @@ host-wide/no-process-attribution limit explicit. JSON retains memory
 observation, evidence, counter availability, and qualifiers even where the
 concise text renders only the relevant finding/context.
 
+M3 adds a separately ranked I/O assessment. Its text explicitly distinguishes
+the PSI verdict from disk and process I/O-accounting activity candidates, labels
+them same-window/non-causal, and states that affected workloads and
+process-to-device mapping are unavailable. JSON adds I/O observation, PSI/full
+state, diskstats/process-I/O context, candidates, capabilities, and qualifiers
+without changing prior resource objects.
+
 ## Human output structure
 
 Current `hunt` text output is concise and finding-first. It shows the CPU

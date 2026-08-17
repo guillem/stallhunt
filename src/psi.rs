@@ -8,6 +8,7 @@ use std::time::Instant;
 
 pub const CPU_PSI_PATH: &str = "/proc/pressure/cpu";
 pub const MEMORY_PSI_PATH: &str = "/proc/pressure/memory";
+pub const IO_PSI_PATH: &str = "/proc/pressure/io";
 
 /// A direct CPU PSI `some` reading. `total_us` is cumulative since boot.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -518,12 +519,287 @@ fn memory_line_interval(
     })
 }
 
+/// One fully parsed I/O PSI line. `total_us` is cumulative since boot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IoPsiLine {
+    pub avg10_percent: f64,
+    pub avg60_percent: f64,
+    pub avg300_percent: f64,
+    pub total_us: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IoPsiRaw {
+    pub some: IoPsiLine,
+    pub full: Option<IoPsiLine>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IoPsiLineInterval {
+    pub total_delta_us: u64,
+    pub fraction: f64,
+}
+
+/// An independently qualified `full` dimension preserves valid I/O PSI
+/// `some` evidence when only `full` is unavailable or inconsistent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IoPsiFullInterval {
+    Available(IoPsiLineInterval),
+    Missing,
+    CounterRegressed,
+    DeltaExceedsElapsed,
+    ExceedsSome,
+}
+
+impl IoPsiFullInterval {
+    pub const fn explanation(self) -> &'static str {
+        match self {
+            Self::Available(_) => "I/O PSI `some` and `full` have valid exact intervals.",
+            Self::Missing => {
+                "I/O PSI `some` is valid, but `full` was absent from at least one snapshot."
+            }
+            Self::CounterRegressed => {
+                "I/O PSI `some` is valid, but the `full` cumulative total regressed."
+            }
+            Self::DeltaExceedsElapsed => {
+                "I/O PSI `some` is valid, but the `full` delta exceeded its measured interval."
+            }
+            Self::ExceedsSome => {
+                "I/O PSI `some` is valid, but the `full` delta exceeded the `some` delta."
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IoPsiInterval {
+    pub elapsed: Duration,
+    pub some: IoPsiLineInterval,
+    pub full: IoPsiFullInterval,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IoPsiObservation {
+    pub requested: Duration,
+    pub interval: IoPsiInterval,
+    pub start: IoPsiRaw,
+    pub end: IoPsiRaw,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoPsiCapability {
+    Available,
+    Partial,
+    Unsupported,
+    PermissionDenied,
+    Failed,
+}
+
+impl IoPsiCapability {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Partial => "partial",
+            Self::Unsupported => "unsupported",
+            Self::PermissionDenied => "permission_denied",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub const fn explanation(self) -> &'static str {
+        match self {
+            Self::Available => "I/O PSI `some` and `full` are readable and valid.",
+            Self::Partial => "I/O PSI `some` is readable and valid, but `full` is absent.",
+            Self::Unsupported => "The kernel does not expose /proc/pressure/io.",
+            Self::PermissionDenied => "Permission was denied while reading I/O PSI.",
+            Self::Failed => "I/O PSI could not be read or parsed.",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IoPsiError {
+    Unsupported,
+    PermissionDenied,
+    Unreadable,
+    Malformed,
+    CounterRegressed,
+    EmptyInterval,
+    DeltaExceedsElapsed,
+    FullExceedsSome,
+}
+
+impl IoPsiError {
+    pub const fn capability(self) -> IoPsiCapability {
+        match self {
+            Self::Unsupported => IoPsiCapability::Unsupported,
+            Self::PermissionDenied => IoPsiCapability::PermissionDenied,
+            Self::Unreadable | Self::Malformed | Self::FullExceedsSome => IoPsiCapability::Failed,
+            Self::CounterRegressed | Self::EmptyInterval | Self::DeltaExceedsElapsed => {
+                IoPsiCapability::Available
+            }
+        }
+    }
+}
+
+pub fn probe_io_psi() -> IoPsiCapability {
+    match read_io_psi() {
+        Ok(raw) if raw.full.is_some() => IoPsiCapability::Available,
+        Ok(_) => IoPsiCapability::Partial,
+        Err(error) => error.capability(),
+    }
+}
+
+pub fn read_io_psi() -> Result<IoPsiRaw, IoPsiError> {
+    let contents = fs::read_to_string(IO_PSI_PATH).map_err(classify_io_read_error)?;
+    parse_io_psi(&contents)
+}
+
+fn classify_io_read_error(error: io::Error) -> IoPsiError {
+    match error.kind() {
+        io::ErrorKind::NotFound => IoPsiError::Unsupported,
+        io::ErrorKind::PermissionDenied => IoPsiError::PermissionDenied,
+        _ => IoPsiError::Unreadable,
+    }
+}
+
+/// Parses I/O PSI with exactly one complete `some` line and at most one
+/// complete `full` line. A present `full` line must be a subset of `some`.
+pub fn parse_io_psi(input: &str) -> Result<IoPsiRaw, IoPsiError> {
+    let mut some = None;
+    let mut full = None;
+    for line in input.lines().filter(|line| !line.trim().is_empty()) {
+        let mut fields = line.split_ascii_whitespace();
+        let kind = fields.next().ok_or(IoPsiError::Malformed)?;
+        let parsed = parse_io_psi_line(fields)?;
+        match kind {
+            "some" if some.is_none() => some = Some(parsed),
+            "full" if full.is_none() => full = Some(parsed),
+            _ => return Err(IoPsiError::Malformed),
+        }
+    }
+    let some = some.ok_or(IoPsiError::Malformed)?;
+    if let Some(full) = full {
+        ensure_io_full_not_greater_than_some(full, some)?;
+    }
+    Ok(IoPsiRaw { some, full })
+}
+
+fn parse_io_psi_line<'a>(fields: impl Iterator<Item = &'a str>) -> Result<IoPsiLine, IoPsiError> {
+    let mut avg10 = None;
+    let mut avg60 = None;
+    let mut avg300 = None;
+    let mut total = None;
+    for field in fields {
+        let (name, value) = field.split_once('=').ok_or(IoPsiError::Malformed)?;
+        match name {
+            "avg10" => set_io_once(&mut avg10, parse_io_percent(value)?)?,
+            "avg60" => set_io_once(&mut avg60, parse_io_percent(value)?)?,
+            "avg300" => set_io_once(&mut avg300, parse_io_percent(value)?)?,
+            "total" => set_io_once(
+                &mut total,
+                value.parse().map_err(|_| IoPsiError::Malformed)?,
+            )?,
+            _ => {}
+        }
+    }
+    Ok(IoPsiLine {
+        avg10_percent: avg10.ok_or(IoPsiError::Malformed)?,
+        avg60_percent: avg60.ok_or(IoPsiError::Malformed)?,
+        avg300_percent: avg300.ok_or(IoPsiError::Malformed)?,
+        total_us: total.ok_or(IoPsiError::Malformed)?,
+    })
+}
+
+fn parse_io_percent(value: &str) -> Result<f64, IoPsiError> {
+    let parsed = value.parse::<f64>().map_err(|_| IoPsiError::Malformed)?;
+    if parsed.is_finite() && (0.0..=100.0).contains(&parsed) {
+        Ok(parsed)
+    } else {
+        Err(IoPsiError::Malformed)
+    }
+}
+
+fn set_io_once<T>(slot: &mut Option<T>, value: T) -> Result<(), IoPsiError> {
+    if slot.replace(value).is_some() {
+        Err(IoPsiError::Malformed)
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_io_full_not_greater_than_some(
+    full: IoPsiLine,
+    some: IoPsiLine,
+) -> Result<(), IoPsiError> {
+    if full.avg10_percent > some.avg10_percent
+        || full.avg60_percent > some.avg60_percent
+        || full.avg300_percent > some.avg300_percent
+        || full.total_us > some.total_us
+    {
+        Err(IoPsiError::FullExceedsSome)
+    } else {
+        Ok(())
+    }
+}
+
+/// Normalizes I/O PSI totals over the completed monotonic observation window.
+/// A bad `some` interval rejects the result; a bad `full` interval becomes an
+/// explicit qualifier and does not discard valid `some` evidence.
+pub fn io_interval_from_raw(
+    start: IoPsiRaw,
+    end: IoPsiRaw,
+    elapsed: Duration,
+) -> Result<IoPsiInterval, IoPsiError> {
+    let elapsed_us = elapsed.as_micros();
+    if elapsed_us == 0 {
+        return Err(IoPsiError::EmptyInterval);
+    }
+    let some = io_line_interval(start.some, end.some, elapsed_us)?;
+    let full = match (start.full, end.full) {
+        (Some(start), Some(end)) => match io_line_interval(start, end, elapsed_us) {
+            Ok(full) if full.total_delta_us <= some.total_delta_us => {
+                IoPsiFullInterval::Available(full)
+            }
+            Ok(_) => IoPsiFullInterval::ExceedsSome,
+            Err(IoPsiError::CounterRegressed) => IoPsiFullInterval::CounterRegressed,
+            Err(IoPsiError::DeltaExceedsElapsed) => IoPsiFullInterval::DeltaExceedsElapsed,
+            Err(_) => unreachable!("I/O PSI line intervals only return counter errors"),
+        },
+        _ => IoPsiFullInterval::Missing,
+    };
+    Ok(IoPsiInterval {
+        elapsed,
+        some,
+        full,
+    })
+}
+
+fn io_line_interval(
+    start: IoPsiLine,
+    end: IoPsiLine,
+    elapsed_us: u128,
+) -> Result<IoPsiLineInterval, IoPsiError> {
+    let total_delta_us = end
+        .total_us
+        .checked_sub(start.total_us)
+        .ok_or(IoPsiError::CounterRegressed)?;
+    if u128::from(total_delta_us) > elapsed_us {
+        return Err(IoPsiError::DeltaExceedsElapsed);
+    }
+    Ok(IoPsiLineInterval {
+        total_delta_us,
+        fraction: total_delta_us as f64 / elapsed_us as f64,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const VALID: &str = include_str!("../tests/fixtures/proc-pressure-cpu-valid");
     const MEMORY_VALID: &str = include_str!("../tests/fixtures/proc-pressure-memory-valid");
+    const IO_VALID: &str = include_str!("../tests/fixtures/proc-pressure-io-valid");
 
     #[test]
     fn parses_cpu_psi_fixture() {
@@ -873,5 +1149,123 @@ mod tests {
             classify_memory_read_error(io::Error::from(io::ErrorKind::PermissionDenied)),
             MemoryPsiError::PermissionDenied
         );
+    }
+
+    #[test]
+    fn parses_io_psi_fixture_with_some_and_full() {
+        assert_eq!(
+            parse_io_psi(IO_VALID),
+            Ok(IoPsiRaw {
+                some: IoPsiLine {
+                    avg10_percent: 3.5,
+                    avg60_percent: 1.75,
+                    avg300_percent: 0.5,
+                    total_us: 12_000,
+                },
+                full: Some(IoPsiLine {
+                    avg10_percent: 1.25,
+                    avg60_percent: 0.5,
+                    avg300_percent: 0.25,
+                    total_us: 5_000,
+                }),
+            })
+        );
+    }
+
+    #[test]
+    fn io_parser_rejects_malformed_duplicates_and_full_not_subset() {
+        for input in [
+            "some avg10=1 avg60=1 avg300=1 total=1\nfull avg10=1 avg60=1 total=1\n",
+            "some avg10=1 avg60=1 avg300=1 total=1\nsome avg10=1 avg60=1 avg300=1 total=1\n",
+            "some avg10=1 avg60=1 avg300=1 total=1\nfull avg10=1 avg60=1 avg300=1 total=1\nfull avg10=1 avg60=1 avg300=1 total=1\n",
+        ] {
+            assert_eq!(parse_io_psi(input), Err(IoPsiError::Malformed));
+        }
+        assert_eq!(
+            parse_io_psi(
+                "some avg10=1 avg60=1 avg300=1 total=10\nfull avg10=1 avg60=1 avg300=1 total=11\n"
+            ),
+            Err(IoPsiError::FullExceedsSome)
+        );
+    }
+
+    #[test]
+    fn io_interval_uses_exact_totals_and_checks_some_errors() {
+        let start = io_raw(100, Some(25));
+        let end = io_raw(1_100, Some(525));
+        let interval = io_interval_from_raw(start, end, Duration::from_millis(1)).unwrap();
+        assert_eq!(interval.some.total_delta_us, 1_000);
+        assert_eq!(interval.some.fraction, 1.0);
+        assert_eq!(
+            interval.full,
+            IoPsiFullInterval::Available(IoPsiLineInterval {
+                total_delta_us: 500,
+                fraction: 0.5,
+            })
+        );
+        assert_eq!(
+            io_interval_from_raw(start, end, Duration::ZERO),
+            Err(IoPsiError::EmptyInterval)
+        );
+        assert_eq!(
+            io_interval_from_raw(io_raw(100, None), io_raw(99, None), Duration::from_secs(1)),
+            Err(IoPsiError::CounterRegressed)
+        );
+        assert_eq!(
+            io_interval_from_raw(
+                io_raw(0, None),
+                io_raw(1_001, None),
+                Duration::from_millis(1)
+            ),
+            Err(IoPsiError::DeltaExceedsElapsed)
+        );
+    }
+
+    #[test]
+    fn io_full_issues_are_explicit_while_some_survives() {
+        let start = io_raw(100, Some(100));
+        for (end, expected) in [
+            (io_raw(600, None), IoPsiFullInterval::Missing),
+            (io_raw(600, Some(99)), IoPsiFullInterval::CounterRegressed),
+            (
+                io_raw(600, Some(1_101)),
+                IoPsiFullInterval::DeltaExceedsElapsed,
+            ),
+            (io_raw(600, Some(701)), IoPsiFullInterval::ExceedsSome),
+        ] {
+            let interval = io_interval_from_raw(start, end, Duration::from_millis(1)).unwrap();
+            assert_eq!(interval.some.total_delta_us, 500);
+            assert_eq!(interval.full, expected);
+        }
+    }
+
+    #[test]
+    fn io_read_errors_and_invalid_raw_state_have_explicit_capabilities() {
+        assert_eq!(
+            classify_io_read_error(io::Error::from(io::ErrorKind::NotFound)),
+            IoPsiError::Unsupported
+        );
+        assert_eq!(
+            classify_io_read_error(io::Error::from(io::ErrorKind::PermissionDenied)),
+            IoPsiError::PermissionDenied
+        );
+        assert_eq!(IoPsiError::Malformed.capability(), IoPsiCapability::Failed);
+        assert_eq!(
+            IoPsiError::FullExceedsSome.capability(),
+            IoPsiCapability::Failed
+        );
+    }
+
+    fn io_raw(some_total_us: u64, full_total_us: Option<u64>) -> IoPsiRaw {
+        let line = IoPsiLine {
+            avg10_percent: 0.0,
+            avg60_percent: 0.0,
+            avg300_percent: 0.0,
+            total_us: some_total_us,
+        };
+        IoPsiRaw {
+            some: line,
+            full: full_total_us.map(|total_us| IoPsiLine { total_us, ..line }),
+        }
     }
 }

@@ -4,12 +4,15 @@ Last updated: 2026-08-17
 
 ## Current milestone
 
-**Milestone 2 — Memory pressure**
+**Milestone 4 — Cgroup/systemd awareness**
 
 Milestone 1 — the CPU contention vertical slice, including M1.6 validation and
-overhead measurement — is complete. Milestone 2 memory pressure is in progress:
-its first host-memory collector/analyzer/output slice is implemented, but
-controlled harmful-pressure validation remains open.
+overhead measurement — and M3 block-I/O pressure are functionally complete.
+M3's bounded controlled competing-I/O acceptance established a PSI-backed
+resource finding with qualified same-window candidates. It did not establish
+victim attribution, process-device mapping, or causality. M2's first
+host-memory collector/analyzer/output slice is implemented, but safely
+controlled harmful-memory-pressure validation remains open.
 
 ## Implemented
 
@@ -106,6 +109,27 @@ controlled harmful-pressure validation remains open.
 - Deterministic memory parser/normalization/analyzer/renderer fixtures cover
   positive, negative, boundary, missing, and contradictory cases. A live healthy
   memory smoke passed, including graceful capability behavior.
+- M3 reads bounded host I/O PSI, `/proc/diskstats`, and `/proc/<pid>/io` around
+  the same requested sleep. Each resource pair retains its own monotonic interval
+  because collection is sequential. Diskstats is capped at 4,096 devices; process
+  I/O is capped at 1,024 PIDs and uses stat-io-stat identity validation, at most
+  3,072 reads per endpoint. Diskstats input is capped at 1 MiB.
+- Exact I/O PSI `some` is the sole I/O resource-verdict signal. Valid `full` is
+  retained as a non-additive subset. Diskstats preserves raw 512-byte sector
+  units, end `in_flight` gauge, independent counter resets, and distinct busy /
+  weighted-time semantics. Process `read_bytes`, charged `write_bytes`, and
+  `cancelled_write_bytes` remain distinct from logical `rchar`/`wchar` context.
+  Process-I/O attribution is explicitly unsupported on 32-bit targets because
+  the kernel documents possible torn 64-bit counter reads.
+- M3 ranks positive disk and process I/O-accounting activity only during PSI
+  pressure. Candidates are same-window context, not victims, process-device
+  mappings, or causal claims. High activity with low PSI is explicitly healthy.
+- Deterministic I/O parser/normalization/analyzer/renderer fixtures and a live
+  healthy smoke passed. The ignored rootless M3 acceptance also ran without
+  skipping on Linux 7.1.5: two owned `stress-ng` HDD workers (64 MiB each,
+  direct/sync/fsync, checkout-local temporary path) remained alive through a
+  two-second hunt and cleanup passed. It found `io_pressure` with PSI `some`
+  13.6029889%, three device candidates, and two process-I/O candidates.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -130,20 +154,25 @@ controlled harmful-pressure validation remains open.
   possible thrashing requires material direct-reclaim plus bidirectional-swap
   rates and is capped at medium mechanism confidence. All remain
   implementation/fixture validated rather than experimentally validated.
+- M3's controlled PSI/resource and same-window-candidate exit is validated,
+  but it has not validated I/O victims, process-device mapping, or causality.
+  High-visible-PID observer overhead also remains unvalidated.
 - CPU thresholds are provisional and event telemetry is still required for
   stronger causal attribution.
 
 ## Current recommended next task
 
-Complete **Milestone 2: memory pressure** validation:
+Implement M4 cgroup/service attribution as the next vertical slice:
 
-- safely demonstrate a bounded controlled harmful-pressure scenario and compare
-  it with healthy/high-occupancy behavior;
-- preserve exact memory PSI `some` as the verdict, with `full`, meminfo, and
-  vmstat as non-additive context only;
-- retain host-wide/no-process-attribution and conservative causal wording.
+- discover cgroup v2 and, where present, map processes to cgroups/services
+  using bounded, permission-aware collection;
+- retain host PSI verdicts and qualified M1/M3 candidate semantics rather than
+  treating cgroup membership as causal proof;
+- preserve the M2 debt: safely demonstrate harmful memory pressure separately,
+  with exact memory PSI `some` as verdict and `full`, meminfo, and vmstat as
+  non-additive context only.
 
-Do not broaden this task into I/O, cgroups, or eBPF.
+Do not introduce eBPF as a prerequisite for M4.
 
 ## Current design risks
 
@@ -219,7 +248,7 @@ all at bootstrap.
 
 ## Last meaningful validation
 
-On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, M1.6 validation ran:
+On 2026-08-17 with Rust 1.97.1 / Cargo 1.97.1, the deterministic gate ran:
 
 ```bash
 cargo fmt --all -- --check
@@ -228,36 +257,26 @@ cargo test --locked --offline --workspace --all-features
 ```
 
 Validation uses the locked dependency graph from the local Cargo cache. The
-58 unit tests and 6 executable integration tests cover strict schedstat
-parsing, direct fixture-tree collection,
-stable task aggregation, TID reuse, thread churn, counter regression, bounded
-PID/TID selection, normalized CPU analyzer fixtures for healthy, saturated,
-scheduler-unavailable, and busy-but-not-pressured scenarios, plus programmatic
-boundary, missing-data, partial-context, top-N, and contradictory-evidence
-rules. They also cover partial rendering and executable CPU/PSI behavior. On
-the Linux 7.1.5 validation host, the
-`kernel.sched_schedstats` sysctl was `0` while direct per-task schedstat remained
-available. Live 100ms JSON remained an explicit insufficient observation, while
-a live 1s JSON observation produced a medium-confidence no-meaningful-contention
-finding on the otherwise idle validation host and retained stable scheduler
-intervals without collection issues. Two ignored CPU acceptance tests are
-expected and serialize their host workloads. The clean sleeping-thread run
-reported controller wall time 1027 ms, PSI duration 1,006,184 us (6,184 us
-skew), PSI `some` 0.400920706%, 146 schedstat endpoint reads, 73 stable tasks,
-and no contention. The clean oversubscribed run with nine workers reported
-controller wall time 1025 ms, PSI duration 1,004,875 us (4,875 us skew), PSI
-`some` 28.466525687%, high severity, CPU duration 1,001,939 us, host-wide
-loadavg total tasks 986, 34 schedstat reads, five victim candidates, and three
-suspect candidates. Full controlled-load and release-harness ranges are in
+default gate has 103 unit tests and six CLI tests; three ignored host-workload
+tests remain opt-in. On Linux 7.1.5,
+`cargo test --locked --offline --test io_acceptance -- --ignored --nocapture`
+ran rather than skipping. Its exactly two owned `stress-ng` HDD workers used
+64 MiB each with direct/sync/fsync I/O on a checkout-local temporary path under
+an eight-second coordinator bound. The two-second hunt found `io_pressure`:
+PSI `some` was 0.13602988901958982 (13.6029889%), with measured PSI,
+diskstats, and process-I/O windows of 2,002,876 us, 2,000,947 us, and
+2,000,534 us respectively; it reported three device candidates and two process
+suspects. The workload remained alive after measurement and owned cleanup
+passed. This validates neither a victim, process-device mapping, nor causality.
+
+The separate M3 live healthy smoke had all I/O capabilities available, six
+stable disk devices, and four stable process-I/O intervals. A release M3
+baseline short measurement reported wall 1.00s, max RSS 2592 KiB, PSI skew
+1.231 ms, and displayed user/system time of 0.00s. High-visible-PID overhead
+remains unvalidated. Full controlled-load and release-harness ranges are in
 `docs/experiments.md`.
 
 The current M2 slice also passed its deterministic memory parser, interval,
 analyzer, renderer, and executable healthy-host smoke coverage. That smoke
 observed a healthy host and validates capability/degradation behavior; it does
 not substitute for a controlled harmful-memory-pressure experiment.
-
-## Current milestone
-
-**Milestone 2 — Memory pressure.**
-
-See `roadmap.md`.

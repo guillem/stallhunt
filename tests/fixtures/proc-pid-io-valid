@@ -1,0 +1,5 @@
+rchar: 100
+wchar: 200
+read_bytes: 30
+write_bytes: 40
+cancelled_write_bytes: 1

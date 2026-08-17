@@ -1,0 +1,12 @@
+{
+  "schema": "normalized_io_fixture_v1",
+  "psi_some_fraction": 0.08,
+  "psi_full_fraction": 0.02,
+  "window_ms": 10000,
+  "diskstats": true,
+  "process_io": true,
+  "expected_kind": "io_pressure",
+  "expected_severity": "moderate",
+  "expected_first_device": "sda",
+  "expected_first_process": "reader"
+}

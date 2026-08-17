@@ -198,6 +198,24 @@ independently establishes pressure. Meminfo/vmstat are classification/context
 only. This is host-wide evidence: M2 emits no victims, suspects, or causal
 process claims.
 
+### Implemented M3 I/O rule
+
+Only valid exact-interval I/O PSI `some` establishes block-I/O pressure. The
+effective requested/measured window and provisional `<1%`, `1/5/15/30%` bands
+match CPU and memory: below one second is insufficient, 1s..<5s medium
+confidence, and at least 5s high confidence. High disk/process activity with
+`some <1%` remains a no-meaningful-contention result. I/O `full` is a
+non-additive subset and can qualify context but cannot independently create or
+increase a verdict.
+
+When pressure exists, positive stable diskstats and process I/O-accounting deltas
+are ranked as same-window candidates only. They do not identify affected
+workloads, map a process to a device, or prove the process/device caused PSI
+stall. Charged writes and cancelled writes remain separate and are not treated
+as confirmed device writeout. Missing, partial, reset, and capped context lowers
+candidate confidence or removes candidates without discarding valid PSI
+pressure evidence.
+
 ## Confidence model
 
 Confidence reflects evidence quality.

@@ -1,6 +1,7 @@
 mod analysis;
 mod cli;
 mod cpu;
+mod io;
 mod memory;
 mod observe;
 mod psi;
@@ -22,6 +23,8 @@ fn main() -> ExitCode {
                     cpu::probe_cpu_telemetry(),
                     psi::probe_memory_psi(),
                     memory::probe_memory_context(),
+                    psi::probe_io_psi(),
+                    io::probe_io_context(),
                 ),
                 Command::Help(topic) => render::help(topic).to_owned(),
                 Command::Version => render::version(),

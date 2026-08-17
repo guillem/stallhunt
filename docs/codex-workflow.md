@@ -31,25 +31,29 @@ them.
 
 ## Starting from the current implementation
 
-Milestone 1 is complete and M2's first host-memory slice exists. The current
+Milestones 1 and 3 are functionally complete; M2's first host-memory slice
+exists, but its controlled harmful-pressure validation debt remains. The current
 recommended Codex session is:
 
 ```text
 Read AGENTS.md and all required project documentation. Inspect the existing
 Rust implementation before proposing new abstractions.
 
-Complete M2 validation: safely demonstrate controlled harmful memory pressure
-without root/destructive host changes, and compare it with healthy/high-
-occupancy behavior.
+Implement M4 cgroup/service attribution as the smallest coherent vertical
+slice. Use cgroup v2 only where it is mounted and readable; keep collection
+bounded and permission-aware.
 
 Requirements:
-- preserve the implemented rule that exact memory PSI `some` controls the
-  verdict, while `full`, meminfo, and vmstat remain non-additive context,
-- preserve finding-first text output and full structured JSON evidence,
-- record controlled validation methods, results, and remaining limits in project
-  memory; do not claim process attribution from host-wide memory evidence.
+- preserve host PSI verdicts and existing finding-first text/full JSON evidence,
+- present cgroup/service membership and resource activity as scoped context, not
+  proof that a workload caused another workload's delay,
+- retain M3's exact I/O PSI `some` verdict and non-additive `full` context; do
+  not infer device/process mapping, victims, or causality from activity,
+- leave M2's controlled harmful-memory-pressure validation as explicit
+  outstanding work: exact memory PSI `some` remains its verdict and `full`,
+  meminfo, and vmstat remain non-additive context.
 
-Do not broaden into I/O, cgroups, or eBPF during this milestone. Update
+Do not introduce eBPF as a prerequisite. Update
 docs/status.md, docs/experiments.md, and any affected design docs.
 ```
 

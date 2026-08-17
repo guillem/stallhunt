@@ -1,0 +1,10 @@
+{
+  "schema": "normalized_io_fixture_v1",
+  "psi_some_fraction": 0.20,
+  "psi_full_fraction": null,
+  "window_ms": 10000,
+  "diskstats": false,
+  "process_io": false,
+  "expected_kind": "io_pressure",
+  "expected_severity": "high"
+}

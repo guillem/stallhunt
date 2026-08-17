@@ -2,8 +2,9 @@
 
 ## Current state
 
-The repository contains the completed Milestone 1 CPU slice and an in-progress
-M2 host-memory slice.
+The repository contains completed Milestone 1 CPU and M3 block-I/O slices. M2's
+host-memory slice is implemented but still needs controlled harmful-pressure
+validation; M4 cgroup/service attribution is the next implementation milestone.
 
 Build and run it from the repository root:
 
@@ -21,6 +22,14 @@ verdict; `full` is non-additive subset context, while meminfo/vmstat only
 classify/contextualize the result. Memory findings are host-wide and make no
 process attribution. M2 deterministic fixtures and a healthy live smoke pass,
 but controlled harmful-pressure validation remains required.
+
+M3 similarly uses exact I/O PSI `some` as its resource verdict and retains
+diskstats/process-I/O as independently timed activity context. A disk candidate
+and a process I/O-accounting candidate only overlapped the observation; they are
+not a device mapping, victim diagnosis, or causal claim. I/O `full` is
+non-additive subset context. Deterministic fixtures, a healthy smoke, and a
+bounded controlled competing-I/O acceptance pass establish the M3 functional
+exit; they do not establish victim, device-mapping, or causal attribution.
 
 The CPU analyzer uses a bounded two-snapshot CPU PSI, host CPU/load, process CPU, and
 task scheduler-accounting observation. The pure CPU analyzer uses only a valid
@@ -60,14 +69,15 @@ cargo test --workspace --all-features
 
 Add targeted commands as the project evolves.
 
-The executable integration tests are in `tests/cli.rs`; the two opt-in rootless
-host-workload tests are `tests/cpu_acceptance.rs`; parser and renderer unit
-tests live beside their implementations. The acceptance tests serialize their
-host workloads and should run only when intentionally creating bounded CPU
-pressure:
+The executable integration tests are in `tests/cli.rs`; the opt-in rootless
+host-workload tests are `tests/cpu_acceptance.rs` and `tests/io_acceptance.rs`;
+parser and renderer unit tests live beside their implementations. Acceptance
+tests serialize their host workloads and should run only when intentionally
+creating bounded pressure:
 
 ```bash
 cargo test --test cpu_acceptance -- --ignored
+cargo test --test io_acceptance -- --ignored
 ```
 
 For manual collector-overhead measurements, build first and measure the release

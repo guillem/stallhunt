@@ -7,12 +7,17 @@ use serde::Serialize;
 use crate::cpu::{
     self, CpuProcessObservation, ProcessKey, ProcessSchedulerDelayInterval, SchedstatCapability,
 };
+use crate::io::{BlockDeviceKey, DiskstatsObservation, IoCapability, ProcessIoObservation};
 use crate::memory::{MemoryContextCapability, MemoryContextObservation, VmstatCounter};
-use crate::psi::{CpuPsiObservation, MemoryPsiFullInterval, MemoryPsiObservation};
+use crate::psi::{
+    CpuPsiObservation, IoPsiFullInterval, IoPsiObservation, MemoryPsiFullInterval,
+    MemoryPsiObservation,
+};
 
 pub const MIN_DIAGNOSIS_WINDOW: Duration = Duration::from_secs(1);
 pub const CPU_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
 pub const MEMORY_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
+pub const IO_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
 /// Provisional lower bound for calling VM churn material enough to support a
 /// possible-thrashing heuristic. These counters are pages, not bytes.
 const THRASHING_MIN_PAGE_RATE_PER_SEC: u64 = 1_024;
@@ -47,6 +52,7 @@ pub enum AssessmentKind {
 pub enum Resource {
     Cpu,
     Memory,
+    Io,
 }
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CpuFinding {
@@ -180,12 +186,20 @@ pub struct MemoryAnalysisResult {
 pub enum Finding {
     Cpu(CpuFinding),
     Memory(MemoryFinding),
+    Io(IoFinding),
 }
 
-pub fn ranked_findings(cpu: AnalysisResult, memory: MemoryAnalysisResult) -> Vec<Finding> {
-    let mut findings = Vec::with_capacity(cpu.findings.len() + memory.findings.len());
+/// Combines all currently normalized resource findings.
+pub fn ranked_findings_with_io(
+    cpu: AnalysisResult,
+    memory: MemoryAnalysisResult,
+    io: IoAnalysisResult,
+) -> Vec<Finding> {
+    let mut findings =
+        Vec::with_capacity(cpu.findings.len() + memory.findings.len() + io.findings.len());
     findings.extend(cpu.findings.into_iter().map(Finding::Cpu));
     findings.extend(memory.findings.into_iter().map(Finding::Memory));
+    findings.extend(io.findings.into_iter().map(Finding::Io));
     findings.sort_by(|left, right| {
         finding_rank(right)
             .cmp(&finding_rank(left))
@@ -198,6 +212,7 @@ fn finding_rank(finding: &Finding) -> (u8, u8) {
     let (severity, confidence) = match finding {
         Finding::Cpu(finding) => (finding.severity, finding.resource_confidence),
         Finding::Memory(finding) => (finding.severity, finding.resource_confidence),
+        Finding::Io(finding) => (finding.severity, finding.resource_confidence),
     };
     (severity_rank(severity), confidence_rank(confidence))
 }
@@ -206,6 +221,7 @@ fn finding_resource_rank(finding: &Finding) -> u8 {
     match finding {
         Finding::Cpu(_) => 0,
         Finding::Memory(_) => 1,
+        Finding::Io(_) => 2,
     }
 }
 
@@ -556,6 +572,387 @@ const fn no_memory_attribution_qualifier() -> Qualifier {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IoAssessmentKind {
+    #[serde(rename = "io_no_meaningful_contention")]
+    NoMeaningfulContention,
+    #[serde(rename = "io_pressure")]
+    Pressure,
+    #[serde(rename = "io_insufficient_observation")]
+    InsufficientObservation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IoFullEvidenceState {
+    Available,
+    Missing,
+    CounterRegressed,
+    DeltaExceedsElapsed,
+    ExceedsSome,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IoEvidence {
+    pub psi_some_fraction: f64,
+    pub psi_some_total_delta_us: u64,
+    pub psi_full_fraction: Option<f64>,
+    pub psi_full_total_delta_us: Option<u64>,
+    pub psi_full_state: IoFullEvidenceState,
+    pub psi_window_us: u128,
+    pub diskstats_window_us: Option<u128>,
+    pub diskstats_capability: Option<IoCapability>,
+    pub process_io_window_us: Option<u128>,
+    pub process_io_capability: Option<IoCapability>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IoDeviceCandidate {
+    pub key: BlockDeviceKey,
+    pub name: String,
+    pub read_sectors_512: Option<u64>,
+    pub write_sectors_512: Option<u64>,
+    pub reads_completed: Option<u64>,
+    pub writes_completed: Option<u64>,
+    pub io_ticks_ms: Option<u64>,
+    pub weighted_io_ticks_ms: Option<u64>,
+    pub end_in_flight: u64,
+    pub confidence: Confidence,
+    pub label: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IoProcessSuspect {
+    pub key: ProcessKey,
+    pub name: String,
+    pub read_bytes: Option<u64>,
+    /// Write bytes charged when pages were dirtied, not confirmed writeout.
+    pub write_bytes: Option<u64>,
+    pub cancelled_write_bytes: Option<u64>,
+    /// Sum of independently valid read and charged-write deltas. Cancellation
+    /// remains separate because it can apply to another task's dirty pages.
+    pub known_accounted_bytes: u128,
+    pub confidence: Confidence,
+    pub label: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IoFinding {
+    pub resource: Resource,
+    pub kind: IoAssessmentKind,
+    pub severity: Severity,
+    pub resource_confidence: Confidence,
+    pub summary: String,
+    pub evidence: IoEvidence,
+    pub device_candidates: Vec<IoDeviceCandidate>,
+    pub process_suspects: Vec<IoProcessSuspect>,
+    pub qualifiers: Vec<Qualifier>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct IoAnalysisResult {
+    pub findings: Vec<IoFinding>,
+    pub qualifiers: Vec<Qualifier>,
+}
+
+pub fn severity_for_io_psi(some_fraction: f64) -> Severity {
+    if some_fraction < IO_SEVERITY_THRESHOLDS[0] {
+        Severity::None
+    } else if some_fraction < IO_SEVERITY_THRESHOLDS[1] {
+        Severity::Low
+    } else if some_fraction < IO_SEVERITY_THRESHOLDS[2] {
+        Severity::Moderate
+    } else if some_fraction < IO_SEVERITY_THRESHOLDS[3] {
+        Severity::High
+    } else {
+        Severity::Severe
+    }
+}
+
+/// Derives a host-wide block-I/O pressure finding. Exact-interval I/O PSI
+/// `some` alone decides pressure; diskstats and `/proc/<pid>/io` only provide
+/// same-window activity context and intentionally do not identify victims,
+/// backing devices, or a causal process-to-device path.
+pub fn analyze_io(
+    psi: Option<&IoPsiObservation>,
+    diskstats: Option<&DiskstatsObservation>,
+    process_io: Option<&ProcessIoObservation>,
+) -> IoAnalysisResult {
+    let Some(psi) = psi else {
+        return IoAnalysisResult {
+            findings: vec![],
+            qualifiers: vec![Qualifier {
+                kind: "io_assessment_unavailable",
+                message: "I/O PSI is unavailable, so no block-I/O pressure assessment was produced.",
+            }],
+        };
+    };
+    let evidence = io_evidence(psi, diskstats, process_io);
+    let effective_window = psi.requested.min(psi.interval.elapsed);
+    if effective_window < MIN_DIAGNOSIS_WINDOW {
+        return IoAnalysisResult {
+            findings: vec![IoFinding {
+                resource: Resource::Io,
+                kind: IoAssessmentKind::InsufficientObservation,
+                severity: Severity::None,
+                resource_confidence: Confidence::Low,
+                summary: "Block-I/O observation is shorter than 1s; no healthy or pressure conclusion was made.".into(),
+                evidence,
+                device_candidates: vec![],
+                process_suspects: vec![],
+                qualifiers: vec![
+                    Qualifier { kind: "insufficient_observation", message: "A requested and measured I/O PSI interval of at least 1s is required for a diagnosis." },
+                    no_io_victim_attribution_qualifier(),
+                ],
+            }],
+            qualifiers: vec![],
+        };
+    }
+
+    let severity = severity_for_io_psi(psi.interval.some.fraction);
+    let pressure = severity != Severity::None;
+    let resource_confidence = if psi.requested >= Duration::from_secs(5)
+        && psi.interval.elapsed >= Duration::from_secs(5)
+    {
+        Confidence::High
+    } else {
+        Confidence::Medium
+    };
+    let mut qualifiers = io_qualifiers(&evidence, diskstats, process_io);
+    let device_candidates = if pressure {
+        io_device_candidates(diskstats, &mut qualifiers)
+    } else {
+        vec![]
+    };
+    let process_suspects = if pressure {
+        io_process_suspects(process_io, &mut qualifiers)
+    } else {
+        vec![]
+    };
+    if !pressure {
+        qualifiers.push(Qualifier {
+            kind: "io_no_meaningful_contention",
+            message: "No meaningful block-I/O pressure was observed from exact-interval I/O PSI; activity counters do not override that verdict.",
+        });
+    }
+    let summary = if pressure {
+        format!(
+            "Block-I/O pressure observed ({:.2}% I/O PSI some).",
+            evidence.psi_some_fraction * 100.0
+        )
+    } else {
+        "No meaningful block-I/O pressure observed.".into()
+    };
+    IoAnalysisResult {
+        findings: vec![IoFinding {
+            resource: Resource::Io,
+            kind: if pressure {
+                IoAssessmentKind::Pressure
+            } else {
+                IoAssessmentKind::NoMeaningfulContention
+            },
+            severity,
+            resource_confidence,
+            summary,
+            evidence,
+            device_candidates,
+            process_suspects,
+            qualifiers,
+        }],
+        qualifiers: vec![],
+    }
+}
+
+fn io_evidence(
+    psi: &IoPsiObservation,
+    diskstats: Option<&DiskstatsObservation>,
+    process_io: Option<&ProcessIoObservation>,
+) -> IoEvidence {
+    let (psi_full_state, psi_full_fraction, psi_full_total_delta_us) = match psi.interval.full {
+        IoPsiFullInterval::Available(interval) => (
+            IoFullEvidenceState::Available,
+            Some(interval.fraction),
+            Some(interval.total_delta_us),
+        ),
+        IoPsiFullInterval::Missing => (IoFullEvidenceState::Missing, None, None),
+        IoPsiFullInterval::CounterRegressed => (IoFullEvidenceState::CounterRegressed, None, None),
+        IoPsiFullInterval::DeltaExceedsElapsed => {
+            (IoFullEvidenceState::DeltaExceedsElapsed, None, None)
+        }
+        IoPsiFullInterval::ExceedsSome => (IoFullEvidenceState::ExceedsSome, None, None),
+    };
+    IoEvidence {
+        psi_some_fraction: psi.interval.some.fraction,
+        psi_some_total_delta_us: psi.interval.some.total_delta_us,
+        psi_full_fraction,
+        psi_full_total_delta_us,
+        psi_full_state,
+        psi_window_us: psi.interval.elapsed.as_micros(),
+        diskstats_window_us: diskstats.map(|observation| observation.elapsed.as_micros()),
+        diskstats_capability: diskstats.map(|observation| observation.capability),
+        process_io_window_us: process_io.map(|observation| observation.elapsed.as_micros()),
+        process_io_capability: process_io.map(|observation| observation.capability),
+    }
+}
+
+fn io_device_candidates(
+    diskstats: Option<&DiskstatsObservation>,
+    qualifiers: &mut Vec<Qualifier>,
+) -> Vec<IoDeviceCandidate> {
+    let Some(diskstats) = diskstats else {
+        return vec![];
+    };
+    let confidence = if diskstats.capability == IoCapability::Available {
+        Confidence::Medium
+    } else {
+        Confidence::Low
+    };
+    let mut candidates: Vec<_> = diskstats
+        .devices
+        .iter()
+        .filter(|device| {
+            device.sectors_read_512.is_some_and(|value| value > 0)
+                || device.sectors_written_512.is_some_and(|value| value > 0)
+                || device.reads_completed.is_some_and(|value| value > 0)
+                || device.writes_completed.is_some_and(|value| value > 0)
+                || device.io_ticks_ms.is_some_and(|value| value > 0)
+                || device.weighted_io_ticks_ms.is_some_and(|value| value > 0)
+                || device.end_in_flight > 0
+        })
+        .map(|device| IoDeviceCandidate {
+            key: device.key,
+            name: device.name.clone(),
+            read_sectors_512: device.sectors_read_512,
+            write_sectors_512: device.sectors_written_512,
+            reads_completed: device.reads_completed,
+            writes_completed: device.writes_completed,
+            io_ticks_ms: device.io_ticks_ms,
+            weighted_io_ticks_ms: device.weighted_io_ticks_ms,
+            end_in_flight: device.end_in_flight,
+            confidence,
+            label: "same_window_block_device_activity",
+        })
+        .collect();
+    candidates.sort_by(|left, right| {
+        let left_busy = left.io_ticks_ms.map_or(0, |value| value);
+        let right_busy = right.io_ticks_ms.map_or(0, |value| value);
+        let left_weighted = left.weighted_io_ticks_ms.map_or(0, |value| value);
+        let right_weighted = right.weighted_io_ticks_ms.map_or(0, |value| value);
+        let left_activity = u128::from(left.read_sectors_512.map_or(0, |value| value))
+            + u128::from(left.write_sectors_512.map_or(0, |value| value));
+        let right_activity = u128::from(right.read_sectors_512.map_or(0, |value| value))
+            + u128::from(right.write_sectors_512.map_or(0, |value| value));
+        right_busy
+            .cmp(&left_busy)
+            .then_with(|| right_weighted.cmp(&left_weighted))
+            .then_with(|| right.end_in_flight.cmp(&left.end_in_flight))
+            .then_with(|| right_activity.cmp(&left_activity))
+            .then_with(|| {
+                (u128::from(right.reads_completed.map_or(0, |value| value))
+                    + u128::from(right.writes_completed.map_or(0, |value| value)))
+                .cmp(
+                    &(u128::from(left.reads_completed.map_or(0, |value| value))
+                        + u128::from(left.writes_completed.map_or(0, |value| value))),
+                )
+            })
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    candidates.truncate(5);
+    if !candidates.is_empty() {
+        qualifiers.push(Qualifier { kind: "device_activity_same_window_correlation", message: "Diskstats activity occurred in the same window as I/O PSI pressure; it does not establish a constrained device or a causal device path." });
+    }
+    candidates
+}
+
+fn io_process_suspects(
+    process_io: Option<&ProcessIoObservation>,
+    qualifiers: &mut Vec<Qualifier>,
+) -> Vec<IoProcessSuspect> {
+    let Some(process_io) = process_io else {
+        return vec![];
+    };
+    let confidence = if process_io.capability == IoCapability::Available {
+        Confidence::Medium
+    } else {
+        Confidence::Low
+    };
+    let mut suspects: Vec<_> = process_io
+        .processes
+        .iter()
+        .filter_map(|process| {
+            let known_accounted_bytes = u128::from(process.read_bytes.unwrap_or(0))
+                + u128::from(process.write_bytes.unwrap_or(0));
+            (known_accounted_bytes > 0).then_some(IoProcessSuspect {
+                key: process.key,
+                name: process.name.clone(),
+                read_bytes: process.read_bytes,
+                write_bytes: process.write_bytes,
+                cancelled_write_bytes: process.cancelled_write_bytes,
+                known_accounted_bytes,
+                confidence,
+                label: "same_window_process_io_activity",
+            })
+        })
+        .collect();
+    suspects.sort_by(|left, right| {
+        right
+            .known_accounted_bytes
+            .cmp(&left.known_accounted_bytes)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    suspects.truncate(5);
+    if !suspects.is_empty() {
+        qualifiers.push(Qualifier { kind: "process_io_same_window_correlation", message: "Process read_bytes or charged write_bytes changed in the same window as I/O PSI pressure; cancelled writes remain separate, and this does not map the process to a device or prove causality." });
+    }
+    suspects
+}
+
+fn io_qualifiers(
+    evidence: &IoEvidence,
+    diskstats: Option<&DiskstatsObservation>,
+    process_io: Option<&ProcessIoObservation>,
+) -> Vec<Qualifier> {
+    let mut qualifiers = vec![
+        no_io_victim_attribution_qualifier(),
+        Qualifier {
+            kind: "layered_device_visibility",
+            message: "Diskstats can include layered, virtual, or stacked devices; activity may be represented more than once and is not ownership attribution.",
+        },
+        Qualifier {
+            kind: "page_cache_writeback_visibility",
+            message: "Process read_bytes, charged write_bytes, cancelled writes, and diskstats do not reveal page-cache hits, writeback timing, or which storage operation caused a stall.",
+        },
+        Qualifier {
+            kind: "io_full_nonadditive_subset",
+            message: "I/O PSI `full` is a subset of `some`; it is retained as context and never added to the pressure fraction or used to establish pressure.",
+        },
+    ];
+    match evidence.psi_full_state {
+        IoFullEvidenceState::Available => {}
+        IoFullEvidenceState::Missing => qualifiers.push(Qualifier { kind: "io_full_unavailable", message: "I/O PSI `full` is unavailable; valid `some` still determines the resource verdict." }),
+        _ => qualifiers.push(Qualifier { kind: "io_full_interval_invalid", message: "I/O PSI `full` was inconsistent; it was excluded while valid `some` evidence was retained." }),
+    }
+    match diskstats {
+        None => qualifiers.push(Qualifier { kind: "diskstats_unavailable", message: "Diskstats context is unavailable; I/O PSI alone determines the resource verdict." }),
+        Some(observation) if observation.capability != IoCapability::Available => qualifiers.push(Qualifier { kind: "diskstats_partial", message: "Diskstats context is partial or unavailable; device activity attribution is limited." }),
+        Some(_) => {}
+    }
+    match process_io {
+        None => qualifiers.push(Qualifier { kind: "process_io_unavailable", message: "Per-process I/O context is unavailable; no process activity suspects were produced." }),
+        Some(observation) if observation.capability != IoCapability::Available => qualifiers.push(Qualifier { kind: "process_io_partial", message: "Per-process I/O context is partial or unavailable; process activity attribution is limited." }),
+        Some(_) => {}
+    }
+    qualifiers
+}
+
+const fn no_io_victim_attribution_qualifier() -> Qualifier {
+    Qualifier {
+        kind: "no_affected_workload_attribution",
+        message: "This host-wide I/O slice does not identify affected workloads or claim that any process is a victim.",
+    }
+}
+
 pub fn analyze_cpu(
     psi: Option<&CpuPsiObservation>,
     cpu: Option<&CpuProcessObservation>,
@@ -782,10 +1179,13 @@ mod tests {
         HostCpuInterval, LoadAverageAvailability, ProcessCollectionIssues, ProcessCpuInterval,
         SchedstatCollectionIssues,
     };
+    use crate::io::{
+        DiskstatsInterval, DiskstatsIntervalIssues, ProcessIoCollectionIssues, ProcessIoInterval,
+    };
     use crate::memory::{MeminfoRaw, VmstatIntervalIssues};
     use crate::psi::{
-        CpuPsiInterval, CpuPsiRaw, MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval,
-        MemoryPsiRaw,
+        CpuPsiInterval, CpuPsiRaw, IoPsiInterval, IoPsiLine, IoPsiLineInterval, IoPsiRaw,
+        MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval, MemoryPsiRaw,
     };
     use serde::Deserialize;
     use std::collections::BTreeMap;
@@ -1230,6 +1630,240 @@ mod tests {
         }
     }
 
+    fn io_psi(
+        some_fraction: f64,
+        full_fraction: Option<f64>,
+        elapsed: Duration,
+    ) -> IoPsiObservation {
+        let elapsed_us = elapsed.as_micros() as f64;
+        let some_delta = (some_fraction * elapsed_us) as u64;
+        let full_delta = full_fraction.map(|fraction| (fraction * elapsed_us) as u64);
+        let line = IoPsiLine {
+            avg10_percent: 0.0,
+            avg60_percent: 0.0,
+            avg300_percent: 0.0,
+            total_us: 0,
+        };
+        IoPsiObservation {
+            requested: elapsed,
+            interval: IoPsiInterval {
+                elapsed,
+                some: IoPsiLineInterval {
+                    total_delta_us: some_delta,
+                    fraction: some_fraction,
+                },
+                full: full_delta.map_or(IoPsiFullInterval::Missing, |total_delta_us| {
+                    IoPsiFullInterval::Available(IoPsiLineInterval {
+                        total_delta_us,
+                        fraction: full_fraction.unwrap(),
+                    })
+                }),
+            },
+            start: IoPsiRaw {
+                some: line,
+                full: full_delta.map(|_| line),
+            },
+            end: IoPsiRaw {
+                some: IoPsiLine {
+                    total_us: some_delta,
+                    ..line
+                },
+                full: full_delta.map(|total_us| IoPsiLine { total_us, ..line }),
+            },
+        }
+    }
+
+    fn io_context() -> (DiskstatsObservation, ProcessIoObservation) {
+        let diskstats = DiskstatsObservation {
+            elapsed: Duration::from_secs(10),
+            capability: IoCapability::Available,
+            devices: vec![
+                DiskstatsInterval {
+                    key: BlockDeviceKey {
+                        major: 8,
+                        minor: 16,
+                    },
+                    name: "sdb".into(),
+                    reads_completed: Some(2),
+                    sectors_read_512: Some(100),
+                    writes_completed: Some(2),
+                    sectors_written_512: Some(200),
+                    io_ticks_ms: Some(1),
+                    weighted_io_ticks_ms: Some(1),
+                    end_in_flight: 0,
+                },
+                DiskstatsInterval {
+                    key: BlockDeviceKey { major: 8, minor: 0 },
+                    name: "sda".into(),
+                    reads_completed: Some(1),
+                    sectors_read_512: Some(1_000),
+                    writes_completed: Some(0),
+                    sectors_written_512: Some(0),
+                    io_ticks_ms: Some(1),
+                    weighted_io_ticks_ms: Some(1),
+                    end_in_flight: 0,
+                },
+            ],
+            issues: DiskstatsIntervalIssues::default(),
+        };
+        let process_io = ProcessIoObservation {
+            elapsed: Duration::from_secs(10),
+            capability: IoCapability::Available,
+            processes: vec![
+                ProcessIoInterval {
+                    key: ProcessKey {
+                        pid: 2,
+                        start_time_ticks: 1,
+                    },
+                    name: "writer".into(),
+                    read_bytes: Some(1),
+                    write_bytes: Some(900),
+                    cancelled_write_bytes: Some(0),
+                    rchar: None,
+                    wchar: None,
+                },
+                ProcessIoInterval {
+                    key: ProcessKey {
+                        pid: 1,
+                        start_time_ticks: 1,
+                    },
+                    name: "reader".into(),
+                    read_bytes: Some(1_000),
+                    write_bytes: Some(0),
+                    cancelled_write_bytes: Some(0),
+                    rchar: None,
+                    wchar: None,
+                },
+            ],
+            issues: ProcessIoCollectionIssues::default(),
+            regressed: vec![],
+        };
+        (diskstats, process_io)
+    }
+
+    #[test]
+    fn io_psi_alone_controls_pressure_and_activity_is_ranked_only_when_pressured() {
+        let (diskstats, process_io) = io_context();
+        let pressured = &analyze_io(
+            Some(&io_psi(0.08, Some(0.02), Duration::from_secs(10))),
+            Some(&diskstats),
+            Some(&process_io),
+        )
+        .findings[0];
+        assert_eq!(pressured.kind, IoAssessmentKind::Pressure);
+        assert_eq!(pressured.device_candidates[0].name, "sda");
+        assert_eq!(pressured.process_suspects[0].name, "reader");
+        assert!(
+            pressured
+                .qualifiers
+                .iter()
+                .any(|q| q.kind == "no_affected_workload_attribution")
+        );
+        let healthy = &analyze_io(
+            Some(&io_psi(0.005, Some(0.001), Duration::from_secs(10))),
+            Some(&diskstats),
+            Some(&process_io),
+        )
+        .findings[0];
+        assert_eq!(healthy.kind, IoAssessmentKind::NoMeaningfulContention);
+        assert!(healthy.device_candidates.is_empty() && healthy.process_suspects.is_empty());
+    }
+
+    #[test]
+    fn io_boundaries_missing_and_contradictory_context_are_conservative() {
+        assert_eq!(severity_for_io_psi(0.009_999), Severity::None);
+        assert_eq!(severity_for_io_psi(0.01), Severity::Low);
+        assert_eq!(severity_for_io_psi(0.05), Severity::Moderate);
+        assert_eq!(severity_for_io_psi(0.15), Severity::High);
+        assert_eq!(severity_for_io_psi(0.30), Severity::Severe);
+        let missing = &analyze_io(
+            Some(&io_psi(0.20, None, Duration::from_secs(10))),
+            None,
+            None,
+        )
+        .findings[0];
+        assert_eq!(missing.kind, IoAssessmentKind::Pressure);
+        assert!(
+            missing
+                .qualifiers
+                .iter()
+                .any(|q| q.kind == "diskstats_unavailable")
+        );
+        let short = &analyze_io(
+            Some(&io_psi(0.20, Some(0.01), Duration::from_millis(999))),
+            None,
+            None,
+        )
+        .findings[0];
+        assert_eq!(short.kind, IoAssessmentKind::InsufficientObservation);
+        assert!(analyze_io(None, None, None).findings.is_empty());
+    }
+
+    #[test]
+    fn partial_io_context_reduces_attribution_confidence() {
+        let (mut diskstats, mut process_io) = io_context();
+        diskstats.capability = IoCapability::Partial;
+        process_io.capability = IoCapability::Partial;
+        let finding = &analyze_io(
+            Some(&io_psi(0.08, Some(0.02), Duration::from_secs(10))),
+            Some(&diskstats),
+            Some(&process_io),
+        )
+        .findings[0];
+        assert!(
+            finding
+                .device_candidates
+                .iter()
+                .all(|candidate| candidate.confidence == Confidence::Low)
+        );
+        assert!(
+            finding
+                .process_suspects
+                .iter()
+                .all(|suspect| suspect.confidence == Confidence::Low)
+        );
+        assert!(
+            finding
+                .qualifiers
+                .iter()
+                .any(|qualifier| qualifier.kind == "diskstats_partial")
+        );
+    }
+
+    #[test]
+    fn normalized_io_fixtures_drive_analyzer() {
+        for input in [
+            include_str!("../tests/fixtures/io/pressure-ranked.json"),
+            include_str!("../tests/fixtures/io/healthy-high-activity.json"),
+            include_str!("../tests/fixtures/io/boundary-low.json"),
+            include_str!("../tests/fixtures/io/missing-context.json"),
+            include_str!("../tests/fixtures/io/short-window.json"),
+        ] {
+            let fixture: IoFixture = serde_json::from_str(input).unwrap();
+            assert_eq!(fixture.schema, "normalized_io_fixture_v1");
+            let (diskstats, process_io) = io_context();
+            let finding = &analyze_io(
+                Some(&io_psi(
+                    fixture.psi_some_fraction,
+                    fixture.psi_full_fraction,
+                    Duration::from_millis(fixture.window_ms),
+                )),
+                fixture.diskstats.then_some(&diskstats),
+                fixture.process_io.then_some(&process_io),
+            )
+            .findings[0];
+            let json = serde_json::to_value(finding).unwrap();
+            assert_eq!(json["kind"], fixture.expected_kind);
+            assert_eq!(json["severity"], fixture.expected_severity);
+            if let Some(expected) = fixture.expected_first_device {
+                assert_eq!(finding.device_candidates[0].name, expected);
+            }
+            if let Some(expected) = fixture.expected_first_process {
+                assert_eq!(finding.process_suspects[0].name, expected);
+            }
+        }
+    }
+
     fn memory_context(occupancy_fraction: f64) -> MemoryContextObservation {
         let total = 1_000_000_u64;
         let available = ((1.0 - occupancy_fraction) * total as f64) as u64;
@@ -1422,7 +2056,7 @@ mod tests {
             Some(&memory_context(0.8)),
         );
         assert!(matches!(
-            ranked_findings(cpu, memory).first(),
+            ranked_findings_with_io(cpu, memory, IoAnalysisResult::default()).first(),
             Some(Finding::Memory(_))
         ));
     }
@@ -1496,6 +2130,20 @@ mod tests {
         expected_kind: String,
         expected_severity: String,
         expected_qualifier: String,
+    }
+
+    #[derive(Deserialize)]
+    struct IoFixture {
+        schema: String,
+        psi_some_fraction: f64,
+        psi_full_fraction: Option<f64>,
+        window_ms: u64,
+        diskstats: bool,
+        process_io: bool,
+        expected_kind: String,
+        expected_severity: String,
+        expected_first_device: Option<String>,
+        expected_first_process: Option<String>,
     }
 
     #[derive(Deserialize)]

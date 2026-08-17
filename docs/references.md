@@ -82,6 +82,17 @@ Relevant to:
 
 Use as supporting documentation when interpreting reclaim/writeback behavior. Avoid turning tuning recommendations into automatic remediation.
 
+### Block I/O accounting and procfs
+
+- <https://docs.kernel.org/admin-guide/iostats.html>
+- <https://docs.kernel.org/filesystems/proc.html>
+
+M3 uses these upstream sources for `/proc/diskstats` field semantics, including
+raw 512-byte sectors, in-flight gauge, busy time, and weighted busy time, and
+for `/proc/<pid>/io` storage-layer, charged-write, cancelled-write, and logical
+I/O counters. These fields are
+same-window context and do not establish a process-to-device mapping.
+
 ## eBPF — future milestone
 
 ### Aya

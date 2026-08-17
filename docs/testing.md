@@ -125,7 +125,20 @@ vmstat interval rather than the PSI interval. A live healthy smoke only
 checks structural capability/degradation behavior; it is not controlled harmful
 memory-pressure validation.
 
+M3 adds deterministic diskstats/process-I/O/PSI parser and interval coverage,
+normalized I/O fixtures for healthy high activity, pressure ranking, low
+boundary, missing context, and short windows, plus renderer/executable healthy
+smoke coverage. Its ignored rootless acceptance test also ran a bounded
+competing-I/O scenario: exactly two owned `stress-ng` HDD workers on a
+checkout-local temporary path, with direct/sync/fsync behavior and an
+eight-second coordinator bound. The test asserts a PSI-backed I/O-pressure
+finding while preserving the lack of victim, process-device, and causal claims.
+
 Mark environment-dependent tests clearly.
+
+The current normal deterministic gate contains 103 unit tests and six CLI
+tests. Three host-workload acceptance tests are ignored by default and run only
+when intentionally requested.
 
 ### 6. Synthetic load scenarios
 
@@ -148,10 +161,9 @@ Later:
 
 #### I/O
 
-Later:
-- disposable filesystem/device/test file,
-- controlled writers/readers,
-- verify I/O pressure.
+Completed M3 acceptance coverage uses a checkout-local temporary path and owned,
+bounded workers. Follow-up I/O tests must preserve that non-destructive model and
+must not turn same-window candidates into causal/device-mapping assertions.
 
 Synthetic tests must be safe and bounded.
 

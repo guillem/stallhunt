@@ -184,9 +184,11 @@ Potential values:
 - `write_bytes`,
 - `cancelled_write_bytes`.
 
-Distinguish logical I/O from storage I/O.
-
-`read_bytes`/`write_bytes` are more relevant to backing-storage attribution than `rchar`/`wchar`, but semantics must be documented.
+Distinguish logical I/O from storage-layer accounting. `read_bytes` counts
+storage-layer reads; `write_bytes` is charged at page-dirtying time and does not
+prove writeout. `cancelled_write_bytes` records dirty-byte cancellation and may
+refer to bytes charged to another task, so it is not a safe per-process net
+subtraction. `rchar`/`wchar` are logical syscall-oriented context.
 
 Permissions may prevent access to other users' processes.
 
@@ -232,6 +234,29 @@ without a page-size contract. Rates use the independent vmstat interval, never
 the PSI interval.
 
 ## `/proc/diskstats`
+
+### Implemented M3 block-I/O collection
+
+M3 parses `/proc/pressure/io` with `some` as the exact-interval verdict source
+and optional `full` as separately-qualified, non-additive subset context.
+Diskstats input is byte-bounded to 1 MiB and retains at most 4,096 major/minor
+devices per endpoint. A name change for a reused major/minor is rejected as
+lifecycle churn; same-name reattachment remains indistinguishable. Its
+sectors retain the kernel's raw 512-byte unit; `in_flight` is an end gauge, while
+busy and weighted I/O times retain their distinct kernel semantics. Each counter
+delta is independently omitted on reset instead of fabricating a zero or
+discarding unrelated fields.
+
+Process I/O is bounded to 1,024 lowest PIDs per endpoint and reads
+`stat` → `io` → `stat` for stable identity, at most 3,072 reads per endpoint.
+`read_bytes` records storage-layer reads. `write_bytes` is charged when pages
+are dirtied and does not prove writeout; `cancelled_write_bytes` is retained
+separately because a truncating task can cancel dirty bytes charged to another
+task. `rchar`/`wchar` remain distinct logical-I/O context. Device and process
+data are same-window accounting activity only, not backing-device attribution.
+Process-I/O attribution is disabled on 32-bit targets because the kernel
+documents that these 64-bit proc counters may tear there; an upward torn read
+could otherwise fabricate a dominant candidate.
 
 Use device major/minor identity.
 

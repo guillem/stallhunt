@@ -145,6 +145,30 @@ Cases:
 - competing readers/writers with measurable I/O PSI,
 - process attribution incomplete due to permissions.
 
+## EXP-0004: M3 healthy-host and controlled competing-I/O validation
+
+Date: 2026-08-17. M3 deterministic fixtures and an executable healthy-host
+smoke validate parser/interval/output paths and the conservative
+high-activity-with-low-PSI no-contention behavior. The live smoke had all I/O
+capabilities available, six stable disk devices, and four stable process-I/O
+intervals.
+
+`cargo test --locked --offline --test io_acceptance -- --ignored --nocapture`
+then ran without skipping on Linux 7.1.5. It owned exactly two `stress-ng` HDD
+workers, 64 MiB each, using direct, sync, and fsync I/O in a
+checkout-local temporary path. The coordinator was bounded to eight seconds;
+the hunt ran for two seconds. It found `io_pressure` with PSI `some`
+0.13602988901958982 (13.6029889%), PSI window 2,002,876 us, diskstats window
+2,000,947 us, and process-I/O window 2,000,534 us; it ranked three device
+candidates and two process suspects. The workload remained alive after the
+measurement and owned cleanup passed.
+
+This establishes the M3 controlled PSI/resource and qualified-candidate exit.
+It does not validate I/O victims, a process-to-device mapping, or causality.
+The release baseline short run reported wall 1.00s, max RSS 2592 KiB, PSI skew
+1.231 ms, and user/system time displayed as 0.00s; high-visible-PID overhead
+remains unvalidated.
+
 ## Overhead experiments
 
 At minimum measure:

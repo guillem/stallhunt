@@ -157,10 +157,11 @@ enum Evidence {
         delay: Duration,
         window: ObservationWindow,
     },
-    IoBytes {
+    IoAccounting {
         process: ProcessKey,
-        read_bytes: u64,
-        write_bytes: u64,
+        storage_read_bytes: Option<u64>,
+        charged_write_bytes: Option<u64>,
+        cancelled_write_bytes: Option<u64>,
     },
     MissingCapability {
         capability: Capability,
@@ -228,6 +229,14 @@ represented separately because it is a subset of `some`, not a second pressure
 amount to add. Pressure confidence and optional VM-counter mechanism confidence
 are separate. The host-memory finding has no victims or suspects: the input
 evidence is host-wide and the collector does not walk processes.
+
+M3 adds `IoFinding`/`IoEvidence`, device activity candidates keyed by
+major/minor with name-change lifecycle validation, and process I/O-accounting
+activity candidates keyed by PID plus start
+time. Diskstats sectors remain raw 512-byte-sector units, `in_flight` remains an
+end-snapshot gauge, and each counter delta may be absent after reset. The two
+candidate lists are correlation-only same-window context, not a process-to-device
+mapping, causal chain, or victim model.
 
 ## Confidence
 

@@ -153,8 +153,9 @@ If compile times, ownership boundaries, reuse or eBPF components justify it late
 
 ## Current implementation layout
 
-Milestones 1 and the initial M2 host-memory slice combine bounded CPU/process,
-memory-context, and PSI collection with typed inference/output boundaries:
+Milestones 1, M2 host-memory, and the completed M3 I/O slice combine bounded
+CPU/process, memory-context, I/O-context, and PSI collection with typed
+inference/output boundaries:
 
 ```text
 src/
@@ -162,9 +163,10 @@ src/
   main.rs       # process entry point and exit behavior
   cli.rs        # command/options model and duration parsing
   cpu.rs        # procfs CPU/process snapshots and interval normalization
+  io.rs         # bounded diskstats and process I/O-accounting intervals
   memory.rs     # bounded host meminfo/vmstat snapshots and intervals
   observe.rs    # sequential bounded multi-resource observation orchestration
-  psi.rs        # CPU and memory PSI parsing, capabilities, and intervals
+  psi.rs        # CPU, memory, and I/O PSI parsing, capabilities, and intervals
   render.rs     # concise finding-first text and full-evidence JSON rendering
 tests/
   cli.rs                # executable-level behavior tests
@@ -195,6 +197,16 @@ mechanism/context qualifiers. The collector performs no PID walk for memory, so
 the initial host-wide finding deliberately has no process attribution. VM rates
 use the independently measured memory-context interval; mechanism confidence is
 separate from pressure confidence.
+
+M3 keeps exact I/O PSI separate from disk/process I/O activity. Diskstats and
+`/proc/<pid>/io` are sequentially collected across the same single sleep but
+retain independent monotonic intervals. The observer bounds diskstats to 4,096
+devices and 1 MiB of input, and process I/O to 1,024 PIDs using a stat-io-stat
+identity check (at most 3,072 file reads per endpoint). Disk/device and process candidates are
+same-window activity only; the slice does not identify stalled-workload victims,
+map processes to devices, or claim a causal path. Its controlled acceptance
+validates that bounded rootless competing I/O can produce the PSI-backed resource
+finding and candidates, not those unsupported attribution claims.
 
 ## Observation lifecycle
 

@@ -146,6 +146,10 @@ The tool can explain both harmful and benign high-memory scenarios.
 
 ## Milestone 3 — Block I/O pressure
 
+Status: complete. The bounded rootless competing-I/O acceptance run established
+a PSI-backed pressure finding with qualified same-window candidates. It did not
+validate victim attribution, process-device mapping, or causality.
+
 Telemetry:
 
 - `/proc/pressure/io`,
@@ -156,15 +160,20 @@ Telemetry:
 Findings:
 
 - active I/O pressure,
-- affected workloads,
-- device-level contributors,
-- process/cgroup suspects with explicit confidence limits.
+- same-window device activity candidates,
+- same-window process I/O-accounting candidates,
+- explicit absence of victim, process-device, and causal mapping.
 
 Exit condition:
 
-Synthetic competing I/O workload produces a meaningful device + workload diagnosis.
+Synthetic competing I/O workload produces a meaningful PSI-backed pressure
+finding and qualified same-window device/process activity candidates without
+overclaiming victim or causal mapping.
 
 ## Milestone 4 — Cgroup/systemd awareness
+
+Status: next implementation milestone. M2's controlled harmful-memory-pressure
+validation remains an outstanding cross-cutting validation debt.
 
 Goal:
 

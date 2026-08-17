@@ -101,7 +101,10 @@ Later releases may add:
 │   ├── analysis.rs
 │   ├── cli.rs
 │   ├── cpu.rs
+│   ├── io.rs
 │   ├── main.rs
+│   ├── memory.rs
+│   ├── observe.rs
 │   ├── psi.rs
 │   └── render.rs
 ├── tests/
@@ -182,3 +185,12 @@ classify/contextualize a PSI verdict, and this host-wide slice makes no process
 attribution. Deterministic fixtures and a live healthy smoke pass, but a safely
 controlled real-host harmful-memory-pressure experiment remains required before
 Milestone 2 can be complete.
+
+M3 block-I/O pressure is functionally complete after a bounded rootless
+competing-I/O acceptance run. It uses exact-interval I/O PSI `some` for the
+verdict, retains non-additive `full` context, and only ranks disk/process
+activity in the same window after PSI pressure is found. Disk and process
+candidates are not victims, are not mapped to one another, and do not establish
+causality. High I/O activity with low PSI remains a healthy/no-contention result.
+M2 controlled harmful-memory-pressure validation remains outstanding; the next
+implementation milestone is M4 cgroup/service attribution.

@@ -2,8 +2,9 @@
 
 This directory is the durable design and project-memory layer.
 
-Milestone 1's CPU vertical slice is complete; Milestone 2 memory pressure is in
-progress. `status.md` is the authoritative current-state record, while
+Milestones 1 and 3 are functionally complete; M2 harmful-memory validation
+remains open and M4 cgroup/service attribution is next. `status.md` is the
+authoritative current-state record, while
 `experiments.md` retains the controlled validation and overhead evidence behind
 the CPU heuristics.
 

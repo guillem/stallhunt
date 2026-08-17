@@ -77,6 +77,18 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
         Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
     ));
     assert!(matches!(
+        json["capabilities"]["io_psi"]["state"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
+        json["capabilities"]["diskstats"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
+        json["capabilities"]["process_io"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
         capability,
         "available" | "unsupported" | "permission_denied" | "failed"
     ));
@@ -104,6 +116,9 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
                     || json["capabilities"]["memory_psi"]["state"] != "available"
                     || json["capabilities"]["meminfo"] != "available"
                     || json["capabilities"]["vmstat"] != "available"
+                    || json["capabilities"]["io_psi"]["state"] != "available"
+                    || json["capabilities"]["diskstats"] != "available"
+                    || json["capabilities"]["process_io"] != "available"
             );
         }
         status => panic!("unexpected hunt status: {status:?}"),
@@ -139,6 +154,19 @@ fn capabilities_json_reports_the_actual_cpu_psi_probe_state() {
     ));
     assert!(matches!(
         json["capabilities"]["vmstat"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
+        json["capabilities"]["io_psi"]["state"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(json["capabilities"]["io_psi"]["message"].is_string());
+    assert!(matches!(
+        json["capabilities"]["diskstats"].as_str(),
+        Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
+    ));
+    assert!(matches!(
+        json["capabilities"]["process_io"].as_str(),
         Some("available" | "partial" | "unsupported" | "permission_denied" | "failed")
     ));
 }

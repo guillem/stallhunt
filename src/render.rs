@@ -2,16 +2,17 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::analysis::{self, AnalysisResult, AssessmentKind};
+use crate::analysis::{self, AnalysisResult, AssessmentKind, IoAssessmentKind};
 use crate::cli::{CapabilitiesOptions, HelpTopic, HuntOptions, OutputFormat};
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
+use crate::io::{DiskstatsError, IoCapabilities, IoCapability, ProcessIoObservation};
 use crate::memory::{
     MemoryContextCapabilities, MemoryContextCapability, MemoryContextObservation, VmstatCounter,
 };
-use crate::observe::{HuntObservation, MemoryHuntObservation};
+use crate::observe::{HuntObservation, IoHuntObservation, MemoryHuntObservation};
 use crate::psi::{
-    CpuPsiCapability, CpuPsiObservation, MemoryPsiCapability, MemoryPsiFullInterval,
-    MemoryPsiObservation,
+    CpuPsiCapability, CpuPsiObservation, IoPsiCapability, IoPsiFullInterval, IoPsiObservation,
+    MemoryPsiCapability, MemoryPsiFullInterval, MemoryPsiObservation,
 };
 
 const ROOT_HELP: &str = "Linux performance triage that reports evidence-backed bottlenecks.\n\nUSAGE:\n    bottleneck <COMMAND>\n\nCOMMANDS:\n    hunt          Run a bounded diagnosis\n    capabilities  Report available telemetry\n    version       Print version information\n    help          Print this help or help for a command\n\nOPTIONS:\n    -h, --help     Print help\n    -V, --version  Print version information\n";
@@ -49,10 +50,12 @@ pub fn capabilities(
     cpu: CpuTelemetryCapabilities,
     memory_psi: MemoryPsiCapability,
     memory: MemoryContextCapabilities,
+    io_psi: IoPsiCapability,
+    io: IoCapabilities,
 ) -> String {
     match options.output {
         OutputFormat::Text => format!(
-            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\nMemory PSI: {}\n{}\nHost /proc/meminfo: {}\nHost /proc/vmstat: {}\n",
+            "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\nMemory PSI: {}\n{}\nHost /proc/meminfo: {}\nHost /proc/vmstat: {}\nI/O PSI: {}\n{}\nHost /proc/diskstats: {}\nProcess /proc/<pid>/io: {}\n",
             cpu_psi.as_str(),
             cpu_psi.explanation(),
             cpu.host_cpu.as_str(),
@@ -63,6 +66,10 @@ pub fn capabilities(
             memory_psi.explanation(),
             memory.meminfo.as_str(),
             memory.vmstat.as_str(),
+            io_psi.as_str(),
+            io_psi.explanation(),
+            io.diskstats.as_str(),
+            io.process_io.as_str(),
         ),
         OutputFormat::Json => to_json(&CapabilitiesJson {
             schema_version: 1,
@@ -85,6 +92,12 @@ pub fn capabilities(
                 },
                 meminfo: memory.meminfo.as_str(),
                 vmstat: memory.vmstat.as_str(),
+                io_psi: CapabilityJson {
+                    state: io_psi.as_str(),
+                    message: io_psi.explanation(),
+                },
+                diskstats: io.diskstats.as_str(),
+                process_io: io.process_io.as_str(),
             },
         }),
     }
@@ -106,16 +119,34 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
                 .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
         })
         .unwrap_or((0, 0));
+    let io_rank = result
+        .io
+        .as_ref()
+        .and_then(|io| {
+            analysis::analyze_io(
+                io.psi.as_ref().ok(),
+                io.diskstats.as_ref().ok(),
+                io.processes.as_ref().ok(),
+            )
+            .findings
+            .first()
+            .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
+        })
+        .unwrap_or((0, 0));
     let cpu_output = cpu_hunt_text(options, result.psi, result.cpu);
-    let Some(memory) = result.memory else {
-        return cpu_output;
-    };
-    let memory_output = memory_hunt_text(options, memory);
-    if memory_rank > cpu_rank {
-        format!("{memory_output}\n{cpu_output}")
-    } else {
-        format!("{cpu_output}\n{memory_output}")
+    let mut outputs = vec![(cpu_rank, 0_u8, cpu_output)];
+    if let Some(memory) = result.memory {
+        outputs.push((memory_rank, 1, memory_hunt_text(options, memory)));
     }
+    if let Some(io) = result.io {
+        outputs.push((io_rank, 2, io_hunt_text(options, io)));
+    }
+    outputs.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    outputs
+        .into_iter()
+        .map(|(_, _, output)| output)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn cpu_hunt_text(
@@ -348,8 +379,204 @@ fn memory_psi_error_explanation(error: crate::psi::MemoryPsiError) -> &'static s
     }
 }
 
+fn io_hunt_text(options: &HuntOptions, io: IoHuntObservation) -> String {
+    match (io.psi, io.diskstats, io.processes) {
+        (Ok(psi), diskstats, processes) => {
+            let analysis =
+                analysis::analyze_io(Some(&psi), diskstats.as_ref().ok(), processes.as_ref().ok());
+            io_finding_text(
+                &analysis,
+                options.duration_ms,
+                &psi,
+                diskstats.as_ref().ok(),
+                processes.as_ref().ok(),
+            )
+        }
+        (Err(error), diskstats, processes) => format!(
+            "I/O assessment unavailable\nVerdict: unavailable (no exact I/O PSI interval)\nCapability: I/O PSI {} — {}\nRetained context: diskstats {}; process I/O {}.\nContext and limitations:\n  Disk and process I/O activity cannot establish block-I/O pressure without exact-interval I/O PSI.\nTiming: requested {}{}{}\n",
+            error.capability().as_str(),
+            io_psi_error_explanation(error),
+            diskstats
+                .as_ref()
+                .map_or("failed", |value| value.capability.as_str()),
+            processes
+                .as_ref()
+                .map_or("failed", |value| value.capability.as_str()),
+            human_duration(options.duration_ms),
+            diskstats.as_ref().map_or_else(
+                |_| String::new(),
+                |value| format!(
+                    "; diskstats measured {}",
+                    human_duration_from_duration(value.elapsed)
+                )
+            ),
+            processes.as_ref().map_or_else(
+                |_| String::new(),
+                |value| format!(
+                    "; process I/O measured {}",
+                    human_duration_from_duration(value.elapsed)
+                )
+            ),
+        ),
+    }
+}
+
+fn io_finding_text(
+    analysis: &crate::analysis::IoAnalysisResult,
+    requested_duration_ms: u64,
+    psi: &IoPsiObservation,
+    diskstats: Option<&crate::io::DiskstatsObservation>,
+    processes: Option<&ProcessIoObservation>,
+) -> String {
+    let Some(finding) = analysis.findings.first() else {
+        return format!(
+            "I/O assessment unavailable\nVerdict: unavailable\nTiming: requested {}\n",
+            human_duration(requested_duration_ms)
+        );
+    };
+    let verdict = match finding.kind {
+        IoAssessmentKind::NoMeaningfulContention => "no meaningful block-I/O pressure",
+        IoAssessmentKind::Pressure => "block-I/O pressure",
+        IoAssessmentKind::InsufficientObservation => "insufficient observation",
+    };
+    let mut output = format!(
+        "{}\nVerdict: {verdict} · severity {} · I/O confidence {}\nEvidence: I/O PSI some {:.2}% over exact {} interval ({} cumulative stalled time)",
+        finding.summary,
+        severity_name(finding.severity),
+        confidence_name(finding.resource_confidence),
+        finding.evidence.psi_some_fraction * 100.0,
+        human_duration_from_duration(psi.interval.elapsed),
+        human_duration_from_duration(Duration::from_micros(
+            finding.evidence.psi_some_total_delta_us
+        )),
+    );
+    if let (Some(fraction), Some(total)) = (
+        finding.evidence.psi_full_fraction,
+        finding.evidence.psi_full_total_delta_us,
+    ) {
+        output.push_str(&format!(
+            "; full {:.2}% ({} all-non-idle-task stall)",
+            fraction * 100.0,
+            human_duration_from_duration(Duration::from_micros(total)),
+        ));
+    } else {
+        output.push_str("; full unavailable or excluded");
+    }
+    output.push('\n');
+    if finding.kind == IoAssessmentKind::Pressure {
+        if finding.device_candidates.is_empty() {
+            output.push_str(
+                "Device activity candidates: unavailable or no positive stable activity\n",
+            );
+        } else {
+            output.push_str(
+                "Device activity candidates (same window only; not mapped to workloads):\n",
+            );
+            for (index, candidate) in finding.device_candidates.iter().enumerate() {
+                output.push_str(&format!(
+                    "  {}. {} ({}:{}) — read/write {} / {} 512-byte sectors; I/O time {}; in-flight {} ({}; same-window activity only)\n",
+                    index + 1,
+                    terminal_name(&candidate.name),
+                    candidate.key.major,
+                    candidate.key.minor,
+                    optional_counter(candidate.read_sectors_512),
+                    optional_counter(candidate.write_sectors_512),
+                    candidate.io_ticks_ms.map_or_else(|| "unavailable".to_owned(), |value| human_duration_from_duration(Duration::from_millis(value))),
+                    candidate.end_in_flight,
+                    confidence_name(candidate.confidence),
+                ));
+            }
+        }
+        if finding.process_suspects.is_empty() {
+            output.push_str(
+                "Process I/O accounting candidates: unavailable or no positive stable read/charged-write activity\n",
+            );
+        } else {
+            output.push_str("Process I/O accounting candidates (same window only; not proven causal or device-mapped):\n");
+            for (index, candidate) in finding.process_suspects.iter().enumerate() {
+                output.push_str(&format!(
+                    "  {}. {} [{}] — {} read + {} charged write; {} cancelled write ({}; same-window accounting only)\n",
+                    index + 1,
+                    terminal_name(&candidate.name),
+                    candidate.key.pid,
+                    optional_bytes(candidate.read_bytes),
+                    optional_bytes(candidate.write_bytes),
+                    optional_bytes(candidate.cancelled_write_bytes),
+                    confidence_name(candidate.confidence),
+                ));
+            }
+        }
+        output.push_str("Affected workloads: unavailable (this telemetry does not identify I/O stall victims or map processes to devices)\n");
+    } else {
+        output.push_str(
+            "Device and process activity candidates: not ranked without an I/O pressure finding\n",
+        );
+        output.push_str("Affected workloads: not assessed without an I/O pressure finding\n");
+    }
+    if !finding.qualifiers.is_empty() {
+        output.push_str("Context and limitations:\n");
+        for qualifier in &finding.qualifiers {
+            output.push_str(&format!("  {}\n", qualifier.message));
+        }
+    }
+    output.push_str(&format!(
+        "Timing: requested {}; I/O PSI measured {}{}{}\n",
+        human_duration(requested_duration_ms),
+        human_duration_from_duration(psi.interval.elapsed),
+        diskstats.map_or_else(String::new, |value| format!(
+            "; diskstats measured {}",
+            human_duration_from_duration(value.elapsed)
+        )),
+        processes.map_or_else(String::new, |value| format!(
+            "; process I/O measured {}",
+            human_duration_from_duration(value.elapsed)
+        )),
+    ));
+    output
+}
+
+fn io_psi_error_explanation(error: crate::psi::IoPsiError) -> &'static str {
+    match error {
+        crate::psi::IoPsiError::Unsupported => "The kernel does not expose /proc/pressure/io.",
+        crate::psi::IoPsiError::PermissionDenied => "Permission was denied while reading I/O PSI.",
+        crate::psi::IoPsiError::Unreadable => "I/O PSI could not be read.",
+        crate::psi::IoPsiError::Malformed => {
+            "I/O PSI was readable but did not match the expected kernel format."
+        }
+        crate::psi::IoPsiError::CounterRegressed => {
+            "I/O PSI `some` cumulative total decreased during the observation."
+        }
+        crate::psi::IoPsiError::EmptyInterval => {
+            "I/O PSI snapshots did not have a measurable interval."
+        }
+        crate::psi::IoPsiError::DeltaExceedsElapsed => {
+            "I/O PSI `some` cumulative delta exceeded the measured interval."
+        }
+        crate::psi::IoPsiError::FullExceedsSome => {
+            "I/O PSI `full` exceeded `some` and was rejected as inconsistent."
+        }
+    }
+}
+
+fn io_error_capability(error: crate::psi::IoPsiError) -> IoPsiCapability {
+    match error {
+        crate::psi::IoPsiError::Unsupported => IoPsiCapability::Unsupported,
+        crate::psi::IoPsiError::PermissionDenied => IoPsiCapability::PermissionDenied,
+        crate::psi::IoPsiError::Unreadable
+        | crate::psi::IoPsiError::Malformed
+        | crate::psi::IoPsiError::FullExceedsSome => IoPsiCapability::Failed,
+        crate::psi::IoPsiError::CounterRegressed
+        | crate::psi::IoPsiError::EmptyInterval
+        | crate::psi::IoPsiError::DeltaExceedsElapsed => IoPsiCapability::Available,
+    }
+}
+
 fn optional_counter(value: Option<u64>) -> String {
     value.map_or_else(|| "unavailable".to_owned(), |value| value.to_string())
+}
+
+fn optional_bytes(value: Option<u64>) -> String {
+    value.map_or_else(|| "unavailable".to_owned(), human_bytes)
 }
 
 fn human_bytes(bytes: u64) -> String {
@@ -530,24 +757,32 @@ fn terminal_name(name: &str) -> String {
 fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
     let cpu = cpu_json_parts(result.psi, result.cpu);
     let memory = memory_json_parts(result.memory.as_ref());
-    let status = if cpu.complete && memory.complete {
+    let io = io_json_parts(result.io.as_ref());
+    let status = if cpu.complete && memory.complete && io.complete {
         "observed"
     } else {
         "incomplete"
     };
-    let findings = analysis::ranked_findings(cpu.analysis, memory.analysis);
+    let findings = analysis::ranked_findings_with_io(cpu.analysis, memory.analysis, io.analysis);
     let mut qualifiers = cpu.qualifiers;
     qualifiers.extend(memory.qualifiers);
+    qualifiers.extend(io.qualifiers);
     let observation = if cpu.psi.is_some()
         || cpu.cpu.is_some()
         || memory.psi.is_some()
         || memory.context.is_some()
+        || io.psi.is_some()
+        || io.diskstats_observation.is_some()
+        || io.processes.is_some()
     {
         Some(ObservationJson::from_parts(
             cpu.psi,
             cpu.cpu,
             memory.psi,
             memory.context,
+            io.psi,
+            io.diskstats_observation,
+            io.processes,
         ))
     } else {
         None
@@ -577,10 +812,117 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
             },
             meminfo: memory.meminfo,
             vmstat: memory.vmstat,
+            io_psi: CapabilityJson {
+                state: io.psi_state,
+                message: io.psi_message,
+            },
+            diskstats: io.diskstats,
+            process_io: io.process_io,
         },
         findings,
         qualifiers,
     })
+}
+
+struct IoJsonParts {
+    psi: Option<IoPsiObservation>,
+    diskstats_observation: Option<crate::io::DiskstatsObservation>,
+    processes: Option<ProcessIoObservation>,
+    psi_state: &'static str,
+    psi_message: &'static str,
+    diskstats: &'static str,
+    process_io: &'static str,
+    analysis: crate::analysis::IoAnalysisResult,
+    qualifiers: Vec<QualifierJson<'static>>,
+    complete: bool,
+}
+
+fn io_json_parts(io: Option<&IoHuntObservation>) -> IoJsonParts {
+    let Some(io) = io else {
+        return IoJsonParts {
+            psi: None,
+            diskstats_observation: None,
+            processes: None,
+            psi_state: "not_observed",
+            psi_message: "I/O telemetry was not included in this injected observation.",
+            diskstats: "not_observed",
+            process_io: "not_observed",
+            analysis: crate::analysis::IoAnalysisResult::default(),
+            qualifiers: vec![],
+            complete: true,
+        };
+    };
+    let analysis = analysis::analyze_io(
+        io.psi.as_ref().ok(),
+        io.diskstats.as_ref().ok(),
+        io.processes.as_ref().ok(),
+    );
+    let (psi, psi_state, psi_message, psi_complete) = match &io.psi {
+        Ok(psi) => {
+            let capability = match psi.interval.full {
+                IoPsiFullInterval::Available(_) => IoPsiCapability::Available,
+                _ => IoPsiCapability::Partial,
+            };
+            (
+                Some(*psi),
+                capability.as_str(),
+                psi.interval.full.explanation(),
+                capability == IoPsiCapability::Available,
+            )
+        }
+        Err(error) => (
+            None,
+            io_error_capability(*error).as_str(),
+            io_psi_error_explanation(*error),
+            false,
+        ),
+    };
+    let (diskstats, diskstats_capability, diskstats_complete) = match &io.diskstats {
+        Ok(value) => (
+            Some(value.clone()),
+            value.capability.as_str(),
+            value.capability == IoCapability::Available,
+        ),
+        Err(error) => (None, diskstats_error_capability(*error).as_str(), false),
+    };
+    let (processes, process_io_capability, processes_complete) = match &io.processes {
+        Ok(value) => (
+            Some(value.clone()),
+            value.capability.as_str(),
+            value.capability == IoCapability::Available,
+        ),
+        Err(error) => (None, diskstats_error_capability(*error).as_str(), false),
+    };
+    let qualifiers = analysis
+        .qualifiers
+        .iter()
+        .map(|qualifier| QualifierJson {
+            kind: qualifier.kind,
+            message: qualifier.message,
+        })
+        .collect();
+    IoJsonParts {
+        psi,
+        diskstats_observation: diskstats,
+        processes,
+        psi_state,
+        psi_message,
+        diskstats: diskstats_capability,
+        process_io: process_io_capability,
+        analysis,
+        qualifiers,
+        complete: psi_complete && diskstats_complete && processes_complete,
+    }
+}
+
+fn diskstats_error_capability(error: DiskstatsError) -> IoCapability {
+    match error {
+        DiskstatsError::Unsupported => IoCapability::Unsupported,
+        DiskstatsError::PermissionDenied => IoCapability::PermissionDenied,
+        DiskstatsError::Unreadable | DiskstatsError::Malformed | DiskstatsError::EmptyInterval => {
+            IoCapability::Failed
+        }
+    }
 }
 
 struct CpuJsonParts {
@@ -802,6 +1144,12 @@ struct ObservationJson {
     memory_psi: Option<MemoryPsiJson>,
     memory_context_duration_us: Option<u128>,
     memory_context: Option<MemoryContextObservation>,
+    io_psi_duration_us: Option<u128>,
+    io_psi: Option<IoPsiJson>,
+    diskstats_duration_us: Option<u128>,
+    diskstats: Option<crate::io::DiskstatsObservation>,
+    process_io_duration_us: Option<u128>,
+    process_io: Option<ProcessIoObservation>,
 }
 
 impl ObservationJson {
@@ -810,6 +1158,9 @@ impl ObservationJson {
         cpu: Option<CpuProcessObservation>,
         memory_psi: Option<MemoryPsiObservation>,
         memory_context: Option<MemoryContextObservation>,
+        io_psi: Option<IoPsiObservation>,
+        diskstats: Option<crate::io::DiskstatsObservation>,
+        process_io: Option<ProcessIoObservation>,
     ) -> Self {
         let (psi_duration_us, cpu_psi) = match psi {
             Some(observation) => (
@@ -867,6 +1218,45 @@ impl ObservationJson {
         let memory_context_duration_us = memory_context
             .as_ref()
             .map(|context| context.elapsed.as_micros());
+        let (io_psi_duration_us, io_psi) = match io_psi {
+            Some(observation) => {
+                let (full_fraction, full_total_delta_us, full_state) = match observation
+                    .interval
+                    .full
+                {
+                    IoPsiFullInterval::Available(interval) => (
+                        Some(interval.fraction),
+                        Some(interval.total_delta_us),
+                        "available",
+                    ),
+                    IoPsiFullInterval::Missing => (None, None, "missing"),
+                    IoPsiFullInterval::CounterRegressed => (None, None, "counter_regressed"),
+                    IoPsiFullInterval::DeltaExceedsElapsed => (None, None, "delta_exceeds_elapsed"),
+                    IoPsiFullInterval::ExceedsSome => (None, None, "exceeds_some"),
+                };
+                (
+                    Some(observation.interval.elapsed.as_micros()),
+                    Some(IoPsiJson {
+                        some_fraction: observation.interval.some.fraction,
+                        some_percent: observation.interval.some.fraction * 100.0,
+                        some_total_delta_us: observation.interval.some.total_delta_us,
+                        full_fraction,
+                        full_percent: full_fraction.map(|fraction| fraction * 100.0),
+                        full_total_delta_us,
+                        full_state,
+                        some_avg10_percent: observation.end.some.avg10_percent,
+                        some_avg60_percent: observation.end.some.avg60_percent,
+                        some_avg300_percent: observation.end.some.avg300_percent,
+                        full_avg10_percent: observation.end.full.map(|line| line.avg10_percent),
+                        full_avg60_percent: observation.end.full.map(|line| line.avg60_percent),
+                        full_avg300_percent: observation.end.full.map(|line| line.avg300_percent),
+                    }),
+                )
+            }
+            None => (None, None),
+        };
+        let diskstats_duration_us = diskstats.as_ref().map(|value| value.elapsed.as_micros());
+        let process_io_duration_us = process_io.as_ref().map(|value| value.elapsed.as_micros());
         match cpu {
             Some(cpu) => Self {
                 psi_duration_us,
@@ -884,6 +1274,12 @@ impl ObservationJson {
                 memory_psi,
                 memory_context_duration_us,
                 memory_context,
+                io_psi_duration_us,
+                io_psi,
+                diskstats_duration_us,
+                diskstats,
+                process_io_duration_us,
+                process_io,
             },
             None => Self {
                 psi_duration_us,
@@ -901,6 +1297,12 @@ impl ObservationJson {
                 memory_psi,
                 memory_context_duration_us,
                 memory_context,
+                io_psi_duration_us,
+                io_psi,
+                diskstats_duration_us,
+                diskstats,
+                process_io_duration_us,
+                process_io,
             },
         }
     }
@@ -934,6 +1336,23 @@ struct MemoryPsiJson {
 }
 
 #[derive(Serialize)]
+struct IoPsiJson {
+    some_fraction: f64,
+    some_percent: f64,
+    some_total_delta_us: u64,
+    full_fraction: Option<f64>,
+    full_percent: Option<f64>,
+    full_total_delta_us: Option<u64>,
+    full_state: &'static str,
+    some_avg10_percent: f64,
+    some_avg60_percent: f64,
+    some_avg300_percent: f64,
+    full_avg10_percent: Option<f64>,
+    full_avg60_percent: Option<f64>,
+    full_avg300_percent: Option<f64>,
+}
+
+#[derive(Serialize)]
 struct CapabilitiesJsonValue<'a> {
     cpu_psi: CapabilityJson<'a>,
     host_cpu: &'a str,
@@ -942,6 +1361,9 @@ struct CapabilitiesJsonValue<'a> {
     memory_psi: CapabilityJson<'a>,
     meminfo: &'a str,
     vmstat: &'a str,
+    io_psi: CapabilityJson<'a>,
+    diskstats: &'a str,
+    process_io: &'a str,
 }
 
 #[derive(Serialize)]
@@ -1010,10 +1432,14 @@ mod tests {
         CpuProcessObservation, HostCpuInterval, LoadAverageAvailability, LoadAverageRaw,
         ProcessCollectionIssues, ProcessCpuInterval, ProcessKey, ProcessSchedulerDelayInterval,
     };
+    use crate::io::{
+        BlockDeviceKey, DiskstatsInterval, DiskstatsIntervalIssues, DiskstatsObservation,
+        ProcessIoCollectionIssues, ProcessIoInterval,
+    };
     use crate::memory::{MeminfoRaw, VmstatIntervalIssues};
     use crate::psi::{
-        CpuPsiInterval, CpuPsiRaw, MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval,
-        MemoryPsiRaw,
+        CpuPsiInterval, CpuPsiRaw, IoPsiInterval, IoPsiLine, IoPsiLineInterval, IoPsiRaw,
+        MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval, MemoryPsiRaw,
     };
 
     fn observation() -> CpuPsiObservation {
@@ -1077,6 +1503,7 @@ mod tests {
                 schedstat_capability: crate::cpu::SchedstatCapability::Unsupported,
             }),
             memory: None,
+            io: None,
         }
     }
 
@@ -1154,6 +1581,140 @@ mod tests {
         }
     }
 
+    fn io_hunt_observation(some_fraction: f64) -> IoHuntObservation {
+        let elapsed = Duration::from_secs(10);
+        let some_total = (some_fraction * elapsed.as_micros() as f64) as u64;
+        let line = IoPsiLine {
+            avg10_percent: 0.0,
+            avg60_percent: 0.0,
+            avg300_percent: 0.0,
+            total_us: 0,
+        };
+        IoHuntObservation {
+            psi: Ok(IoPsiObservation {
+                requested: elapsed,
+                interval: IoPsiInterval {
+                    elapsed,
+                    some: IoPsiLineInterval {
+                        total_delta_us: some_total,
+                        fraction: some_fraction,
+                    },
+                    full: IoPsiFullInterval::Available(IoPsiLineInterval {
+                        total_delta_us: some_total / 4,
+                        fraction: some_fraction / 4.0,
+                    }),
+                },
+                start: IoPsiRaw {
+                    some: line,
+                    full: Some(line),
+                },
+                end: IoPsiRaw {
+                    some: IoPsiLine {
+                        total_us: some_total,
+                        ..line
+                    },
+                    full: Some(IoPsiLine {
+                        total_us: some_total / 4,
+                        ..line
+                    }),
+                },
+            }),
+            diskstats: Ok(DiskstatsObservation {
+                elapsed,
+                capability: IoCapability::Available,
+                devices: vec![DiskstatsInterval {
+                    key: BlockDeviceKey { major: 8, minor: 0 },
+                    name: "sda".into(),
+                    reads_completed: Some(10),
+                    sectors_read_512: Some(8_192),
+                    writes_completed: Some(20),
+                    sectors_written_512: Some(16_384),
+                    io_ticks_ms: Some(500),
+                    weighted_io_ticks_ms: Some(700),
+                    end_in_flight: 2,
+                }],
+                issues: DiskstatsIntervalIssues::default(),
+            }),
+            processes: Ok(ProcessIoObservation {
+                elapsed,
+                capability: IoCapability::Available,
+                processes: vec![ProcessIoInterval {
+                    key: ProcessKey {
+                        pid: 42,
+                        start_time_ticks: 1,
+                    },
+                    name: "writer".into(),
+                    read_bytes: Some(1_024),
+                    write_bytes: Some(8_192),
+                    cancelled_write_bytes: Some(0),
+                    rchar: None,
+                    wchar: None,
+                }],
+                issues: ProcessIoCollectionIssues::default(),
+                regressed: vec![],
+            }),
+        }
+    }
+
+    #[test]
+    fn io_renderer_keeps_psi_pressure_independent_of_context_and_never_claims_mapping() {
+        let mut observation = hunt_observation();
+        observation.io = Some(io_hunt_observation(0.08));
+        let text = hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+            },
+            |_| observation,
+        );
+        assert!(text.contains("Block-I/O pressure observed"));
+        assert!(
+            text.contains("Device activity candidates (same window only; not mapped to workloads)")
+        );
+        assert!(text.contains("not proven causal or device-mapped"));
+        assert!(text.contains("Affected workloads: unavailable"));
+
+        let mut healthy = hunt_observation();
+        healthy.io = Some(io_hunt_observation(0.005));
+        let text = hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+            },
+            |_| healthy,
+        );
+        assert!(text.contains("No meaningful block-I/O pressure observed"));
+        assert!(text.contains("activity counters do not override that verdict"));
+        assert!(text.contains("not ranked without an I/O pressure finding"));
+    }
+
+    #[test]
+    fn io_json_retains_valid_psi_finding_when_context_is_missing() {
+        let mut observation = hunt_observation();
+        let mut io = io_hunt_observation(0.08);
+        io.diskstats = Err(DiskstatsError::Unreadable);
+        io.processes = Err(DiskstatsError::PermissionDenied);
+        observation.io = Some(io);
+        let json: serde_json::Value = serde_json::from_str(&hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Json,
+            },
+            |_| observation,
+        ))
+        .unwrap();
+        let finding = json["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["resource"] == "io")
+            .unwrap();
+        assert_eq!(finding["kind"], "io_pressure");
+        assert_eq!(json["capabilities"]["diskstats"], "failed");
+        assert_eq!(json["capabilities"]["process_io"], "permission_denied");
+        assert_eq!(json["status"], "incomplete");
+    }
+
     #[test]
     fn hunt_renders_interval_pressure_with_a_diagnosis() {
         let output = hunt(
@@ -1206,6 +1767,7 @@ mod tests {
                 psi: Ok(observation()),
                 cpu: Err(crate::cpu::CpuError::Unreadable),
                 memory: None,
+                io: None,
             },
         ))
         .unwrap();
@@ -1223,6 +1785,7 @@ mod tests {
                 psi: Ok(observation()),
                 cpu: Err(crate::cpu::CpuError::Unreadable),
                 memory: None,
+                io: None,
             },
         );
         assert!(partial_text.contains("CPU interval context is unavailable"));
@@ -1378,6 +1941,7 @@ mod tests {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
                 cpu: Err(crate::cpu::CpuError::Malformed),
                 memory: None,
+                io: None,
             },
         );
         assert!(output.contains("Capability: CPU PSI failed"));
@@ -1395,6 +1959,7 @@ mod tests {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
                 cpu: hunt_observation().cpu,
                 memory: None,
+                io: None,
             },
         );
         assert!(output.contains("CPU assessment unavailable"));
@@ -1637,6 +2202,7 @@ mod tests {
                 psi: Ok(observation),
                 cpu: Ok(cpu),
                 memory: None,
+                io: None,
             },
         );
         assert_eq!(
@@ -1670,9 +2236,15 @@ mod tests {
                     meminfo: MemoryContextCapability::Available,
                     vmstat: MemoryContextCapability::Available,
                 },
+                IoPsiCapability::Available,
+                IoCapabilities {
+                    diskstats: IoCapability::Available,
+                    process_io: IoCapability::Available,
+                },
             );
             assert!(output.contains(&format!("CPU PSI: {}", capability.as_str())));
             assert!(output.contains(capability.explanation()));
+            assert!(output.contains("I/O PSI: available"));
         }
     }
 }
