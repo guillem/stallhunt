@@ -120,7 +120,7 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Outpu
     if timed_out {
         return Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            "bottleneck hunt exceeded the acceptance-test timeout",
+            "stallhunt hunt exceeded the acceptance-test timeout",
         ));
     }
     Ok(Output {
@@ -168,7 +168,7 @@ fn oversubscribed_cpu_reports_a_contention_finding() {
     }
     thread::sleep(Duration::from_millis(150));
 
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bottleneck"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_stallhunt"));
     command.args(["hunt", "--duration", "1s", "--json"]);
     let controller_started = Instant::now();
     let output = run_with_timeout(command, HUNT_TIMEOUT)
@@ -260,7 +260,7 @@ fn sleeping_thread_fanout_is_visible_to_scheduler_sampling() {
 
     let _threads = ThreadCleanup::spawn_sleeping(SLEEPING_THREAD_COUNT);
     thread::sleep(Duration::from_millis(100));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_bottleneck"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_stallhunt"));
     command.args(["hunt", "--duration", "1s", "--json"]);
     let controller_started = Instant::now();
     let output = run_with_timeout(command, HUNT_TIMEOUT)

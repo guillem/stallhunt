@@ -244,7 +244,7 @@ persistent, or resolved. It keeps 16 compact history windows and does not
 retain full observations. Cgroup watch `kind` strings include the scoped
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
 identity remains path plus resource. TTY text refreshes by clearing the screen; JSON is
-one compact `bottleneck.watch_window` object per window, not a recording and
+one compact `stallhunt.watch_window` object per window, not a recording and
 not hunt JSON.
 
 M8 adds `analyze_evidence_chains` in `analysis.rs` (ADR-0009, ADR-0010,

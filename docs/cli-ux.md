@@ -8,14 +8,18 @@ The terminal output should be useful to a human who knows Linux but does not wan
 
 ## Command shape
 
-Working binary name below is `bottleneck`.
-
-Names are provisional.
+Binary name: `stallhunt`.
 
 ### Primary command
 
 ```bash
-bottleneck hunt
+stallhunt
+```
+
+Bare `stallhunt` runs a default 10-second hunt. Equivalent explicit form:
+
+```bash
+stallhunt hunt
 ```
 
 Defaults:
@@ -55,7 +59,17 @@ Show available telemetry and permission limitations.
 
 Standard version information.
 
-Delay `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
+### `completions`
+
+Generate shell completions to stdout:
+
+```bash
+stallhunt completions bash
+stallhunt completions zsh
+stallhunt completions fish
+```
+
+The CLI uses clap 4 with derive parsing. Delay `explain`, daemon mode, TUI, etc. until the core diagnosis is trustworthy.
 
 Implemented in Milestone 5:
 
@@ -64,7 +78,7 @@ Implemented in Milestone 5:
 Capture a normalized observation to a file.
 
 ```bash
-bottleneck record --output incident.json [--duration 10s] [--redact] [--force]
+stallhunt record --output incident.json [--duration 10s] [--redact] [--force]
 ```
 
 ### `replay`
@@ -72,7 +86,7 @@ bottleneck record --output incident.json [--duration 10s] [--redact] [--force]
 Re-analyze a recording with the current inference engine.
 
 ```bash
-bottleneck replay incident.json [--json]
+stallhunt replay incident.json [--json]
 ```
 
 ### `redact`
@@ -80,7 +94,7 @@ bottleneck replay incident.json [--json]
 Replace identifiers in an existing recording for sharing.
 
 ```bash
-bottleneck redact incident.json --output incident.redacted.json [--force]
+stallhunt redact incident.json --output incident.redacted.json [--force]
 ```
 
 Implemented in Milestone 6:
@@ -90,7 +104,7 @@ Implemented in Milestone 6:
 Follow rolling bottlenecks by finding lifecycle.
 
 ```bash
-bottleneck watch [--interval 2s] [--count N] [--json]
+stallhunt watch [--interval 2s] [--count N] [--json]
 ```
 
 This is not a TUI and not a generic resource monitor.
@@ -100,9 +114,9 @@ This is not a TUI and not a generic resource monitor.
 Milestone 1 implements:
 
 ```text
-bottleneck hunt [--duration <DURATION>] [--json]
-bottleneck capabilities [--json]
-bottleneck version
+stallhunt hunt [--duration <DURATION>] [--json]
+stallhunt capabilities [--json]
+stallhunt version
 ```
 
 `hunt` takes CPU PSI, host CPU/load, bounded per-process `stat`, and bounded
@@ -164,11 +178,12 @@ snapshot or controller files are incomplete; this also makes the top-level hunt
 status `incomplete`, without discarding valid host findings.
 
 M5 adds `record`, `replay`, and `redact`. Recordings are not hunt JSON: they
-store normalized observations under `kind` `bottleneck.recording` schema
-version 1. Replay uses the same text/JSON renderers as `hunt`, with the
-recorded requested duration. Invalid recordings exit 1. Missing `--output` or
-an invalid invocation still exits 2. New recording files are created mode
-0600 and are not overwritten unless `--force` is passed.
+store normalized observations under `kind` `stallhunt.recording` schema
+version 1. Legacy `bottleneck.recording` files are accepted on replay. Replay
+uses the same text/JSON renderers as `hunt`, with the recorded requested
+duration. Invalid recordings exit 1. Missing `--output` or an invalid invocation
+still exits 2. New recording files are created mode 0600 and are not
+overwritten unless `--force` is passed.
 
 M6 adds `watch`. `--interval` uses the same 100 ms–5 m duration parser as
 `hunt` and defaults to 2 seconds. `--count` stops after N windows; without it,
@@ -176,7 +191,7 @@ watch runs until interrupted. Each window reuses the previous endpoint
 snapshot. Text reports `new` / `persistent` / `resolved` pressure findings plus
 a compact current-window summary. A TTY refreshes the screen with ANSI
 clear/home; piped text and `--json` append. JSON is one compact
-`bottleneck.watch_window` object per window. It is not hunt JSON and not a
+`stallhunt.watch_window` object per window. It is not hunt JSON and not a
 recording, and it omits full evidence. Host memory `kind` values already name
 reclaim, swap, or possible thrashing. Scoped cgroup `kind` values name the
 resource and, when labeled, the mechanism (`cgroup_memory_reclaim_pressure`,
@@ -313,7 +328,7 @@ JSON is a first-class interface.
 Command:
 
 ```bash
-bottleneck hunt --json
+stallhunt hunt --json
 ```
 
 Requirements:

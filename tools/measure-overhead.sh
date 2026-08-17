@@ -7,11 +7,11 @@ usage() {
     cat <<'EOF'
 Usage: tools/measure-overhead.sh [options]
 
-Measure a pre-built bottleneck binary across bounded scenarios. Results are
+Measure a pre-built stallhunt binary across bounded scenarios. Results are
 environment-dependent; record ranges, not pass/fail thresholds.
 
 Options:
-  --binary PATH       Built bottleneck executable (default: target/debug/bottleneck)
+  --binary PATH       Built stallhunt executable (default: target/debug/stallhunt)
   --duration SECONDS  Hunt duration, integer 1..30 (default: 2)
   --repetitions N     Repetitions per scenario, integer 1..10 (default: 3)
   --max-workers N     CPU workers/process helpers, integer 1..8 (default: 4)
@@ -39,7 +39,7 @@ EAGAIN and can leak helpers).
 EOF
 }
 
-binary=target/debug/bottleneck
+binary=target/debug/stallhunt
 duration=2
 repetitions=3
 max_workers=4
@@ -89,7 +89,7 @@ fi
 if [[ ! -x $binary ]]; then echo "error: built executable not found: $binary" >&2; exit 2; fi
 if ! command -v timeout >/dev/null; then echo "error: timeout is required for bounded measurements" >&2; exit 2; fi
 
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/bottleneck-overhead.XXXXXX")
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/stallhunt-overhead.XXXXXX")
 helpers=()
 helper_setup_failure=
 measurement_failure_reason=

@@ -10,9 +10,7 @@ use crate::cgroup::{
     CgroupCapability, CgroupObservation, cgroup_capability_explanation,
     cgroup_capability_from_observation,
 };
-use crate::cli::{
-    CapabilitiesOptions, HelpTopic, HuntOptions, OutputFormat, RedactOptions, ReplayOptions,
-};
+use crate::cli::{CapabilitiesOptions, HuntOptions, OutputFormat, RedactOptions, ReplayOptions};
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
 use crate::io::{DiskstatsError, IoCapabilities, IoCapability, ProcessIoObservation};
 use crate::memory::{
@@ -26,34 +24,8 @@ use crate::psi::{
     MemoryPsiCapability, MemoryPsiFullInterval, MemoryPsiObservation,
 };
 
-const ROOT_HELP: &str = "Linux performance triage that reports evidence-backed bottlenecks.\n\nUSAGE:\n    bottleneck <COMMAND>\n\nCOMMANDS:\n    hunt          Run a bounded diagnosis\n    watch         Track rolling finding lifecycle\n    capabilities  Report available telemetry\n    record        Capture a normalized observation for later replay\n    replay        Re-analyze a recording without collecting live telemetry\n    redact        Replace identifiers in a recording for sharing\n    version       Print version information\n    help          Print this help or help for a command\n\nOPTIONS:\n    -h, --help     Print help\n    -V, --version  Print version information\n";
-
-const HUNT_HELP: &str = "Run a bounded bottleneck diagnosis.\n\nUSAGE:\n    bottleneck hunt [OPTIONS]\n\nOPTIONS:\n    --duration <DURATION>  Observation duration from 100ms to 5m [default: 10s]\n    --json                 Emit machine-readable JSON\n    -h, --help             Print help\n\nDURATION EXAMPLES:\n    500ms  2s  1.5s  1m\n";
-
-const CAPABILITIES_HELP: &str = "Report telemetry availability and permission limitations.\n\nUSAGE:\n    bottleneck capabilities [OPTIONS]\n\nOPTIONS:\n    --json      Emit machine-readable JSON\n    -h, --help  Print help\n";
-
-const RECORD_HELP: &str = "Capture a normalized observation recording.\n\nUSAGE:\n    bottleneck record --output <PATH> [OPTIONS]\n\nOPTIONS:\n    --output <PATH>        Recording file to create\n    --duration <DURATION>  Observation duration from 100ms to 5m [default: 10s]\n    --redact               Replace process names, device names, and cgroup paths\n    --force                Overwrite the output path if it already exists\n    -h, --help             Print help\n\nRecordings store analyzer input, not findings. Replay re-runs current inference.\nNew files are created with mode 0600. Pre-1.0 schema is not a compatibility promise.\n";
-
-const REPLAY_HELP: &str = "Re-analyze a recording with the current inference engine.\n\nUSAGE:\n    bottleneck replay [OPTIONS] <PATH>\n\nOPTIONS:\n    --json      Emit machine-readable JSON\n    -h, --help  Print help\n";
-
-const REDACT_HELP: &str = "Replace identifiers in an existing recording.\n\nUSAGE:\n    bottleneck redact --output <PATH> [OPTIONS] <PATH>\n\nOPTIONS:\n    --output <PATH>  Redacted recording to create\n    --force          Overwrite the output path if it already exists\n    -h, --help       Print help\n\nCounters, process keys, and path hierarchy are kept. Names and cgroup path\ncomponents are replaced. This is not cryptographic anonymization.\n";
-
-const WATCH_HELP: &str = "Track rolling bottlenecks by finding lifecycle, not a live dashboard.\n\nUSAGE:\n    bottleneck watch [OPTIONS]\n\nOPTIONS:\n    --interval <DURATION>  Rolling window from 100ms to 5m [default: 2s]\n    --count <N>            Stop after N windows; omit to run until interrupted\n    --json                 Emit one compact JSON object per window\n    -h, --help             Print help\n\nEach window reuses the previous endpoint snapshot so intervals stay contiguous.\nLifecycle states are new, persistent, and resolved. Healthy results do not create\nfindings; missing or short-window data does not resolve an active finding.\nTTY text replaces the screen; piped text and JSON append. This is not a TUI.\n";
-
-pub fn help(topic: HelpTopic) -> &'static str {
-    match topic {
-        HelpTopic::Root => ROOT_HELP,
-        HelpTopic::Hunt => HUNT_HELP,
-        HelpTopic::Capabilities => CAPABILITIES_HELP,
-        HelpTopic::Record => RECORD_HELP,
-        HelpTopic::Replay => REPLAY_HELP,
-        HelpTopic::Redact => REDACT_HELP,
-        HelpTopic::Watch => WATCH_HELP,
-    }
-}
-
 pub fn version() -> String {
-    format!("bottleneck {}\n", env!("CARGO_PKG_VERSION"))
+    format!("stallhunt {}\n", env!("CARGO_PKG_VERSION"))
 }
 
 pub fn record_written(path: &Path, recording: &crate::record::Recording) -> String {
@@ -66,7 +38,7 @@ pub fn record_written(path: &Path, recording: &crate::record::Recording) -> Stri
         }
     };
     format!(
-        "Wrote recording to {} (schema {}, {redaction}).\nReplay with: bottleneck replay {}\n",
+        "Wrote recording to {} (schema {}, {redaction}).\nReplay with: stallhunt replay {}\n",
         path.display(),
         recording.schema_version,
         path.display()
@@ -78,26 +50,27 @@ pub fn replay(
     recording: crate::record::Recording,
 ) -> Result<String, crate::record::RecordError> {
     let observation = crate::record::observation_from_recording(&recording)?;
-    Ok(hunt(
+    hunt(
         &HuntOptions {
             duration_ms: recording.requested_duration_ms,
             output: options.output,
         },
         |_| observation,
-    ))
+    )
+    .map_err(crate::record::RecordError::from)
 }
 
 pub fn redact_written(options: &RedactOptions, recording: &crate::record::Recording) -> String {
     record_written(&options.output, recording)
 }
 
-pub fn hunt<F>(options: &HuntOptions, observe: F) -> String
+pub fn hunt<F>(options: &HuntOptions, observe: F) -> Result<String, serde_json::Error>
 where
     F: FnOnce(Duration) -> HuntObservation,
 {
     let result = observe(Duration::from_millis(options.duration_ms));
     match options.output {
-        OutputFormat::Text => hunt_text(options, result),
+        OutputFormat::Text => Ok(hunt_text(options, result)),
         OutputFormat::Json => hunt_json(options, result),
     }
 }
@@ -112,9 +85,9 @@ pub fn capabilities(
     io_psi: IoPsiCapability,
     io: IoCapabilities,
     cgroup: CgroupCapability,
-) -> String {
+) -> Result<String, serde_json::Error> {
     match options.output {
-        OutputFormat::Text => format!(
+        OutputFormat::Text => Ok(format!(
             "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\nMemory PSI: {}\n{}\nHost /proc/meminfo: {}\nHost /proc/vmstat: {}\nI/O PSI: {}\n{}\nHost /proc/diskstats: {}\nProcess /proc/<pid>/io: {}\nCgroup v2: {}\n{}\n",
             cpu_psi.as_str(),
             cpu_psi.explanation(),
@@ -132,7 +105,7 @@ pub fn capabilities(
             io.process_io.as_str(),
             cgroup.as_str(),
             cgroup_capability_explanation(cgroup),
-        ),
+        )),
         OutputFormat::Json => to_json(&CapabilitiesJson {
             schema_version: 1,
             tool_version: env!("CARGO_PKG_VERSION"),
@@ -1048,7 +1021,7 @@ fn terminal_name(name: &str) -> String {
     }
 }
 
-fn hunt_json(options: &HuntOptions, result: HuntObservation) -> String {
+fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, serde_json::Error> {
     let cpu = cpu_json_parts(result.psi, result.cpu);
     let memory = memory_json_parts(result.memory.as_ref());
     let io = io_json_parts(result.io.as_ref());
@@ -1450,11 +1423,8 @@ fn memory_json_parts(memory: Option<&MemoryHuntObservation>) -> MemoryJsonParts 
     }
 }
 
-fn to_json<T: Serialize>(value: &T) -> String {
-    match serde_json::to_string_pretty(value) {
-        Ok(json) => format!("{json}\n"),
-        Err(_) => "{\"status\":\"serialization_failed\"}\n".to_owned(),
-    }
+fn to_json<T: Serialize>(value: &T) -> Result<String, serde_json::Error> {
+    Ok(format!("{}\n", serde_json::to_string_pretty(value)?))
 }
 
 #[derive(Serialize)]
@@ -1768,9 +1738,9 @@ fn human_duration_from_duration(duration: Duration) -> String {
         );
     }
     let milliseconds = duration.as_millis();
-    if milliseconds.is_multiple_of(60_000) {
+    if milliseconds % 60_000 == 0 {
         format!("{}m", milliseconds / 60_000)
-    } else if milliseconds.is_multiple_of(1_000) {
+    } else if milliseconds % 1_000 == 0 {
         format!("{}s", milliseconds / 1_000)
     } else if milliseconds >= 1_000 {
         let seconds = milliseconds / 1_000;
@@ -1813,6 +1783,30 @@ mod tests {
         CpuPsiInterval, CpuPsiRaw, IoPsiInterval, IoPsiLine, IoPsiLineInterval, IoPsiRaw,
         MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval, MemoryPsiRaw,
     };
+
+    fn render_hunt<F>(options: &HuntOptions, observe: F) -> String
+    where
+        F: FnOnce(Duration) -> HuntObservation,
+    {
+        super::hunt(options, observe).expect("hunt render")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_capabilities(
+        options: &CapabilitiesOptions,
+        cpu_psi: CpuPsiCapability,
+        cpu: CpuTelemetryCapabilities,
+        memory_psi: MemoryPsiCapability,
+        memory: MemoryContextCapabilities,
+        io_psi: IoPsiCapability,
+        io: IoCapabilities,
+        cgroup: CgroupCapability,
+    ) -> String {
+        super::capabilities(
+            options, cpu_psi, cpu, memory_psi, memory, io_psi, io, cgroup,
+        )
+        .expect("capabilities render")
+    }
 
     fn observation() -> CpuPsiObservation {
         CpuPsiObservation {
@@ -2082,7 +2076,7 @@ mod tests {
         let mut observation = hunt_observation();
         observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
         observation.cgroup = Some(scoped_cgroup_observation(true));
-        let text = hunt(
+        let text = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -2097,7 +2091,7 @@ mod tests {
 
         let mut observation = hunt_observation();
         observation.cgroup = Some(scoped_cgroup_observation(true));
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
@@ -2122,7 +2116,7 @@ mod tests {
     fn io_renderer_keeps_psi_pressure_independent_of_context_and_never_claims_mapping() {
         let mut observation = hunt_observation();
         observation.io = Some(io_hunt_observation(0.08));
-        let text = hunt(
+        let text = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
@@ -2138,7 +2132,7 @@ mod tests {
 
         let mut healthy = hunt_observation();
         healthy.io = Some(io_hunt_observation(0.005));
-        let text = hunt(
+        let text = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
@@ -2157,7 +2151,7 @@ mod tests {
         io.diskstats = Err(DiskstatsError::Unreadable);
         io.processes = Err(DiskstatsError::PermissionDenied);
         observation.io = Some(io);
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2179,7 +2173,7 @@ mod tests {
 
     #[test]
     fn hunt_renders_interval_pressure_with_a_diagnosis() {
-        let output = hunt(
+        let output = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -2201,7 +2195,7 @@ mod tests {
 
     #[test]
     fn contention_json_is_typed_and_cpu_failure_retains_psi_finding() {
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
@@ -2220,7 +2214,7 @@ mod tests {
                 && finding["suspects"].is_array()
                 && finding["qualifiers"].is_array()
         );
-        let partial: serde_json::Value = serde_json::from_str(&hunt(
+        let partial: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
@@ -2239,7 +2233,7 @@ mod tests {
         assert!(partial["findings"][0]["evidence"]["host_utilization_fraction"].is_null());
         assert!(partial["qualifiers"][0]["kind"].is_string());
 
-        let partial_text = hunt(
+        let partial_text = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -2261,7 +2255,7 @@ mod tests {
 
     #[test]
     fn hunt_json_contains_typed_cpu_psi_evidence() {
-        let output = hunt(
+        let output = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
@@ -2281,7 +2275,7 @@ mod tests {
         cpu_psi.interval.some_fraction = 0.005;
         cpu_psi.interval.total_delta_us = 50_000;
         observation.memory = Some(memory_hunt_observation(0.08, Some(0.01), true));
-        let text = hunt(
+        let text = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
@@ -2300,7 +2294,7 @@ mod tests {
         cpu_psi.interval.some_fraction = 0.005;
         cpu_psi.interval.total_delta_us = 50_000;
         observation.memory = Some(memory_hunt_observation(0.08, Some(0.01), true));
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2319,7 +2313,7 @@ mod tests {
     fn memory_partial_and_missing_telemetry_never_create_a_false_negative() {
         let mut partial = hunt_observation();
         partial.memory = Some(memory_hunt_observation(0.08, None, false));
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2342,7 +2336,7 @@ mod tests {
             psi: Err(crate::psi::MemoryPsiError::PermissionDenied),
             context: memory_hunt_observation(0.0, Some(0.0), true).context,
         });
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2380,7 +2374,7 @@ mod tests {
 
     #[test]
     fn evidence_chain_is_rendered_only_when_independent_mechanism_supports_it() {
-        let text = hunt(
+        let text = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
@@ -2409,7 +2403,7 @@ mod tests {
         );
         assert!(related.contains("does not prove"));
 
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2434,7 +2428,7 @@ mod tests {
                 .any(|qualifier| qualifier["kind"] == "chain_not_causal")
         );
 
-        let coincident: serde_json::Value = serde_json::from_str(&hunt(
+        let coincident: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2444,7 +2438,7 @@ mod tests {
         .unwrap();
         assert_eq!(coincident["evidence_chains"].as_array().unwrap().len(), 0);
         assert!(
-            !hunt(
+            !render_hunt(
                 &HuntOptions {
                     duration_ms: 10_000,
                     output: OutputFormat::Text,
@@ -2454,7 +2448,7 @@ mod tests {
             .contains("Related evidence")
         );
 
-        let io_healthy: serde_json::Value = serde_json::from_str(&hunt(
+        let io_healthy: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2464,7 +2458,7 @@ mod tests {
         .unwrap();
         assert_eq!(io_healthy["evidence_chains"].as_array().unwrap().len(), 0);
 
-        let cpu_only: serde_json::Value = serde_json::from_str(&hunt(
+        let cpu_only: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
@@ -2546,7 +2540,7 @@ mod tests {
 
     #[test]
     fn same_cgroup_evidence_chain_is_rendered_without_host_linking() {
-        let text = hunt(
+        let text = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
@@ -2570,7 +2564,7 @@ mod tests {
                 .contains("cause")
         );
 
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2601,7 +2595,7 @@ mod tests {
 
         let mut coincident = hunt_observation();
         coincident.cgroup = Some(scoped_memory_io_cgroup_observation(None, true));
-        let coincident_json: serde_json::Value = serde_json::from_str(&hunt(
+        let coincident_json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2619,7 +2613,7 @@ mod tests {
             Some(reclaim_events()),
             true,
         ));
-        let combined_json: serde_json::Value = serde_json::from_str(&hunt(
+        let combined_json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2661,7 +2655,7 @@ mod tests {
             );
         }
         observation.cgroup = Some(cgroup);
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2688,7 +2682,7 @@ mod tests {
                 .unwrap()
                 .contains("reclaim pressure")
         );
-        let text = hunt(
+        let text = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
@@ -2732,7 +2726,7 @@ mod tests {
     #[test]
     fn scoped_possible_thrashing_label_is_rendered_without_claiming_causality() {
         let elapsed = Duration::from_secs(5);
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Json,
@@ -2791,7 +2785,7 @@ mod tests {
                 .contains("cause")
         );
 
-        let text = hunt(
+        let text = render_hunt(
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Text,
@@ -2838,7 +2832,7 @@ mod tests {
         memory.psi.as_mut().unwrap().interval.full = MemoryPsiFullInterval::CounterRegressed;
         observation.memory = Some(memory);
 
-        let json: serde_json::Value = serde_json::from_str(&hunt(
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
@@ -2863,7 +2857,7 @@ mod tests {
 
     #[test]
     fn hunt_reports_unavailable_cpu_psi_explicitly() {
-        let output = hunt(
+        let output = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -2882,7 +2876,7 @@ mod tests {
 
     #[test]
     fn psi_failure_retains_scheduler_delay_text_context() {
-        let output = hunt(
+        let output = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -2907,7 +2901,7 @@ mod tests {
         let cpu = complete.cpu.as_mut().unwrap();
         cpu.processes.clear();
         cpu.schedstat_capability = crate::cpu::SchedstatCapability::Available;
-        let complete_text = hunt(
+        let complete_text = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -2924,7 +2918,7 @@ mod tests {
             .unwrap()
             .collection_issues
             .appeared = 1;
-        let retained_partial_text = hunt(
+        let retained_partial_text = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -2938,7 +2932,7 @@ mod tests {
         let cpu = empty_partial.cpu.as_mut().unwrap();
         cpu.processes.clear();
         cpu.collection_issues.appeared = 1;
-        let empty_partial_text = hunt(
+        let empty_partial_text = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -2963,7 +2957,7 @@ mod tests {
                 runnable_delay_fraction: 0.0002,
                 timeslices: 1,
             });
-        let retained_scheduler_text = hunt(
+        let retained_scheduler_text = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -2995,7 +2989,7 @@ mod tests {
                 runnable_delay_fraction: 0.0002,
                 timeslices: 1,
             });
-        let no_contention_text = hunt(
+        let no_contention_text = render_hunt(
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
@@ -3011,7 +3005,7 @@ mod tests {
         psi.requested = Duration::from_millis(100);
         psi.interval.elapsed = Duration::from_millis(100);
         short.cpu.as_mut().unwrap().elapsed = Duration::from_millis(100);
-        let short_text = hunt(
+        let short_text = render_hunt(
             &HuntOptions {
                 duration_ms: 100,
                 output: OutputFormat::Text,
@@ -3126,7 +3120,7 @@ mod tests {
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
-        let output = hunt(
+        let output = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
@@ -3155,7 +3149,7 @@ mod tests {
             CpuPsiCapability::PermissionDenied,
             CpuPsiCapability::Failed,
         ] {
-            let output = capabilities(
+            let output = render_capabilities(
                 &CapabilitiesOptions {
                     output: OutputFormat::Text,
                 },

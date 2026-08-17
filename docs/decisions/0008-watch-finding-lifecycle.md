@@ -34,7 +34,7 @@ Neither is a rolling lifecycle document.
 - Text on a TTY replaces the screen with ANSI clear/home. Piped text and
   `--json` append. There is no TUI crate, alternate screen, or interactive
   navigation.
-- `--json` emits one compact `bottleneck.watch_window` object per window.
+- `--json` emits one compact `stallhunt.watch_window` object per window.
   That stream is not hunt JSON and not a recording. It has no pre-1.0
   compatibility promise.
 - `--interval` uses the same duration limits as `hunt` (100 ms–5 m) and

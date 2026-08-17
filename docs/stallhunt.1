@@ -1,0 +1,334 @@
+.TH STALLHUNT 1 "August 2026" "stallhunt 0.1.0" "User Commands"
+.SH NAME
+stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
+.SH SYNOPSIS
+.B stallhunt
+[\fIcommand\fR] [\fIoptions\fR]
+.PP
+.B stallhunt
+[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+.PP
+.B stallhunt hunt
+[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+.PP
+.B stallhunt watch
+[\fB\-\-interval\fR \fIDURATION\fR] [\fB\-\-count\fR \fIN\fR] [\fB\-\-json\fR]
+.PP
+.B stallhunt capabilities
+[\fB\-\-json\fR]
+.PP
+.B stallhunt record
+.B \-\-output
+.I PATH
+[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-redact\fR] [\fB\-\-force\fR]
+.PP
+.B stallhunt replay
+[\fB\-\-json\fR]
+.I PATH
+.PP
+.B stallhunt redact
+.I PATH
+.B \-\-output
+.I PATH
+[\fB\-\-force\fR]
+.PP
+.B stallhunt completions
+.I SHELL
+.PP
+.B stallhunt version
+.SH DESCRIPTION
+.B stallhunt
+observes a Linux host for a bounded interval, collects kernel telemetry, and
+reports evidence-backed bottleneck findings for CPU scheduling, host memory,
+block I/O, and bounded cgroup-v2 scope.
+.PP
+Running
+.B stallhunt
+with no subcommand is equivalent to
+.BR "stallhunt hunt" .
+Default human output is finding-first and concise.
+Use
+.B \-\-json
+wherever supported to emit the full structured report.
+.SH COMMANDS
+.TP
+.B hunt
+Run a bounded diagnosis over the requested observation window.
+The default duration is 10 seconds.
+.TP
+.B watch
+Track rolling finding lifecycle across repeated observation windows.
+The default interval is 2 seconds.
+On a TTY, text output refreshes the screen; with
+.BR \-\-json ,
+one compact JSON object is printed per window.
+Watch is not a TUI and does not write recordings.
+.TP
+.B capabilities
+Report which telemetry sources are available, partially available, unsupported,
+permission denied, or failed on the current host.
+.TP
+.B record
+Capture a normalized observation to a file for offline replay.
+Requires
+.BR \-\-output .
+.TP
+.B replay
+Re-analyze a recording with the current inference engine without collecting live
+telemetry.
+.TP
+.B redact
+Replace identifiers in an existing recording and write a shareable copy.
+.TP
+.B completions \fISHELL\fR
+Print shell completion scripts to standard output.
+Supported shells:
+.BR bash ,
+.BR elvish ,
+.BR fish ,
+.BR powershell ,
+and
+.BR zsh .
+.TP
+.B version
+Print the program name and version, then exit.
+.SH OPTIONS
+.SS Duration and interval values
+Options
+.B \-\-duration
+and
+.B \-\-interval
+accept values such as
+.IR 500ms ,
+.IR 2s ,
+.IR 1.5s ,
+and
+.IR 1m .
+The supported range is 100ms through 5m inclusive.
+.SS Common options
+.TP
+.BR \-\-duration " " \fIDURATION\fR
+Observation duration for
+.B hunt
+and
+.BR record .
+Default:
+.BR 10s " for both commands."
+.TP
+.BR \-\-interval " " \fIDURATION\fR
+Rolling window size for
+.BR watch .
+Default:
+.BR 2s .
+.TP
+.BR \-\-count " " \fIN\fR
+Stop
+.B watch
+after
+.I N
+windows.
+Omit to run until interrupted.
+.I N
+must be a positive integer.
+.TP
+.B \-\-json
+Emit machine-readable JSON instead of human text.
+Supported by
+.BR hunt ,
+.BR watch ,
+.BR capabilities ,
+and
+.BR replay .
+.TP
+.BR \-\-output " " \fIPATH\fR
+Output path for
+.B record
+or
+.BR redact .
+Required for both commands.
+.TP
+.B \-\-redact
+When recording, replace process names, disk names, cgroup path components, and
+inferred unit candidates before writing the file.
+.TP
+.B \-\-force
+Overwrite an existing output file for
+.B record
+or
+.BR redact .
+By default, existing paths are not overwritten.
+.SH OUTPUT
+.SS Text
+Human output summarizes findings, evidence, qualifiers, and timing.
+Partial collection is reported explicitly rather than failing silently.
+Sub-second hunts are telemetry smoke observations and do not receive healthy or
+pressure verdicts.
+.SS JSON
+.B hunt
+and
+.B capabilities
+emit versioned JSON reports with
+.B schema_version
+1.
+.B watch \-\-json
+emits one
+.B bottleneck.watch_window
+object per window.
+.B replay \-\-json
+re-renders the current inference result for a stored recording.
+.SS Recordings
+.B record
+writes a normalized observation file with kind
+.B stallhunt.recording
+and
+.B schema_version
+1.
+Recordings store analyzer input so
+.B replay
+can re-run current inference.
+Hunt JSON is a report, not a recording, and is rejected by
+.BR replay .
+.B record
+prints a short confirmation to standard output after a successful write.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Runtime failure, including collection/render errors, unreadable recordings,
+refused overwrites, or stdout write failures other than a broken pipe.
+.TP
+.B 2
+Usage error, including unknown commands/options and invalid argument values.
+.SH FILES
+.SS Kernel and pseudo-filesystems read at runtime
+.TP
+.B /proc/pressure/cpu
+Host CPU Pressure Stall Information.
+.TP
+.B /proc/pressure/memory
+Host memory PSI.
+.TP
+.B /proc/pressure/io
+Host block-I/O PSI.
+.TP
+.B /proc/stat
+Host CPU counters.
+.TP
+.B /proc/loadavg
+Runnable and uninterruptible queue context.
+.TP
+.B /proc/meminfo
+Host memory occupancy and reclaim context.
+.TP
+.B /proc/vmstat
+Host VM counters.
+.TP
+.B /proc/diskstats
+Device-level I/O counters.
+.TP
+.B /proc/\fIPID\fR/stat
+Process CPU, state, and identity.
+.TP
+.B /proc/\fIPID\fR/io
+Process I/O counters when readable.
+.TP
+.B /proc/\fIPID\fR/task/\fITID\fR/schedstat
+Task scheduler accounting when available.
+.TP
+.B cgroup2 mount
+Unified cgroup-v2 hierarchy for bounded scoped context.
+Per-cgroup PSI, controller counters, and membership are read only from
+caller-visible groups under explicit collection limits.
+.SS Recording files written by the tool
+.TP
+.B \fIPATH\fR
+New recordings are created with mode
+.B 0600 .
+Existing paths are not overwritten unless
+.B \-\-force
+is supplied.
+.SH RECORDING PRIVACY
+Recordings may contain process names, cgroup paths, inferred systemd unit
+candidates, device names, PIDs, start-time identities, and resource counters.
+Treat recordings as potentially sensitive.
+.PP
+Default
+.B record
+retains identifiers for local diagnosis.
+Use
+.B record \-\-redact
+or
+.B redact
+before sharing a copy.
+Redaction replaces process names, disk names, cgroup path components, and
+inferred unit candidates while keeping counters, PIDs, start times, major/minor
+keys, and path hierarchy.
+Redaction is not cryptographic anonymization.
+.PP
+Capture locally without redaction, then write a redacted copy before sharing.
+.SH SUPPORT BASELINE
+.TP
+.B Platform
+Linux with procfs mounted.
+Readable PSI files under
+.B /proc/pressure
+are required for pressure verdicts.
+Cgroup-v2 scoped context requires a unified cgroup2 mount visible to the
+caller.
+.TP
+.B Privilege
+Baseline collection is designed to run as an ordinary user.
+Partial visibility is reported explicitly; the tool does not escalate
+privilege by default.
+.TP
+.B Rust
+Minimum supported Rust version (MSRV) is 1.85.
+.SH EXAMPLES
+Run the default 10-second hunt:
+.PP
+.RS
+stallhunt
+.RE
+.PP
+Run a one-second hunt and emit JSON:
+.PP
+.RS
+stallhunt hunt \-\-duration 1s \-\-json
+.RE
+.PP
+Inspect available telemetry on the host:
+.PP
+.RS
+stallhunt capabilities
+.RE
+.PP
+Follow three rolling windows every two seconds:
+.PP
+.RS
+stallhunt watch \-\-interval 2s \-\-count 3
+.RE
+.PP
+Capture, replay, and redact a recording:
+.PP
+.RS
+stallhunt record \-\-duration 10s \-\-output incident.json
+.br
+stallhunt replay incident.json
+.br
+stallhunt redact incident.json \-\-output incident.redacted.json
+.RE
+.PP
+Install bash completions:
+.PP
+.RS
+stallhunt completions bash > ~/.local/share/bash-completion/completions/stallhunt
+.RE
+.SH SEE ALSO
+Full project documentation is in the repository
+.B docs/
+directory.
+.BR top (1),
+.BR iostat (1),
+.BR vmstat (1)

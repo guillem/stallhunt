@@ -344,7 +344,7 @@ Current recording envelope:
 
 ```json
 {
-  "kind": "bottleneck.recording",
+  "kind": "stallhunt.recording",
   "schema_version": 1,
   "tool_version": "0.1.0",
   "recorded_at_unix_ms": 0,
@@ -358,7 +358,8 @@ Durations are integer microseconds. Each resource is `observed` or
 `unavailable` with a typed error. Wall-clock `recorded_at_unix_ms` is metadata
 only.
 
-Pre-1.0 recordings have no compatibility promise. Unknown `kind` or
+Pre-1.0 recordings have no compatibility promise. Legacy recordings with
+`kind` `bottleneck.recording` are accepted on replay. Unknown `kind` or
 `schema_version` values are rejected. A later ADR can define compatibility
 once the model is stable.
 
@@ -383,7 +384,7 @@ new identity. Host memory lifecycle kinds likewise distinguish generic,
 reclaim, swap, and possible-thrashing pressure while preserving the single host
 memory identity. The complete pressure-kind catalog is in `cli-ux.md`.
 
-Watch JSON `kind` is `bottleneck.watch_window`. It is not replayable as a
+Watch JSON `kind` is `stallhunt.watch_window`. It is not replayable as a
 recording and does not carry full evidence.
 
 ## Evidence chains
