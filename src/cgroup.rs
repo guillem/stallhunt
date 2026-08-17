@@ -8,7 +8,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 use crate::cpu::{ProcessKey, ProcessRaw, parse_process_stat, sanitized_process_name};
 
@@ -91,10 +91,19 @@ pub struct CgroupMemoryEventsRaw {
     pub oom_group_kill: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CgroupIoDevice {
     pub major: u32,
     pub minor: u32,
+}
+
+impl Serialize for CgroupIoDevice {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&format!("{}:{}", self.major, self.minor))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -272,14 +281,15 @@ pub struct CgroupSnapshot {
     pub issues: CgroupCollectionIssues,
 }
 
-/// Discover the one cgroup2 mount from an injectable proc root.
-pub fn discover_cgroup2_at(proc_root: &Path) -> Result<Cgroup2Mount, CgroupError> {
-    let mut budget = SnapshotBudget::default();
-    discover_cgroup2_with_budget_at(proc_root, &mut budget)
-}
-fn discover_cgroup2_with_budget_at(proc_root: &Path, budget: &mut SnapshotBudget) -> Result<Cgroup2Mount, CgroupError> {
-    if !budget.permit() { return Err(CgroupError::Unreadable); }
-    let input = read_proc_limited(proc_root.join("self/mountinfo"), budget).map_err(classify_error)?;
+fn discover_cgroup2_with_budget_at(
+    proc_root: &Path,
+    budget: &mut SnapshotBudget,
+) -> Result<Cgroup2Mount, CgroupError> {
+    if !budget.permit() {
+        return Err(CgroupError::Unreadable);
+    }
+    let input =
+        read_proc_limited(proc_root.join("self/mountinfo"), budget).map_err(classify_error)?;
     parse_cgroup2_mountinfo(&input)
 }
 
@@ -340,13 +350,18 @@ pub fn read_cgroup_snapshot_at(proc_root: &Path) -> Result<CgroupSnapshot, Cgrou
 
 /// Fixture-friendly collection entry point. `mount.mount_point` may point at a
 /// synthetic cgroup tree while process records still come from `proc_root`.
+#[cfg(test)]
 pub fn read_cgroup_snapshot_with_mount_at(
     proc_root: &Path,
     mount: Cgroup2Mount,
 ) -> Result<CgroupSnapshot, CgroupError> {
     read_cgroup_snapshot_with_mount_and_budget_at(proc_root, mount, SnapshotBudget::default())
 }
-fn read_cgroup_snapshot_with_mount_and_budget_at(proc_root: &Path, mount: Cgroup2Mount, mut budget: SnapshotBudget) -> Result<CgroupSnapshot, CgroupError> {
+fn read_cgroup_snapshot_with_mount_and_budget_at(
+    proc_root: &Path,
+    mount: Cgroup2Mount,
+    mut budget: SnapshotBudget,
+) -> Result<CgroupSnapshot, CgroupError> {
     let mut issues = CgroupCollectionIssues::default();
     let pids = select_pids(proc_root, &mut issues);
     let mut members = BTreeMap::new();

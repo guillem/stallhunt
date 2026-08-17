@@ -1,9 +1,0 @@
-* d6693aa (HEAD -> main) diagnose block I/O pressure
-* b7d4366 diagnose host memory pressure
-* e123d46 validate CPU contention slice
-* 42373ec infer CPU scheduling contention
-* 57949b0 attribute CPU runnable delay from schedstat
-* 5537878 collect CPU and process counters
-* 86bc694 add bounded CPU PSI sampling
-* cbd51d0 bootstrap Rust CLI
-* b344857 bootstrap project design and documentation
