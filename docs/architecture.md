@@ -1,0 +1,345 @@
+# Architecture
+
+## Architectural objective
+
+Keep **collection**, **normalization**, **analysis**, and **presentation** separate enough that:
+
+- analysis can run against fixtures/replays,
+- collectors can evolve without rewriting inference logic,
+- CLI presentation does not leak into core reasoning,
+- future eBPF telemetry can coexist with simple Linux interfaces,
+- evidence remains inspectable.
+
+## High-level pipeline
+
+```mermaid
+flowchart LR
+    K[Linux kernel interfaces] --> C[Collectors]
+    C --> S[Observation snapshots]
+    S --> N[Normalization / delta computation]
+    N --> A[Analysis & inference engine]
+    A --> F[Findings + evidence]
+    F --> H[Human CLI renderer]
+    F --> J[JSON renderer]
+    N --> R[Recorder / fixtures]
+    R --> A
+```
+
+## Conceptual layers
+
+### 1. Capability discovery
+
+Determine which information sources are available and readable.
+
+Examples:
+
+- PSI present?
+- `/proc/<pid>/schedstat` readable?
+- task delay accounting available?
+- cgroup v2 mounted?
+- process I/O visible?
+- privileged tracepoint/eBPF functionality available?
+
+Capabilities are explicit data, not hidden assumptions.
+
+### 2. Collectors
+
+Collectors retrieve raw counters/gauges/events.
+
+Collectors should perform minimal interpretation.
+
+Examples:
+
+- CPU PSI collector,
+- global CPU collector,
+- process stat collector,
+- scheduler accounting collector,
+- process I/O collector,
+- diskstats collector,
+- cgroup collector.
+
+### 3. Observation model
+
+Represent raw values at a point in monotonic time.
+
+Counters remain counters.
+
+Do not prematurely turn every value into a percentage.
+
+### 4. Normalization
+
+Compare snapshots and derive interval metrics:
+
+- CPU time deltas,
+- bytes/sec,
+- runnable delay deltas,
+- context-switch rates,
+- pressure interval values,
+- process lifetime changes,
+- device queue deltas.
+
+This layer must handle:
+
+- process creation,
+- process exit,
+- PID reuse,
+- counter reset/wrap where applicable,
+- missing observations,
+- different collector timings.
+
+### 5. Analysis/inference
+
+Consume normalized interval data and emit evidence-backed findings.
+
+The inference engine should not read `/proc` directly.
+
+### 6. Finding model
+
+A finding contains:
+
+- kind,
+- resource,
+- severity,
+- confidence,
+- observation interval,
+- impact description,
+- victims,
+- suspects,
+- evidence,
+- limitations/qualifiers,
+- optional recommended next probe.
+
+### 7. Presentation
+
+Render findings for:
+
+- humans,
+- JSON consumers.
+
+Presentation should not recalculate the diagnosis.
+
+## Proposed code boundaries
+
+Do not force a multi-crate workspace immediately, but preserve these conceptual modules.
+
+```text
+src/
+  main.rs
+  cli/
+  platform/
+    linux/
+      capabilities.rs
+      procfs/
+      psi.rs
+      cgroup.rs
+      disk.rs
+  model/
+    ids.rs
+    observation.rs
+    normalized.rs
+    evidence.rs
+    finding.rs
+  analysis/
+    cpu.rs
+    memory.rs
+    io.rs
+    scoring.rs
+  render/
+    text.rs
+    json.rs
+```
+
+If compile times, ownership boundaries, reuse or eBPF components justify it later, split into crates.
+
+## Observation lifecycle
+
+A bounded hunt might behave as follows:
+
+```mermaid
+sequenceDiagram
+    participant CLI
+    participant Cap as Capabilities
+    participant Col as Collectors
+    participant Norm as Normalizer
+    participant Ana as Analyzer
+    participant Ren as Renderer
+
+    CLI->>Cap: discover()
+    CLI->>Col: snapshot(t0)
+    Note over CLI,Col: sleep / sample interval
+    CLI->>Col: snapshot(t1)
+    Col->>Norm: raw snapshots
+    Norm->>Ana: interval observations
+    Ana->>Ren: ranked findings
+    Ren->>CLI: text or JSON
+```
+
+The first version may use two snapshots. Later versions can use a sequence of samples to calculate distributions and avoid transient misclassification.
+
+## Sampling architecture
+
+Eventually distinguish:
+
+### Low-frequency gauges/counters
+
+Suitable for 500 ms–2 s polling:
+
+- PSI,
+- CPU time,
+- process CPU counters,
+- process I/O counters,
+- memory counters,
+- diskstats.
+
+### High-frequency/event telemetry
+
+Suitable for tracepoints/perf/eBPF:
+
+- scheduler wakeup-to-run latency,
+- off-CPU stack attribution,
+- futex contention,
+- block request latency,
+- syscall blocking,
+- socket events.
+
+Do not poll event-like phenomena at absurd frequency merely to avoid eBPF.
+
+## Entity model
+
+The analysis engine should reason about entities using stable internal keys.
+
+Potential entities:
+
+- host,
+- CPU,
+- process,
+- thread,
+- cgroup,
+- systemd unit,
+- container,
+- block device,
+- network interface,
+- socket (later).
+
+A user-visible process identity should not be just a PID because of PID reuse.
+
+Use something analogous to:
+
+```text
+ProcessKey {
+    pid,
+    start_time_ticks
+}
+```
+
+where start time comes from `/proc/<pid>/stat`.
+
+## Process tree and grouping
+
+Process attribution should support multiple views:
+
+- process,
+- executable/command,
+- process tree,
+- cgroup,
+- systemd unit,
+- container.
+
+Do not sum unrelated short-lived processes solely by command name without making that aggregation explicit.
+
+## Cgroup design
+
+Prefer cgroup v2.
+
+Cgroups are important because a "cause" or "victim" is often better expressed as:
+
+```text
+system.slice/postgresql.service
+```
+
+than as dozens of PIDs.
+
+Early releases may implement process-level findings first, but normalized identifiers should not make cgroup-aware findings impossible later.
+
+## Evidence graph
+
+The internal model should support linking observations rather than flattening everything immediately.
+
+Example:
+
+```mermaid
+flowchart TD
+    P[CPU PSI elevated] --> F[CPU contention finding]
+    D[postgres runnable delay elevated] --> F
+    U[rustc CPU time high] --> S[rustc suspect]
+    F --> S
+    F --> V[postgres victim]
+```
+
+A fully generic graph database is not required.
+
+A lightweight typed evidence structure is sufficient.
+
+## Data ownership
+
+Prefer immutable normalized snapshots passed into analyzers.
+
+Benefits:
+
+- easier testing,
+- reproducibility,
+- fewer temporal bugs,
+- deterministic re-analysis.
+
+Collectors may be stateful where necessary but analysis should not depend on hidden collector state.
+
+## Concurrency
+
+Do not introduce async automatically.
+
+Initial collectors can run synchronously unless:
+
+- collection latency becomes material,
+- independent collectors need concurrent sampling alignment,
+- event streams require an async/event architecture.
+
+If an async runtime is later introduced, record the decision as an ADR.
+
+## Portability boundary
+
+Linux-specific code belongs behind a platform boundary.
+
+However, do not distort the domain model to pretend all operating systems expose identical semantics.
+
+"CPU PSI" is a Linux capability and may remain represented as such.
+
+## Failure model
+
+Collection is best-effort and partial.
+
+A snapshot can legitimately contain:
+
+- global CPU data but no scheduler data,
+- PSI but no per-process details,
+- process details for only readable PIDs,
+- cgroup metrics but not container metadata.
+
+The analyzer must understand data availability.
+
+Absence of data is not evidence of absence of a bottleneck.
+
+## Extensibility rule
+
+New telemetry should be added because it improves a concrete diagnosis.
+
+Desired flow:
+
+1. identify diagnostic ambiguity,
+2. define evidence needed to reduce it,
+3. identify kernel interface,
+4. add collector,
+5. normalize,
+6. incorporate into a finding,
+7. test before/after confidence behavior.
+
+Avoid collecting metrics "because they might be useful later."
