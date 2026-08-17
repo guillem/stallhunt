@@ -47,7 +47,7 @@ tar xzf stallhunt-<version>-x86_64-unknown-linux-gnu.tar.gz
 install -m 0755 stallhunt-<version>-x86_64-unknown-linux-gnu/stallhunt ~/.local/bin/stallhunt
 ```
 
-Verify the published SHA-256 checksum before use. Tarball availability is optional until CI packaging is wired; source install remains the supported path until then.
+Verify the published SHA-256 checksum before use. Download release tarballs from the [GitHub Releases](https://github.com/guillem/stallhunt/releases) page for tagged versions such as `v0.1.0`.
 
 ## Shell completions
 

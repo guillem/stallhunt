@@ -2,6 +2,8 @@
 
 Stallhunt is a Linux-first command-line performance triage tool.
 
+Repository: https://github.com/guillem/stallhunt
+
 Traditional tools such as `top`, `htop`, `iotop`, `vmstat`, and `iostat` expose measurements. They are excellent tools, but the human operator still has to answer the harder question:
 
 > **What is actually constraining useful work right now, who is suffering, and who is probably responsible?**
