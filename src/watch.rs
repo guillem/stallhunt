@@ -1298,6 +1298,54 @@ mod tests {
     }
 
     #[test]
+    fn host_memory_watch_kinds_transition_without_splitting_identity() {
+        let mut tracker = WatchTracker::new();
+
+        let new = tracker.ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            pressure("memory_reclaim_pressure", Severity::High, 0.2),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(new.lifecycle.len(), 1);
+        assert_eq!(new.lifecycle[0].id, FindingId::Memory);
+        assert_eq!(new.lifecycle[0].state, LifecycleState::New);
+        assert_eq!(new.lifecycle[0].kind, "memory_reclaim_pressure");
+
+        // A mechanism change on the same host resource stays persistent.
+        let persistent = tracker.ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            pressure("memory_swap_pressure", Severity::High, 0.2),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(persistent.lifecycle[0].id, FindingId::Memory);
+        assert_eq!(persistent.lifecycle[0].state, LifecycleState::Persistent);
+        assert_eq!(persistent.lifecycle[0].consecutive_windows, 2);
+        assert_eq!(persistent.lifecycle[0].kind, "memory_swap_pressure");
+
+        // A severity change also stays persistent and records the transition.
+        let escalated = tracker.ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            pressure("memory_swap_pressure", Severity::Severe, 0.4),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(escalated.lifecycle[0].state, LifecycleState::Persistent);
+        assert_eq!(
+            escalated.lifecycle[0].previous_severity,
+            Some(Severity::High)
+        );
+        assert_eq!(escalated.lifecycle[0].severity, Severity::Severe);
+
+        let resolved = tracker.ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(resolved.lifecycle[0].id, FindingId::Memory);
+        assert_eq!(resolved.lifecycle[0].state, LifecycleState::Resolved);
+        assert_eq!(resolved.lifecycle[0].kind, "memory_swap_pressure");
+    }
+
+    #[test]
     fn cgroup_watch_kind_names_mechanism_without_splitting_identity() {
         let (reclaim_id, reclaim) = cgroup_pressure_signal(sample_cgroup_finding(
             CgroupResourceKind::Memory,
