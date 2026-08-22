@@ -48,7 +48,8 @@ the test process and does not mutate the hierarchy.
   bounded cgroup pressure findings as new, persistent, or resolved across
   contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
   keeps 16 history windows. It is not a TUI and does not store full evidence.
-  SIGINT uses default termination; `--count` bounds scripted runs.
+  A second SIGINT while draining terminates via the restored default
+  disposition; `--count` bounds scripted runs.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
   reclaim, swap, or possible-thrashing finding to host I/O pressure, and can
   relate same-cgroup memory plus I/O pressure when `memory.events` high/max or
@@ -347,7 +348,8 @@ Operational and delivery gaps:
 
 - cgroup collection reaches its 256-PID selection cap on the measured
   workstation, so scoped context is partial and can omit higher-PID groups;
-- unlimited watch has no graceful SIGINT drain;
+- unlimited watch drains gracefully: the first SIGINT installs a flag so the
+  in-flight window completes and is written before exit;
 - recordings are single-window, pre-1.0, and have no compatibility promise;
 - CI and release tarball automation remain open.
 

@@ -220,7 +220,8 @@ Create ADR before promising format compatibility.
 
 Status: complete. Finding-lifecycle watch over contiguous rolling windows is
 implemented. It is not a TUI. ADR-0008 records the output and lifecycle
-contract. There is no graceful SIGINT drain and no multi-window recording.
+contract. The first SIGINT drains the in-flight window before exit and a
+second SIGINT terminates immediately; there is still no multi-window recording.
 
 Goal:
 
