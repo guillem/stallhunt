@@ -268,7 +268,7 @@ the test process and does not mutate the hierarchy.
   same-window `pswpin` correlation with low mechanism confidence; host swap
   occupancy stayed unused afterward. Reclaim-only and possible-thrashing
   remain fixture-validated. `tests/memory_acceptance.rs` still requires
-  `BOTTLENECK_MEMORY_ACCEPTANCE_PATH` and skips when that delegated parent is
+  `STALLHUNT_MEMORY_ACCEPTANCE_PATH` and skips when that delegated parent is
   absent.
 - M3's controlled PSI/resource and same-window-candidate exit is validated,
   but it has not validated I/O victims, process-device mapping, or causality.
@@ -447,8 +447,7 @@ Not yet decided:
 - serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
 - color/terminal crate,
 - eventual eBPF framework,
-- CI provider/configuration and release tarball automation,
-- renaming acceptance environment variables from `BOTTLENECK_*` to `STALLHUNT_*`.
+- CI provider/configuration and release tarball automation.
 
 Decided in ADR-0012:
 
@@ -539,7 +538,7 @@ round-trip and redaction tests plus a live 100 ms `record` â†’ `replay --json` â
 `redact` CLI path. Recordings reject hunt JSON and unknown schema versions.
 
 Earlier the same day, `tests/memory_acceptance.rs` ran twice on Linux 7.1.5 with
-`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` set to the user-delegated `app.slice`.
+`STALLHUNT_MEMORY_ACCEPTANCE_PATH` set to the user-delegated `app.slice`.
 Both runs passed: exact host memory PSI `some` was 24.4198% then 21.2702% over
 ~2.15 s, and both reported `memory_swap_pressure`. The second run, after
 child-cgroup drain-before-rmdir, left no leftover directory. Details are in

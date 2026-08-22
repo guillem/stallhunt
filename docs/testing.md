@@ -149,7 +149,7 @@ delegated/readable subtree, enforce cleanup and timeouts, and skip rather than
 mutate an arbitrary host hierarchy when delegation is absent.
 
 `tests/cgroup_acceptance.rs` follows this policy: it is opt-in and requires a
-caller-provided `BOTTLENECK_CGROUP_ACCEPTANCE_PATH` already containing the test
+caller-provided `STALLHUNT_CGROUP_ACCEPTANCE_PATH` already containing the test
 process. It observes that scope without mutating the hierarchy.
 
 M5 recording tests cover encode/decode round-trip of a multi-resource
@@ -206,7 +206,7 @@ Examples:
 #### Memory
 
 `tests/memory_acceptance.rs` is deliberately ignored and requires
-`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` to name an absolute filesystem path to a
+`STALLHUNT_MEMORY_ACCEPTANCE_PATH` to name an absolute filesystem path to a
 uniquely owned, writable delegated cgroup-v2 parent. The test requires its
 `memory` controller to already be enabled for children. It creates one
 generated child only, applies bounded `memory.max` and `memory.high` limits,
@@ -217,7 +217,7 @@ or membership, and skips when the delegation, memory PSI, or `stress-ng` VM
 options are unavailable. EXP-0006 recorded a passing delegated-cgroup run.
 
 ```bash
-BOTTLENECK_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
+STALLHUNT_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
   cargo test --locked --offline --test memory_acceptance -- --ignored --nocapture
 ```
 

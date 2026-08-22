@@ -1,7 +1,7 @@
 //! Opt-in live coverage for a caller-provided, delegated cgroup-v2 scope.
 //!
 //! The test never creates, moves, configures, or deletes a cgroup. Set
-//! `BOTTLENECK_CGROUP_ACCEPTANCE_PATH` to a uniquely owned delegated subtree
+//! `STALLHUNT_CGROUP_ACCEPTANCE_PATH` to a uniquely owned delegated subtree
 //! that already contains this test process, then run it explicitly.
 
 use std::env;
@@ -9,14 +9,14 @@ use std::fs;
 use std::process::Command;
 
 #[test]
-#[ignore = "requires a uniquely owned delegated cgroup; run with BOTTLENECK_CGROUP_ACCEPTANCE_PATH=/path cargo test --test cgroup_acceptance -- --ignored"]
+#[ignore = "requires a uniquely owned delegated cgroup; run with STALLHUNT_CGROUP_ACCEPTANCE_PATH=/path cargo test --test cgroup_acceptance -- --ignored"]
 fn delegated_scope_is_collected_without_mutating_the_hierarchy() {
     if !cfg!(target_os = "linux") {
         eprintln!("skipping cgroup acceptance: Linux is required");
         return;
     }
-    let Ok(expected_path) = env::var("BOTTLENECK_CGROUP_ACCEPTANCE_PATH") else {
-        eprintln!("skipping cgroup acceptance: BOTTLENECK_CGROUP_ACCEPTANCE_PATH is unset");
+    let Ok(expected_path) = env::var("STALLHUNT_CGROUP_ACCEPTANCE_PATH") else {
+        eprintln!("skipping cgroup acceptance: STALLHUNT_CGROUP_ACCEPTANCE_PATH is unset");
         return;
     };
     if !expected_path.starts_with('/') || expected_path.contains("..") {

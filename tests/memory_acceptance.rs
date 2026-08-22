@@ -102,8 +102,8 @@ impl Drop for ChildCleanup {
 }
 
 fn normalized_parent() -> Result<PathBuf, String> {
-    let value = env::var("BOTTLENECK_MEMORY_ACCEPTANCE_PATH")
-        .map_err(|_| "BOTTLENECK_MEMORY_ACCEPTANCE_PATH is unset".to_owned())?;
+    let value = env::var("STALLHUNT_MEMORY_ACCEPTANCE_PATH")
+        .map_err(|_| "STALLHUNT_MEMORY_ACCEPTANCE_PATH is unset".to_owned())?;
     let path = Path::new(&value);
     if !path.is_absolute() || value.contains("..") {
         return Err("configured parent path must be absolute and normalized".into());
@@ -230,7 +230,7 @@ fn run_with_timeout(mut command: Command, timeout: Duration) -> io::Result<Outpu
 }
 
 #[test]
-#[ignore = "creates bounded memory pressure in a caller-owned delegated cgroup; run with BOTTLENECK_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path cargo test --test memory_acceptance -- --ignored"]
+#[ignore = "creates bounded memory pressure in a caller-owned delegated cgroup; run with STALLHUNT_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path cargo test --test memory_acceptance -- --ignored"]
 fn delegated_memory_pressure_reports_host_psi_finding() {
     let _acceptance_guard = ACCEPTANCE_LOCK
         .lock()
