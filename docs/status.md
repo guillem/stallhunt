@@ -48,7 +48,8 @@ the test process and does not mutate the hierarchy.
   bounded cgroup pressure findings as new, persistent, or resolved across
   contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
   keeps 16 history windows. It is not a TUI and does not store full evidence.
-  SIGINT uses default termination; `--count` bounds scripted runs.
+  A second SIGINT while draining terminates via the restored default
+  disposition; `--count` bounds scripted runs.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
   reclaim, swap, or possible-thrashing finding to host I/O pressure, and can
   relate same-cgroup memory plus I/O pressure when `memory.events` high/max or
@@ -268,7 +269,7 @@ the test process and does not mutate the hierarchy.
   same-window `pswpin` correlation with low mechanism confidence; host swap
   occupancy stayed unused afterward. Reclaim-only and possible-thrashing
   remain fixture-validated. `tests/memory_acceptance.rs` still requires
-  `BOTTLENECK_MEMORY_ACCEPTANCE_PATH` and skips when that delegated parent is
+  `STALLHUNT_MEMORY_ACCEPTANCE_PATH` and skips when that delegated parent is
   absent.
 - M3's controlled PSI/resource and same-window-candidate exit is validated,
   but it has not validated I/O victims, process-device mapping, or causality.
@@ -347,7 +348,8 @@ Operational and delivery gaps:
 
 - cgroup collection reaches its 256-PID selection cap on the measured
   workstation, so scoped context is partial and can omit higher-PID groups;
-- unlimited watch has no graceful SIGINT drain;
+- unlimited watch drains gracefully: the first SIGINT installs a flag so the
+  in-flight window completes and is written before exit;
 - recordings are single-window, pre-1.0, and have no compatibility promise;
 - CI and release tarball automation remain open.
 
@@ -447,8 +449,7 @@ Not yet decided:
 - serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
 - color/terminal crate,
 - eventual eBPF framework,
-- CI provider/configuration and release tarball automation,
-- renaming acceptance environment variables from `BOTTLENECK_*` to `STALLHUNT_*`.
+- CI provider/configuration and release tarball automation.
 
 Decided in ADR-0012:
 
@@ -539,7 +540,7 @@ round-trip and redaction tests plus a live 100 ms `record` â†’ `replay --json` â
 `redact` CLI path. Recordings reject hunt JSON and unknown schema versions.
 
 Earlier the same day, `tests/memory_acceptance.rs` ran twice on Linux 7.1.5 with
-`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` set to the user-delegated `app.slice`.
+`STALLHUNT_MEMORY_ACCEPTANCE_PATH` set to the user-delegated `app.slice`.
 Both runs passed: exact host memory PSI `some` was 24.4198% then 21.2702% over
 ~2.15 s, and both reported `memory_swap_pressure`. The second run, after
 child-cgroup drain-before-rmdir, left no leftover directory. Details are in

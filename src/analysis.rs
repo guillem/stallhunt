@@ -3415,6 +3415,51 @@ mod tests {
     }
 
     #[test]
+    fn invalid_host_full_blocks_possible_thrashing_but_not_pressure() {
+        let mut context = memory_context(0.95);
+        context.elapsed = Duration::from_secs(5);
+        for counter in [
+            VmstatCounter::ScanDirect,
+            VmstatCounter::StealDirect,
+            VmstatCounter::SwapIn,
+            VmstatCounter::SwapOut,
+        ] {
+            context.vmstat_deltas.insert(counter, 5_120);
+        }
+
+        let mut psi = memory_psi(0.20, Some(0.02), Duration::from_secs(5));
+        psi.interval.full = MemoryPsiFullInterval::ExceedsSome;
+        let finding = &analyze_memory(Some(&psi), Some(&context)).findings[0];
+        assert_eq!(finding.kind, MemoryAssessmentKind::SwapPressure);
+        assert_eq!(
+            finding.evidence.psi_full_state,
+            MemoryFullEvidenceState::ExceedsSome
+        );
+        assert_eq!(finding.evidence.psi_full_fraction, None);
+        assert!(
+            finding
+                .qualifiers
+                .iter()
+                .any(|qualifier| qualifier.kind == "memory_full_interval_invalid")
+        );
+        assert!(!finding.summary.to_lowercase().contains("thrashing"));
+
+        for state in [
+            MemoryPsiFullInterval::CounterRegressed,
+            MemoryPsiFullInterval::DeltaExceedsElapsed,
+        ] {
+            let mut psi = memory_psi(0.20, Some(0.02), Duration::from_secs(5));
+            psi.interval.full = state;
+            let finding = &analyze_memory(Some(&psi), Some(&context)).findings[0];
+            assert_eq!(finding.kind, MemoryAssessmentKind::SwapPressure);
+            assert_ne!(
+                finding.evidence.psi_full_state,
+                MemoryFullEvidenceState::Available
+            );
+        }
+    }
+
+    #[test]
     fn valid_some_survives_missing_full_and_memory_context() {
         let psi = memory_psi(0.08, None, Duration::from_secs(10));
         let finding = &analyze_memory(Some(&psi), None).findings[0];
@@ -3742,6 +3787,43 @@ mod tests {
                     _ => false,
                 })
         );
+    }
+
+    #[test]
+    fn evidence_chain_truncation_keeps_ranked_prefix_and_deterministic_order() {
+        let elapsed = Duration::from_secs(10);
+        // 18 same-cgroup memory+I/O chain candidates. Groups 0..=15 share
+        // one PSI severity band (`some` 1.5%, low), groups 16..=17 fall to
+        // none (0.2%). Ranking is severity-descending then path-ascending,
+        // so the kept prefix is groups 00-15 in path order and the two
+        // lowest candidates truncate away.
+        let mut groups = Vec::new();
+        for index in 0..(MAX_CGROUP_EVIDENCE_CHAINS + 2) {
+            let some_us = if index < MAX_CGROUP_EVIDENCE_CHAINS {
+                150_000
+            } else {
+                20_000
+            };
+            groups.push(scoped_memory_io_group(
+                &format!("/slice/group-{index:02}.service"),
+                Some(some_us),
+                Some(some_us),
+                None,
+                cgroup_events(Some(1), Some(0)),
+                elapsed,
+            ));
+        }
+        let observation = scoped_memory_io_observation(groups, elapsed);
+        let chains = cgroup_chains_from(&observation);
+
+        assert_eq!(chains.len(), MAX_CGROUP_EVIDENCE_CHAINS);
+        for (position, chain) in chains.iter().enumerate() {
+            assert_eq!(
+                chain.evidence.path.as_deref(),
+                Some(format!("/slice/group-{position:02}.service").as_str()),
+                "chain at position {position} must follow the documented rank-then-path order"
+            );
+        }
     }
 
     #[test]

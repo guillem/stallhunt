@@ -39,8 +39,9 @@ Neither is a rolling lifecycle document.
   compatibility promise.
 - `--interval` uses the same duration limits as `hunt` (100 ms–5 m) and
   defaults to 2 s. `--count` bounds the run for tests and scripts. Without
-  `--count`, the process runs until interrupted; SIGINT uses default
-  termination.
+  `--count`, the process runs until interrupted; the first SIGINT drains the
+  in-flight window before exit (superseding this ADR's original default-
+  termination behavior), and a second SIGINT terminates immediately.
 
 Later additive mechanism labels refine the lifecycle row's `kind` without
 changing identity: host identity remains resource, and cgroup identity remains

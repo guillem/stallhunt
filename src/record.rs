@@ -954,6 +954,73 @@ mod tests {
         assert!(error.to_string().contains("recording JSON is invalid"));
     }
 
+    #[test]
+    fn schema_1_recording_without_memory_stat_decodes_as_missing() {
+        let mut observation = sample_observation();
+        if let Some(cgroup) = observation.cgroup.as_mut() {
+            if let Ok(cg) = cgroup.observation.as_mut() {
+                for group in cg.groups.iter_mut() {
+                    group.memory_stat = CgroupResource {
+                        state: CgroupFileState::Missing,
+                        value: None,
+                    };
+                }
+            }
+        }
+        let json = serde_json::to_string(
+            &recording_from_observation(&observation, 10_000, Redaction::None).expect("encode"),
+        )
+        .expect("json");
+        // Strip the memory_stat fields entirely, as an older producer would.
+        let stripped = strip_json_key(&json, "memory_stat");
+        assert!(!stripped.contains("memory_stat"));
+
+        let decoded = decode_recording(&stripped).expect("decode without memory_stat");
+        let restored = observation_from_recording(&decoded).expect("restore");
+        let groups = &restored
+            .cgroup
+            .as_ref()
+            .unwrap()
+            .observation
+            .as_ref()
+            .unwrap()
+            .groups;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups[0].memory_stat,
+            CgroupResource {
+                state: CgroupFileState::Missing,
+                value: None,
+            }
+        );
+    }
+
+    /// Removes every occurrence of the given key (with object values) from a
+    /// serialized recording so the decode path exercises the
+    /// `#[serde(default)]` fallback for that field.
+    fn strip_json_key(input: &str, key: &str) -> String {
+        let mut value: serde_json::Value = serde_json::from_str(input).expect("valid json");
+        strip_key_in_value(&mut value, key);
+        serde_json::to_string(&value).expect("reserialize")
+    }
+
+    fn strip_key_in_value(value: &mut serde_json::Value, key: &str) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove(key);
+                for (_, child) in map.iter_mut() {
+                    strip_key_in_value(child, key);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items.iter_mut() {
+                    strip_key_in_value(item, key);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn write_fixture(name: &str, observation: &HuntObservation) {
         let mut recording = recording_from_observation(observation, 10_000, Redaction::Identifiers)
             .expect("encode");

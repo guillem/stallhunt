@@ -167,7 +167,7 @@ harmful-memory finding without an unconstrained host-wide allocator?
 
 ### Setup
 
-`BOTTLENECK_MEMORY_ACCEPTANCE_PATH` named the already-delegated parent
+`STALLHUNT_MEMORY_ACCEPTANCE_PATH` named the already-delegated parent
 `/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/app.slice`, which
 already had `memory` in `cgroup.subtree_control`. The ignored test created one
 generated child, set `memory.max=256 MiB` and `memory.high=128 MiB` only on

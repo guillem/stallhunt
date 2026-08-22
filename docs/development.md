@@ -91,9 +91,9 @@ bounded pressure:
 ```bash
 cargo test --test cpu_acceptance -- --ignored
 cargo test --test io_acceptance -- --ignored
-BOTTLENECK_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
+STALLHUNT_MEMORY_ACCEPTANCE_PATH=/absolute/cgroup/path \
   cargo test --locked --offline --test memory_acceptance -- --ignored --nocapture
-BOTTLENECK_CGROUP_ACCEPTANCE_PATH=/absolute/cgroup/path \
+STALLHUNT_CGROUP_ACCEPTANCE_PATH=/absolute/cgroup/path \
   cargo test --locked --offline --test cgroup_acceptance -- --ignored --nocapture
 ```
 

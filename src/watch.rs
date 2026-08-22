@@ -383,7 +383,6 @@ pub fn run(options: &WatchOptions) -> io::Result<()> {
     let mut writer = stdout.lock();
     run_on(&mut writer, options, refresh)
 }
-
 fn write_window(
     writer: &mut dyn Write,
     options: &WatchOptions,
@@ -401,11 +400,12 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
         return Ok(());
     }
 
+    let interrupt = InterruptFlag::install(options.count.is_none());
     let mut start = read_start_endpoint();
     let mut tracker = WatchTracker::new();
     let mut completed = 0_u32;
     loop {
-        if options.count == Some(completed) {
+        if options.count == Some(completed) || interrupt.raised() {
             break;
         }
         thread::sleep(requested);
@@ -428,6 +428,34 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
         }
     }
     Ok(())
+}
+
+/// Cooperative SIGINT flag. When installed, the default SIGINT termination is
+/// replaced by a flag so an in-flight `watch` window can complete and be
+/// written before the loop exits. Without installation (bounded `--count`
+/// runs), SIGINT keeps its default terminating behavior.
+struct InterruptFlag {
+    raised: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl InterruptFlag {
+    fn install(enabled: bool) -> Self {
+        let raised = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if enabled {
+            let handler_flag = std::sync::Arc::clone(&raised);
+            // A second SIGINT while draining still terminates via the default
+            // handler being replaced only once; repeated installs are ignored
+            // through the Result.
+            let _ = ctrlc::set_handler(move || {
+                handler_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+        }
+        Self { raised }
+    }
+
+    fn raised(&self) -> bool {
+        self.raised.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 pub fn render_window(
@@ -1295,6 +1323,54 @@ mod tests {
             members: vec![],
             qualifiers: vec![],
         }
+    }
+
+    #[test]
+    fn host_memory_watch_kinds_transition_without_splitting_identity() {
+        let mut tracker = WatchTracker::new();
+
+        let new = tracker.ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            pressure("memory_reclaim_pressure", Severity::High, 0.2),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(new.lifecycle.len(), 1);
+        assert_eq!(new.lifecycle[0].id, FindingId::Memory);
+        assert_eq!(new.lifecycle[0].state, LifecycleState::New);
+        assert_eq!(new.lifecycle[0].kind, "memory_reclaim_pressure");
+
+        // A mechanism change on the same host resource stays persistent.
+        let persistent = tracker.ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            pressure("memory_swap_pressure", Severity::High, 0.2),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(persistent.lifecycle[0].id, FindingId::Memory);
+        assert_eq!(persistent.lifecycle[0].state, LifecycleState::Persistent);
+        assert_eq!(persistent.lifecycle[0].consecutive_windows, 2);
+        assert_eq!(persistent.lifecycle[0].kind, "memory_swap_pressure");
+
+        // A severity change also stays persistent and records the transition.
+        let escalated = tracker.ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            pressure("memory_swap_pressure", Severity::Severe, 0.4),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(escalated.lifecycle[0].state, LifecycleState::Persistent);
+        assert_eq!(
+            escalated.lifecycle[0].previous_severity,
+            Some(Severity::High)
+        );
+        assert_eq!(escalated.lifecycle[0].severity, Severity::Severe);
+
+        let resolved = tracker.ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(resolved.lifecycle[0].id, FindingId::Memory);
+        assert_eq!(resolved.lifecycle[0].state, LifecycleState::Resolved);
+        assert_eq!(resolved.lifecycle[0].kind, "memory_swap_pressure");
     }
 
     #[test]

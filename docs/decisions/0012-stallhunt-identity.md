@@ -68,8 +68,10 @@ Positive:
 Costs:
 
 - documentation and scripts must distinguish product name from domain term,
-- environment variables and acceptance harness names still use historical
-  `BOTTLENECK_*` prefixes until a separate migration chooses new names,
+- environment variables and acceptance harness names used historical
+  `BOTTLENECK_*` prefixes; the acceptance variables were renamed to
+  `STALLHUNT_MEMORY_ACCEPTANCE_PATH` and `STALLHUNT_CGROUP_ACCEPTANCE_PATH`
+  after v0.1.0,
 - pre-1.0 JSON hunt output and recordings still have no external compatibility
   promise beyond explicit schema versioning.
 
