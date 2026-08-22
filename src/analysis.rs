@@ -1170,25 +1170,25 @@ fn io_device_candidates(
         })
         .collect();
     candidates.sort_by(|left, right| {
-        let left_busy = left.io_ticks_ms.map_or(0, |value| value);
-        let right_busy = right.io_ticks_ms.map_or(0, |value| value);
-        let left_weighted = left.weighted_io_ticks_ms.map_or(0, |value| value);
-        let right_weighted = right.weighted_io_ticks_ms.map_or(0, |value| value);
-        let left_activity = u128::from(left.read_sectors_512.map_or(0, |value| value))
-            + u128::from(left.write_sectors_512.map_or(0, |value| value));
-        let right_activity = u128::from(right.read_sectors_512.map_or(0, |value| value))
-            + u128::from(right.write_sectors_512.map_or(0, |value| value));
+        let left_busy = left.io_ticks_ms.unwrap_or(0);
+        let right_busy = right.io_ticks_ms.unwrap_or(0);
+        let left_weighted = left.weighted_io_ticks_ms.unwrap_or(0);
+        let right_weighted = right.weighted_io_ticks_ms.unwrap_or(0);
+        let left_activity = u128::from(left.read_sectors_512.unwrap_or(0))
+            + u128::from(left.write_sectors_512.unwrap_or(0));
+        let right_activity = u128::from(right.read_sectors_512.unwrap_or(0))
+            + u128::from(right.write_sectors_512.unwrap_or(0));
         right_busy
             .cmp(&left_busy)
             .then_with(|| right_weighted.cmp(&left_weighted))
             .then_with(|| right.end_in_flight.cmp(&left.end_in_flight))
             .then_with(|| right_activity.cmp(&left_activity))
             .then_with(|| {
-                (u128::from(right.reads_completed.map_or(0, |value| value))
-                    + u128::from(right.writes_completed.map_or(0, |value| value)))
+                (u128::from(right.reads_completed.unwrap_or(0))
+                    + u128::from(right.writes_completed.unwrap_or(0)))
                 .cmp(
-                    &(u128::from(left.reads_completed.map_or(0, |value| value))
-                        + u128::from(left.writes_completed.map_or(0, |value| value))),
+                    &(u128::from(left.reads_completed.unwrap_or(0))
+                        + u128::from(left.writes_completed.unwrap_or(0))),
                 )
             })
             .then_with(|| left.key.cmp(&right.key))
