@@ -3415,6 +3415,51 @@ mod tests {
     }
 
     #[test]
+    fn invalid_host_full_blocks_possible_thrashing_but_not_pressure() {
+        let mut context = memory_context(0.95);
+        context.elapsed = Duration::from_secs(5);
+        for counter in [
+            VmstatCounter::ScanDirect,
+            VmstatCounter::StealDirect,
+            VmstatCounter::SwapIn,
+            VmstatCounter::SwapOut,
+        ] {
+            context.vmstat_deltas.insert(counter, 5_120);
+        }
+
+        let mut psi = memory_psi(0.20, Some(0.02), Duration::from_secs(5));
+        psi.interval.full = MemoryPsiFullInterval::ExceedsSome;
+        let finding = &analyze_memory(Some(&psi), Some(&context)).findings[0];
+        assert_eq!(finding.kind, MemoryAssessmentKind::SwapPressure);
+        assert_eq!(
+            finding.evidence.psi_full_state,
+            MemoryFullEvidenceState::ExceedsSome
+        );
+        assert_eq!(finding.evidence.psi_full_fraction, None);
+        assert!(
+            finding
+                .qualifiers
+                .iter()
+                .any(|qualifier| qualifier.kind == "memory_full_interval_invalid")
+        );
+        assert!(!finding.summary.to_lowercase().contains("thrashing"));
+
+        for state in [
+            MemoryPsiFullInterval::CounterRegressed,
+            MemoryPsiFullInterval::DeltaExceedsElapsed,
+        ] {
+            let mut psi = memory_psi(0.20, Some(0.02), Duration::from_secs(5));
+            psi.interval.full = state;
+            let finding = &analyze_memory(Some(&psi), Some(&context)).findings[0];
+            assert_eq!(finding.kind, MemoryAssessmentKind::SwapPressure);
+            assert_ne!(
+                finding.evidence.psi_full_state,
+                MemoryFullEvidenceState::Available
+            );
+        }
+    }
+
+    #[test]
     fn valid_some_survives_missing_full_and_memory_context() {
         let psi = memory_psi(0.08, None, Duration::from_secs(10));
         let finding = &analyze_memory(Some(&psi), None).findings[0];
