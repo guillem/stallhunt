@@ -1,19 +1,22 @@
 # Project status
 
-Last updated: 2026-08-18
+Last updated: 2026-08-22
 
 ## Current milestone
 
-**Milestone 8 — evidence chains (host and same-cgroup slices complete)**
+**Milestone 8 — quick-win maintenance release v0.1.1 shipped**
 
-Milestones 1–6 are functionally complete. M8 relates a memory mechanism
-finding to host I/O pressure, and same-cgroup memory plus I/O pressure, as
-`consistent_with` when those findings already exist (ADR-0009, ADR-0010,
-ADR-0011). It does not claim causality, does not merge the resource verdicts,
-does not link host findings to cgroup findings, and does not track chains in
-watch. Do not start M7 merely because eBPF is interesting; add a probe only for
-a concrete diagnostic gap. Additional M8 chains should wait for independent
-linking evidence. M5 recording and replay remain available for offline
+Milestones 1–6 remain functionally complete. Since the v0.1.0 productization,
+v0.1.1 landed the `BOTTLENECK_*` → `STALLHUNT_*` acceptance-variable rename
+(closing that ADR-0012 open decision), deterministic coverage for the four
+documented gaps (16-chain truncation order, schema-1 decode without
+`memory_stat`, host-memory watch kind transitions, invalid host `full`
+blocking possible-thrashing), and a graceful first-SIGINT drain for unlimited
+watch. The release workflow's Node-20-deprecated actions were bumped to
+`actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
+repository remains parked: no additional M8 chain or M7 probe is approved.
+Do not start M7 merely because eBPF is interesting; add a probe only for
+a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
 that test still requires a caller-owned delegated subtree that already contains
 the test process and does not mutate the hierarchy.
