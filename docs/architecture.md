@@ -116,7 +116,40 @@ Render findings for:
 - humans,
 - JSON consumers.
 
-Presentation should not recalculate the diagnosis.
+Presentation should not recalculate the diagnosis. Concretely, one analysis
+pass produces the typed findings, and every renderer formats that same
+pass: `render::analyze_hunt` runs each resource analyzer exactly once per
+hunt into a `HuntAnalyses`, and both `render::hunt_text` (the legacy/pipe
+renderer, `src/render.rs`) and `report::hunt_report` (the compact TTY
+report, `src/report.rs`, ADR-0013) consume it rather than re-deriving
+findings independently. `hunt_json` likewise formats the same
+`HuntObservation`. This is what makes it structurally impossible for the
+compact report to disagree with the legacy text or JSON about what was
+found — they differ only in how much of the same typed data they show and
+how it is laid out.
+
+`src/style.rs` is the single place that resolves terminal concerns shared
+across renderers: severity/confidence/lifecycle vocabulary, TTY-based color
+mode (honoring `--no-color`/`NO_COLOR`), and terminal width. Renderers take
+these as explicit parameters (`style::ReportLayout`) rather than probing
+the terminal or environment themselves, which is what keeps them
+deterministic and testable — a golden test pins a `ReportLayout` value
+instead of depending on the process's actual TTY state.
+
+`watch`'s presentation follows the same purity rule with its own analysis
+pass: `watch::signals_from_observation`/`WatchTracker::ingest` run the
+resource analyzers once per window into a `WatchWindow`, and the piped
+text/JSON renderer (`watch::render_window`) and the terminal UI
+(`src/tui/{mod,app,draw}.rs`, ADR-0013) both format that same typed window
+rather than re-deriving it. The TUI's `draw` function is pure over `App`
+state (no terminal access, no clock reads), so it is testable against
+`ratatui::backend::TestBackend`; only `tui::run` touches the real terminal.
+Severity color in the TUI shares its vocabulary with the compact report's
+ANSI painting through `style::SeverityTone`/`style::severity_tone` — one
+mapping from severity to visual weight, expressed as two backends
+(`style::paint` for ANSI text, `style::severity_ratatui_style` for
+`ratatui` widgets) — so the two surfaces cannot drift apart on what a given
+severity looks like.
 
 ## Proposed code boundaries
 
@@ -170,7 +203,13 @@ src/
   psi.rs        # CPU, memory, and I/O PSI parsing, capabilities, and intervals
   record.rs     # versioned normalized-observation recordings and redaction
   render.rs     # concise finding-first text and full-evidence JSON rendering
-  watch.rs      # rolling finding lifecycle tracker and watch renderer
+  report.rs     # compact color-coded TTY report for hunt/replay (ADR-0013)
+  style.rs      # shared severity/confidence/lifecycle vocabulary, color, width
+  tui/          # watch's full-screen terminal UI (ADR-0013)
+    mod.rs      #   terminal lifecycle, event loop, two-stage interrupt
+    app.rs      #   pure app state: handle_key, on_window
+    draw.rs     #   pure rendering of App into a ratatui Frame
+  watch.rs      # rolling finding lifecycle tracker and piped/JSON renderer
 tests/
   cli.rs                # executable-level behavior tests
   cpu_acceptance.rs     # ignored bounded rootless live-pressure acceptance test

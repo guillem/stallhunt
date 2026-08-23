@@ -9,15 +9,18 @@ mod observe;
 mod psi;
 mod record;
 mod render;
+mod report;
+mod style;
+mod tui;
 mod watch;
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::Parser;
 use clap_complete::generate;
-use cli::{Cli, Command};
+use cli::{Cli, Command, OutputFormat};
 use record::{read_recording, recording_from_observation, redact_recording, write_recording};
 
 fn main() -> ExitCode {
@@ -38,6 +41,22 @@ fn main() -> ExitCode {
     }
 }
 
+fn report_layout(options: &cli::HuntOptions, is_tty: bool) -> style::ReportLayout {
+    style::ReportLayout {
+        width: style::terminal_width(),
+        color: style::resolve_color(options.no_color, is_tty),
+        verbose: options.verbose,
+    }
+}
+
+fn report_layout_for_replay(options: &cli::ReplayOptions, is_tty: bool) -> style::ReportLayout {
+    style::ReportLayout {
+        width: style::terminal_width(),
+        color: style::resolve_color(options.no_color, is_tty),
+        verbose: options.verbose,
+    }
+}
+
 fn write_stdout(output: &str) -> ExitCode {
     match std::io::stdout().write_all(output.as_bytes()) {
         Ok(()) => ExitCode::SUCCESS,
@@ -52,7 +71,20 @@ fn write_stdout(output: &str) -> ExitCode {
 fn execute(command: Command) -> Result<String, Box<dyn std::error::Error>> {
     match command {
         Command::Hunt(options) => {
-            render::hunt(&options, observe::observe_hunt).map_err(|error| error.into())
+            let is_tty = std::io::stdout().is_terminal();
+            if options.output == OutputFormat::Text && is_tty {
+                let observation = observe::observe_hunt(Duration::from_millis(options.duration_ms));
+                let analyses = render::analyze_hunt(&observation);
+                let layout = report_layout(&options, is_tty);
+                Ok(report::hunt_report(
+                    &options,
+                    &analyses,
+                    &observation,
+                    layout,
+                ))
+            } else {
+                render::hunt(&options, observe::observe_hunt).map_err(|error| error.into())
+            }
         }
         Command::Capabilities(options) => render::capabilities(
             &options,
@@ -74,7 +106,26 @@ fn execute(command: Command) -> Result<String, Box<dyn std::error::Error>> {
         }
         Command::Replay(options) => {
             let recording = read_recording(&options.input)?;
-            render::replay(&options, recording).map_err(|error| error.into())
+            let is_tty = std::io::stdout().is_terminal();
+            if options.output == OutputFormat::Text && is_tty {
+                let observation = record::observation_from_recording(&recording)?;
+                let analyses = render::analyze_hunt(&observation);
+                let layout = report_layout_for_replay(&options, is_tty);
+                let hunt_options = cli::HuntOptions {
+                    duration_ms: recording.requested_duration_ms,
+                    output: options.output,
+                    verbose: options.verbose,
+                    no_color: options.no_color,
+                };
+                Ok(report::hunt_report(
+                    &hunt_options,
+                    &analyses,
+                    &observation,
+                    layout,
+                ))
+            } else {
+                render::replay(&options, recording).map_err(|error| error.into())
+            }
         }
         Command::Redact(options) => {
             let mut recording = read_recording(&options.input)?;

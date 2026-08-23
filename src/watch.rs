@@ -15,17 +15,17 @@ use serde::Serialize;
 use crate::analysis::{
     self, AssessmentKind, CgroupAssessmentKind, CgroupFinding, CgroupMechanism, CgroupResourceKind,
     Confidence, CpuFinding, IoAssessmentKind, IoFinding, MemoryAssessmentKind, MemoryFinding,
-    Severity,
+    Qualifier, Severity,
 };
 use crate::cli::{OutputFormat, WatchOptions};
 use crate::observe::{
     HuntObservation, observation_from_endpoints, read_end_endpoint, read_start_endpoint,
 };
+use crate::style::{severity_name, state_label, status_label};
 
 pub const MAX_HISTORY_WINDOWS: usize = 16;
 pub const MAX_TRACKED_CGROUPS: usize = 16;
 pub const WATCH_WINDOW_KIND: &str = "stallhunt.watch_window";
-const CLEAR_SCREEN: &str = "\u{1b}[H\u{1b}[2J";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "scope", rename_all = "snake_case")]
@@ -114,6 +114,12 @@ pub struct ResourceSignal {
     pub kind: &'static str,
     pub summary: String,
     pub psi_some_fraction: Option<f64>,
+    /// Full qualifier messages backing this signal, for the watch TUI's
+    /// detail pane. Not part of the watch JSON stream contract (ADR-0008):
+    /// that stream is a compact lifecycle document, not a full-evidence
+    /// document, so this field is serialize-skipped.
+    #[serde(skip_serializing)]
+    pub qualifiers: Vec<Qualifier>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -139,6 +145,10 @@ pub struct TrackedFinding {
     pub kind: &'static str,
     pub summary: String,
     pub psi_some_fraction: Option<f64>,
+    /// Full qualifier messages, for the watch TUI's detail pane. Not part
+    /// of the watch JSON stream contract — see `ResourceSignal::qualifiers`.
+    #[serde(skip_serializing)]
+    pub qualifiers: Vec<Qualifier>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -172,6 +182,7 @@ struct ActiveRecord {
     kind: &'static str,
     summary: String,
     psi_some_fraction: Option<f64>,
+    qualifiers: Vec<Qualifier>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -228,6 +239,7 @@ impl WatchTracker {
                         kind: signal.kind,
                         summary: signal.summary.clone(),
                         psi_some_fraction: signal.psi_some_fraction,
+                        qualifiers: signal.qualifiers.clone(),
                     });
                     still_active.insert(
                         id.clone(),
@@ -238,6 +250,7 @@ impl WatchTracker {
                             kind: signal.kind,
                             summary: signal.summary.clone(),
                             psi_some_fraction: signal.psi_some_fraction,
+                            qualifiers: signal.qualifiers.clone(),
                         },
                     );
                 }
@@ -253,6 +266,7 @@ impl WatchTracker {
                         kind: record.kind,
                         summary: record.summary.clone(),
                         psi_some_fraction: record.psi_some_fraction,
+                        qualifiers: record.qualifiers.clone(),
                     });
                     still_active.insert(id.clone(), record.clone());
                 }
@@ -271,6 +285,7 @@ impl WatchTracker {
                         kind: record.kind,
                         summary: record.summary.clone(),
                         psi_some_fraction: signal.and_then(|signal| signal.psi_some_fraction),
+                        qualifiers: record.qualifiers.clone(),
                     });
                 }
             }
@@ -299,6 +314,7 @@ impl WatchTracker {
                 kind: signal.kind,
                 summary: signal.summary.clone(),
                 psi_some_fraction: signal.psi_some_fraction,
+                qualifiers: signal.qualifiers.clone(),
             });
             still_active.insert(
                 id.clone(),
@@ -309,6 +325,7 @@ impl WatchTracker {
                     kind: signal.kind,
                     summary: signal.summary.clone(),
                     psi_some_fraction: signal.psi_some_fraction,
+                    qualifiers: signal.qualifiers.clone(),
                 },
             );
         }
@@ -377,24 +394,30 @@ const fn state_rank(state: LifecycleState) -> u8 {
     }
 }
 
+/// Entry point for `watch`. A Text-format run on a terminal hands off to the
+/// full-screen TUI (`crate::tui`); every other combination (piped text,
+/// `--json` on or off a terminal) keeps the original append-only rendering,
+/// unaffected by the TUI's existence.
 pub fn run(options: &WatchOptions) -> io::Result<()> {
     let stdout = io::stdout();
-    let refresh = options.output == OutputFormat::Text && stdout.is_terminal();
+    if options.output == OutputFormat::Text && stdout.is_terminal() {
+        return crate::tui::run(options);
+    }
     let mut writer = stdout.lock();
-    run_on(&mut writer, options, refresh)
+    run_on(&mut writer, options)
 }
+
 fn write_window(
     writer: &mut dyn Write,
     options: &WatchOptions,
     window: &WatchWindow,
-    refresh: bool,
 ) -> io::Result<()> {
-    write!(writer, "{}", render_window(options, window, refresh)?)?;
+    write!(writer, "{}", render_window(options, window)?)?;
     writer.flush()?;
     Ok(())
 }
 
-fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::Result<()> {
+fn run_on(writer: &mut dyn Write, options: &WatchOptions) -> io::Result<()> {
     let requested = Duration::from_millis(options.interval_ms);
     if requested.is_zero() {
         return Ok(());
@@ -416,7 +439,7 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
         let mut window = tracker.ingest(&observation);
         window.count = options.count;
         window.interval_ms = options.interval_ms;
-        write_window(writer, options, &window, refresh).or_else(|error| {
+        write_window(writer, options, &window).or_else(|error| {
             if error.kind() == io::ErrorKind::BrokenPipe {
                 Ok(())
             } else {
@@ -461,24 +484,22 @@ impl InterruptFlag {
     }
 }
 
+/// Render one watch window for the piped-text/`--json` path. A Text-format
+/// run on a terminal never reaches this function — `watch::run` hands off
+/// to `crate::tui::run` before the collection loop starts.
 pub fn render_window(
     options: &WatchOptions,
     window: &WatchWindow,
-    refresh: bool,
 ) -> Result<String, serde_json::Error> {
     match options.output {
         OutputFormat::Json => watch_json(window),
-        OutputFormat::Text => Ok(watch_text(window, refresh)),
+        OutputFormat::Text => Ok(watch_text(window)),
     }
 }
 
-fn watch_text(window: &WatchWindow, refresh: bool) -> String {
+fn watch_text(window: &WatchWindow) -> String {
     let mut output = String::new();
-    if refresh {
-        output.push_str(CLEAR_SCREEN);
-    } else {
-        output.push_str(&format!("--- window {} ---\n", window.index));
-    }
+    output.push_str(&format!("--- window {} ---\n", window.index));
     output.push_str(&format!(
         "WATCH  window {}  interval {}\n\n",
         window_index_label(window),
@@ -643,30 +664,14 @@ struct CgroupCurrentJson<'a> {
     signal: &'a ResourceSignal,
 }
 
-fn window_index_label(window: &WatchWindow) -> String {
+pub(crate) fn window_index_label(window: &WatchWindow) -> String {
     match window.count {
         Some(count) => format!("{}/{}", window.index, count),
         None => window.index.to_string(),
     }
 }
 
-fn state_label(state: LifecycleState) -> &'static str {
-    match state {
-        LifecycleState::New => "NEW",
-        LifecycleState::Persistent => "PERSISTENT",
-        LifecycleState::Resolved => "RESOLVED",
-    }
-}
-
-fn status_label(status: ObservationStatus) -> &'static str {
-    match status {
-        ObservationStatus::Pressure => "pressure",
-        ObservationStatus::Healthy => "healthy",
-        ObservationStatus::Unconfirmed => "unconfirmed",
-    }
-}
-
-fn id_label(id: &FindingId) -> String {
+pub(crate) fn id_label(id: &FindingId) -> String {
     match id {
         FindingId::Cpu => "CPU".into(),
         FindingId::Memory => "Memory".into(),
@@ -682,30 +687,20 @@ fn id_label(id: &FindingId) -> String {
     }
 }
 
-fn psi_suffix(fraction: Option<f64>) -> String {
+pub(crate) fn psi_suffix(fraction: Option<f64>) -> String {
     match fraction {
         Some(value) => format!("  PSI {:.2}%", value * 100.0),
         None => String::new(),
     }
 }
 
-fn format_ms(duration_ms: u64) -> String {
+pub(crate) fn format_ms(duration_ms: u64) -> String {
     if duration_ms % 60_000 == 0 && duration_ms >= 60_000 {
         format!("{}m", duration_ms / 60_000)
     } else if duration_ms % 1_000 == 0 {
         format!("{}s", duration_ms / 1_000)
     } else {
         format!("{duration_ms}ms")
-    }
-}
-
-const fn severity_name(severity: Severity) -> &'static str {
-    match severity {
-        Severity::None => "none",
-        Severity::Low => "low",
-        Severity::Moderate => "moderate",
-        Severity::High => "high",
-        Severity::Severe => "severe",
     }
 }
 
@@ -751,6 +746,7 @@ fn cpu_finding_signal(finding: &CpuFinding) -> ResourceSignal {
         },
         summary: finding.summary.clone(),
         psi_some_fraction: Some(finding.evidence.psi_some_fraction),
+        qualifiers: finding.qualifiers.clone(),
     }
 }
 
@@ -787,6 +783,7 @@ fn memory_finding_signal(finding: &MemoryFinding) -> ResourceSignal {
         kind: memory_kind_name(finding.kind),
         summary: finding.summary.clone(),
         psi_some_fraction: Some(finding.evidence.psi_some_fraction),
+        qualifiers: finding.qualifiers.clone(),
     }
 }
 
@@ -836,6 +833,7 @@ fn io_finding_signal(finding: &IoFinding) -> ResourceSignal {
         },
         summary: finding.summary.clone(),
         psi_some_fraction: Some(finding.evidence.psi_some_fraction),
+        qualifiers: finding.qualifiers.clone(),
     }
 }
 
@@ -910,6 +908,7 @@ fn cgroup_pressure_signal(finding: CgroupFinding) -> Option<(FindingId, Resource
             kind: cgroup_watch_kind(finding.resource, finding.mechanism),
             summary: finding.summary,
             psi_some_fraction: finding.evidence.psi_some_fraction,
+            qualifiers: finding.qualifiers,
         },
     ))
 }
@@ -943,10 +942,11 @@ fn unconfirmed_signal(kind: &'static str, summary: &str) -> ResourceSignal {
         kind,
         summary: summary.to_owned(),
         psi_some_fraction: None,
+        qualifiers: Vec::new(),
     }
 }
 
-const fn severity_rank(severity: Severity) -> u8 {
+pub(crate) const fn severity_rank(severity: Severity) -> u8 {
     match severity {
         Severity::None => 0,
         Severity::Low => 1,
@@ -956,13 +956,25 @@ const fn severity_rank(severity: Severity) -> u8 {
     }
 }
 
+/// Fixture builders shared by `watch`'s own tests and by `crate::tui`'s
+/// tests (which build `App`/`WatchWindow` state without a terminal). Kept
+/// `pub(crate)` — not just `#[cfg(test)]` `fn`s inside `mod tests` — so
+/// other test modules in the crate can reuse them instead of re-deriving
+/// fixture construction.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
-    use crate::analysis::CgroupEvidence;
-    use crate::cgroup::{CgroupFileState, CgroupResource};
 
-    fn pressure(kind: &'static str, severity: Severity, psi: f64) -> ResourceSignal {
+    pub(crate) fn pressure(kind: &'static str, severity: Severity, psi: f64) -> ResourceSignal {
+        pressure_with_qualifiers(kind, severity, psi, Vec::new())
+    }
+
+    pub(crate) fn pressure_with_qualifiers(
+        kind: &'static str,
+        severity: Severity,
+        psi: f64,
+        qualifiers: Vec<Qualifier>,
+    ) -> ResourceSignal {
         ResourceSignal {
             status: ObservationStatus::Pressure,
             severity,
@@ -970,10 +982,11 @@ mod tests {
             kind,
             summary: format!("{kind} {:.2}%", psi * 100.0),
             psi_some_fraction: Some(psi),
+            qualifiers,
         }
     }
 
-    fn healthy(kind: &'static str) -> ResourceSignal {
+    pub(crate) fn healthy(kind: &'static str) -> ResourceSignal {
         ResourceSignal {
             status: ObservationStatus::Healthy,
             severity: Severity::None,
@@ -981,14 +994,15 @@ mod tests {
             kind,
             summary: format!("{kind} healthy"),
             psi_some_fraction: Some(0.001),
+            qualifiers: Vec::new(),
         }
     }
 
-    fn unconfirmed() -> ResourceSignal {
+    pub(crate) fn unconfirmed() -> ResourceSignal {
         unconfirmed_signal("insufficient_observation", "short window")
     }
 
-    fn host_signals(
+    pub(crate) fn host_signals(
         cpu: ResourceSignal,
         memory: ResourceSignal,
         io: ResourceSignal,
@@ -1004,10 +1018,89 @@ mod tests {
         }
     }
 
-    fn decorate(window: &mut WatchWindow, interval_ms: u64, count: Option<u32>) {
+    pub(crate) fn decorate(window: &mut WatchWindow, interval_ms: u64, count: Option<u32>) {
         window.interval_ms = interval_ms;
         window.count = count;
     }
+
+    /// A window with a NEW CPU-pressure finding (carrying two qualifiers,
+    /// so the TUI detail pane has real text to show), a healthy memory/I/O
+    /// pair, and one scoped cgroup pressure finding. Used by
+    /// `crate::tui`'s draw/app tests.
+    pub(crate) fn sample_window() -> WatchWindow {
+        let mut tracker = WatchTracker::new();
+        let qualifiers = vec![
+            Qualifier {
+                kind: "same_window_correlation",
+                message: "Suspects consumed CPU in the same window; this correlation does not prove causality.",
+            },
+            Qualifier {
+                kind: "high_utilization_context",
+                message: "Host CPU utilization was at least 90%; this is supporting context, not the contention verdict.",
+            },
+        ];
+        let cpu =
+            pressure_with_qualifiers("cpu_scheduling_contention", Severity::High, 0.2, qualifiers);
+        let mut signals = host_signals(
+            cpu,
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        );
+        let cgroup_id = FindingId::Cgroup {
+            path: "/system.slice/db.service".to_owned(),
+            resource: CgroupResourceKind::Io,
+        };
+        signals.cgroups.push((
+            cgroup_id,
+            pressure("cgroup_io_pressure", Severity::Moderate, 0.08),
+        ));
+        // A single ingest already produces one history entry (itself) and
+        // a NEW-state lifecycle row, which is what draw/app tests exercise.
+        let mut window = tracker.ingest_signals(signals);
+        decorate(&mut window, 2_000, None);
+        window
+    }
+
+    /// A window whose lifecycle has exactly `len` tracked findings — CPU,
+    /// then memory, then I/O, then (if more are needed) distinct cgroup
+    /// paths — for selection/clamping tests that only care about count.
+    pub(crate) fn window_with_lifecycle_len(len: usize) -> WatchWindow {
+        let mut tracker = WatchTracker::new();
+        let mut signals = host_signals(unconfirmed(), unconfirmed(), unconfirmed());
+        if len >= 1 {
+            signals.cpu = pressure("cpu_scheduling_contention", Severity::High, 0.2);
+        }
+        if len >= 2 {
+            signals.memory = pressure("memory_pressure", Severity::Moderate, 0.1);
+        }
+        if len >= 3 {
+            signals.io = pressure("io_pressure", Severity::Low, 0.05);
+        }
+        for extra in 3..len {
+            signals.cgroups.push((
+                FindingId::Cgroup {
+                    path: format!("/extra-{extra}.scope"),
+                    resource: CgroupResourceKind::Cpu,
+                },
+                pressure("cgroup_cpu_pressure", Severity::Low, 0.05),
+            ));
+        }
+        let window = tracker.ingest_signals(signals);
+        assert_eq!(
+            window.lifecycle.len(),
+            len,
+            "test_support::window_with_lifecycle_len built the wrong count"
+        );
+        window
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::*;
+    use super::*;
+    use crate::analysis::CgroupEvidence;
+    use crate::cgroup::{CgroupFileState, CgroupResource};
 
     #[test]
     fn contention_becomes_new_then_persistent_then_resolved() {
@@ -1244,9 +1337,9 @@ mod tests {
                 interval_ms: 2_000,
                 count: Some(3),
                 output: OutputFormat::Text,
+                no_color: false,
             },
             &first,
-            false,
         )
         .expect("watch text render");
         assert!(text.contains("WATCH  window 1/3  interval 2s"));
@@ -1266,9 +1359,9 @@ mod tests {
                     interval_ms: 2_000,
                     count: Some(3),
                     output: OutputFormat::Json,
+                    no_color: false,
                 },
                 &first,
-                false,
             )
             .expect("watch json render"),
         )

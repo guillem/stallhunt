@@ -102,6 +102,70 @@ roles, same-window/non-causal language, context/limitation wording, timing,
 and terminal-safe process names. Renderer tests also assert JSON finding shape structurally, without
 comparing host-collected or wall-clock-dependent output.
 
+ADR-0013 adds a compact-report golden layer alongside the legacy one, all
+still driven by fixed in-memory observations and asserted with
+`include_str!` against fixtures under `tests/fixtures/render/`:
+
+- `hunt-compact-plain.txt` — the compact TTY layout at width 80 with color
+  disabled (`ColorMode::Never`),
+- `hunt-compact-color.txt` — the same render with `ColorMode::Always`,
+  compared against an escaped representation (raw `\x1b` bytes replaced
+  with the literal text `<ESC>`) rather than checked in as raw escape
+  bytes, which are invisible in diffs and easily mangled by editors,
+- `hunt-compact-verbose.txt` — the compact layout with `verbose: true`,
+  restoring full qualifier text,
+- `hunt-compact-full.txt` — the compact rendering of the same fixed
+  multi-section (CPU + memory + I/O + cgroup) observation used by
+  `hunt-legacy-full.txt`, so the two are a direct byte-count comparison of
+  the same diagnosis; a test asserts the compact rendering is shorter.
+
+Renderers take an explicit `style::ReportLayout { width, color, verbose }`
+rather than probing the terminal, so these tests pin deterministic values
+and never depend on the process's actual TTY state — consistent with the
+existing rule that tests must not depend on wall-clock time, host CPU
+count, or current load.
+
+A separate test (`report::tests::every_real_qualifier_kind_maps_to_a_known_tag`)
+re-derives the complete set of `Qualifier.kind` strings straight from
+`src/analysis.rs`'s source at test time and asserts every one maps to a
+known caveat category in `report::qualifier_tag`, so a newly added
+qualifier kind that falls through to the `"other"` bucket fails the test
+instead of silently losing its caveat category.
+
+### 4a. Watch TUI tests
+
+ADR-0013's watch terminal UI (`src/tui/{mod,app,draw}.rs`) is tested at two
+levels, neither of which opens a real terminal or depends on TTY state:
+
+- **App interaction tests** (`tui::app::tests`) call `App::handle_key`
+  directly with hand-built `crossterm::event::KeyEvent`s and assert on the
+  resulting state — selection clamping (including on an empty lifecycle,
+  and re-clamping when a window shrinks the lifecycle), the
+  expanded/help toggles, quit, and that `Ctrl-C` only increments the
+  shared interrupt counter rather than exiting directly (the event loop in
+  `tui::run`, not `App`, decides what an interrupt count means).
+- **Draw tests** (`tui::draw::tests`) render `draw::draw` into a
+  `ratatui::backend::TestBackend` and assert on the resulting buffer's
+  text content: the lifecycle/current-window/history panels render
+  without panicking on an empty lifecycle, the detail pane stays
+  collapsed by default and shows full qualifier text once expanded, and
+  the help overlay lists its keys. `App` fixtures come from
+  `watch::test_support` (`sample_window`,
+  `window_with_lifecycle_len`) — the same fixture-builder module
+  `watch`'s own tests use, promoted out of its inner `#[cfg(test)] mod
+  tests` so other test modules can reuse it instead of re-deriving
+  fixture construction. Because `TestBackend` renders into a fixed-width
+  buffer, assertions on wrapped qualifier text check for substrings from
+  each end of a sentence rather than one contiguous string that could
+  straddle a word-wrap line boundary.
+
+The terminal lifecycle itself (raw mode, alternate screen, two-stage
+Ctrl-C/SIGINT handling, and that the terminal is restored on every exit
+path) was verified manually against the real binary under a pty — driving
+actual keypresses and inspecting the raw escape sequences and process exit
+codes — rather than in the automated suite, since it requires a real
+terminal device the test harness does not provide.
+
 ### 5. Host integration tests
 
 Run against real procfs/sysfs where safe.

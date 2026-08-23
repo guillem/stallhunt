@@ -1,0 +1,13 @@
+STALLHUNT · observed 10s · verdict: CPU scheduling contention observed [high] · confidence high
+
+ CPU     [high] PSI some 20.00%   contention observed
+   victims (observed runnable delay; not confirmed harm)
+     1. worker [21]   500ms delay          high
+   suspects (same window only; not proven causal)
+     1. build [20]   80.0% of one CPU     medium   leading concurrent CPU consumer
+
+ CPU context and limitations:
+   Host CPU utilization was at least 90%; this is supporting context, not the contention verdict.
+   Runnable tasks exceeded logical CPU count; this is supporting context, not the contention verdict.
+   Suspects consumed CPU in the same window; this correlation does not prove causality.
+ Timing: requested 10s · PSI 10s · CPU/process 10s

@@ -30,20 +30,16 @@ Defaults:
 - all implemented resource analyzers,
 - no requirement for elevated privileges.
 
-Options may include:
+Implemented on `hunt` and `replay`: `--duration`/`--json` (hunt only), `--verbose`,
+`--no-color`. `watch` implements `--interval`, `--count`, `--json`, `--no-color`.
+
+Still reserved, not yet implemented — do not add before a real use case exists:
 
 ```text
---duration <DURATION>
---interval <DURATION>
---json
 --resource cpu|memory|io|all
 --pid <PID>
 --cgroup <PATH>
---verbose
---no-color
 ```
-
-Do not add flags before a real use case exists.
 
 ## Early command set
 
@@ -288,15 +284,30 @@ Avoid unexplained jargon such as:
 
 ## Color
 
-Color may communicate severity but must never be the only carrier of meaning.
+Color may communicate severity but must never be the only carrier of meaning:
+severity, confidence, and lifecycle words are always present in the text
+itself, whether or not color is emitted.
 
-Support:
+Implemented on `hunt` and `replay` (ADR-0013):
 
-- automatic TTY detection,
-- `--no-color`,
-- `NO_COLOR` convention if practical.
+- automatic TTY detection selects the compact report; piped/non-TTY output
+  is always the legacy plain text and never carries color, regardless of
+  `--no-color`,
+- `--no-color` disables color on a TTY without changing the layout,
+- the `NO_COLOR` environment variable (any non-empty value) is honored the
+  same way.
 
-Do not overdesign terminal visuals before core output stabilizes.
+`watch` implements the same `--no-color`/`NO_COLOR` support (ADR-0013):
+automatic TTY detection selects the TUI; piped text and `--json` are always
+the legacy output and never carry color. `--no-color`/`NO_COLOR` disable
+color in the TUI without changing that dispatch.
+
+Color for `hunt`/`replay`'s compact report is plain SGR escape codes in
+`src/style.rs`; the watch TUI reuses the same severity-to-visual-weight
+mapping (`SeverityTone`/`severity_tone`) through
+`style::severity_ratatui_style`, so the two surfaces cannot drift apart on
+what a given severity looks like even though they render through different
+backends (ANSI text vs. `ratatui` widgets).
 
 ## Exit codes
 
@@ -429,7 +440,15 @@ Until then:
 
 ## Verbose/debug output
 
-`--verbose` should add diagnostic context, not turn the normal renderer into a raw `/proc` dump.
+`--verbose` (`hunt`, `replay`) adds diagnostic context; it does not turn the
+renderer into a raw `/proc` dump. Concretely: the compact TTY report
+collapses each finding's "Context and limitations" qualifiers to a caveat
+count and a small set of category tags by default (for example,
+`Context: 4 caveats (causality, attribution, collection) — use --verbose for
+full text`); `--verbose` restores the full verbatim qualifier messages
+under each resource, matching the legacy renderer's text. JSON output is
+unaffected by `--verbose` in both cases — qualifier messages are always
+complete there.
 
 A future `--debug-dump` can emit normalized observation data for bug reports.
 
@@ -455,11 +474,69 @@ conclusions, and experiments may justify revising the limits.
 
 Warn or reduce confidence for observation windows too short to support robust inference.
 
+## Compact report
+
+`hunt` and `replay` render two text surfaces, selected by whether stdout is
+a terminal (ADR-0013). Neither recomputes a diagnosis independently; both
+are driven by the same single analysis pass
+(`render::analyze_hunt`/`HuntAnalyses`), so they cannot disagree with each
+other or with JSON output.
+
+- **Piped or otherwise non-TTY stdout** (`stallhunt hunt | cat`, `>file`,
+  CI): the legacy plain-text renderer, unchanged from pre-ADR-0013 output —
+  no color, no compaction, the full stacked per-resource sections. This is
+  the stable surface for scripts and existing golden fixtures.
+- **A terminal**: the compact report — a header verdict line, one row per
+  resource with a colored severity word and PSI evidence, victim/suspect
+  candidates for pressured resources, up to three ranked cgroup findings,
+  a related-evidence line for evidence chains, a collapsed caveat count
+  (see "Verbose/debug output" above), and a timing footer. It is
+  substantially shorter than the legacy layout for the same diagnosis —
+  the multi-section fixture pair in `tests/fixtures/render/hunt-legacy-full.txt`
+  versus `hunt-compact-full.txt` is roughly a 4-5x reduction in both lines
+  and bytes.
+
+`--no-color`/`NO_COLOR` affect color only; they do not switch layout back to
+the legacy renderer. There is no `--format` flag — piping is the escape
+hatch to the legacy layout.
+
 ## TUI
 
-A TUI is explicitly not an early priority. M6 `watch` refreshes finding
-lifecycle on a TTY without introducing a TUI framework.
+`watch` renders a full-screen terminal UI (`ratatui`/`crossterm`, ADR-0013)
+when stdout is a terminal. ADR-0008 originally rejected a generic TUI
+resource monitor because it "would display utilization rather than finding
+lifecycle." This TUI is not that: its panels are the same finding-lifecycle
+model `watch` already computed for the plain-text renderer — new,
+persistent, and resolved findings, per M6 (ADR-0008) — not a live table of
+per-process utilization. Small PSI indicators are supporting visuals
+alongside the lifecycle panels, never the centerpiece.
 
 The differentiator is diagnosis.
 
-If a TUI is added later, it should display changing findings rather than simply reproduce `htop`.
+Panels: a title bar (window index, interval, key hints); a **Lifecycle**
+list of tracked findings (state, identity, kind, severity, age, and prior
+severity on a change); a **Current window** summary of CPU/memory/I-O
+status plus a scoped-cgroup-pressure count; a **History** strip mapping the
+last windows' severity to a glyph ramp per resource; a **Detail** pane for
+the selected finding, shown on request, with its full qualifier
+messages — the "Context and limitations" detail is not behind `--verbose`
+in the TUI, because the interaction model has no static "less verbose"
+default to begin with; a help overlay; and a persistent footer restating
+that watch tracks findings, not utilization.
+
+Keys: `q`/`Esc` quit; `↑`/`k` and `↓`/`j` select a lifecycle row;
+`Enter`/`Space` toggle that row's detail pane; `h`/`?` toggle the help
+overlay; `Ctrl-C` is the same two-stage interrupt described above for
+unlimited `watch` runs — the first drains the in-flight window before
+exiting, the second exits immediately — except that in raw mode a local
+keyboard Ctrl-C never reaches the process as `SIGINT` (the terminal driver
+stops translating it once raw mode disables `ISIG`), so it is read as a key
+event instead; an external `kill -INT <pid>` still works via the same
+signal handler as the piped path. Redraws only happen on a window tick, a
+key press, or a resize — never a busy loop, matching the "stay cheap on a
+stressed system" principle.
+
+Piped text and `--json` are completely unaffected by the TUI's existence:
+`stallhunt watch | cat` and `stallhunt watch --json` still emit the exact
+frames and `stallhunt.watch_window` stream documented above, with no
+alternate screen and no raw mode.

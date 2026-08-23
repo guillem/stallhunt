@@ -23,6 +23,7 @@ use crate::psi::{
     CpuPsiCapability, CpuPsiObservation, IoPsiCapability, IoPsiFullInterval, IoPsiObservation,
     MemoryPsiCapability, MemoryPsiFullInterval, MemoryPsiObservation,
 };
+use crate::style::{confidence_name, severity_name};
 
 pub fn version() -> String {
     format!("stallhunt {}\n", env!("CARGO_PKG_VERSION"))
@@ -54,6 +55,8 @@ pub fn replay(
         &HuntOptions {
             duration_ms: recording.requested_duration_ms,
             output: options.output,
+            verbose: false,
+            no_color: false,
         },
         |_| observation,
     )
@@ -142,49 +145,86 @@ pub fn capabilities(
     }
 }
 
+/// Every analyzer's result for one hunt observation, computed exactly once
+/// so text and JSON renderers (and future presentation surfaces) never
+/// re-derive a diagnosis — see docs/architecture.md's presentation-purity
+/// rule.
+pub(crate) struct HuntAnalyses {
+    pub(crate) cpu: AnalysisResult,
+    pub(crate) memory: Option<crate::analysis::MemoryAnalysisResult>,
+    pub(crate) io: Option<crate::analysis::IoAnalysisResult>,
+    pub(crate) cgroup: Option<crate::analysis::CgroupAnalysisResult>,
+}
+
+pub(crate) fn analyze_hunt(result: &HuntObservation) -> HuntAnalyses {
+    let cpu = analysis::analyze_cpu(result.psi.as_ref().ok(), result.cpu.as_ref().ok());
+    let memory = result.memory.as_ref().map(|memory| {
+        analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok())
+    });
+    let io = result.io.as_ref().map(|io| {
+        analysis::analyze_io(
+            io.psi.as_ref().ok(),
+            io.diskstats.as_ref().ok(),
+            io.processes.as_ref().ok(),
+        )
+    });
+    let cgroup = result
+        .cgroup
+        .as_ref()
+        .and_then(|cgroup| cgroup.observation.as_ref().ok())
+        .map(|observation| analysis::analyze_cgroups(Some(observation)));
+    HuntAnalyses {
+        cpu,
+        memory,
+        io,
+        cgroup,
+    }
+}
+
 fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
-    let cpu_rank = analysis::analyze_cpu(result.psi.as_ref().ok(), result.cpu.as_ref().ok())
+    let analyses = analyze_hunt(&result);
+    let cpu_rank = analyses
+        .cpu
         .findings
         .first()
         .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
         .unwrap_or((0, 0));
-    let memory_rank = result
+    let memory_rank = analyses
         .memory
         .as_ref()
         .and_then(|memory| {
-            analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok())
+            memory
                 .findings
                 .first()
                 .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
         })
         .unwrap_or((0, 0));
-    let io_rank = result
+    let io_rank = analyses
         .io
         .as_ref()
         .and_then(|io| {
-            analysis::analyze_io(
-                io.psi.as_ref().ok(),
-                io.diskstats.as_ref().ok(),
-                io.processes.as_ref().ok(),
-            )
-            .findings
-            .first()
-            .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
+            io.findings
+                .first()
+                .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
         })
         .unwrap_or((0, 0));
-    let chain_text = evidence_chain_hunt_text(&result);
-    let cpu_output = cpu_hunt_text(options, result.psi, result.cpu);
+    let chain_text = evidence_chain_hunt_text(&analyses);
+    let cpu_output = cpu_hunt_text(options, result.psi, result.cpu, &analyses.cpu);
     let mut outputs = vec![(cpu_rank, 0_u8, cpu_output)];
     if let Some(memory) = result.memory {
-        outputs.push((memory_rank, 1, memory_hunt_text(options, memory)));
+        outputs.push((
+            memory_rank,
+            1,
+            memory_hunt_text(options, memory, analyses.memory.as_ref()),
+        ));
     }
     if let Some(io) = result.io {
-        outputs.push((io_rank, 2, io_hunt_text(options, io)));
+        outputs.push((io_rank, 2, io_hunt_text(options, io, analyses.io.as_ref())));
     }
-    if let Some(cgroup) = result.cgroup.as_ref() {
-        let output = cgroup_hunt_text(cgroup);
+    if result.cgroup.is_some() {
+        let output = cgroup_hunt_text(analyses.cgroup.as_ref());
         if !output.is_empty() {
-            outputs.push((cgroup_text_rank(cgroup), 3, output));
+            outputs.push((cgroup_text_rank(analyses.cgroup.as_ref()), 3, output));
         }
     }
     outputs.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
@@ -202,8 +242,8 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
     text
 }
 
-fn evidence_chain_hunt_text(result: &HuntObservation) -> Option<String> {
-    let chains = evidence_chains_from_observation(result);
+fn evidence_chain_hunt_text(analyses: &HuntAnalyses) -> Option<String> {
+    let chains = evidence_chains_from_analyses(analyses);
     if chains.is_empty() {
         return None;
     }
@@ -222,35 +262,23 @@ fn evidence_chain_hunt_text(result: &HuntObservation) -> Option<String> {
     Some(output)
 }
 
-fn evidence_chains_from_observation(
-    result: &HuntObservation,
+pub(crate) fn evidence_chains_from_analyses(
+    analyses: &HuntAnalyses,
 ) -> Vec<crate::analysis::EvidenceChain> {
-    let memory = result.memory.as_ref().and_then(|memory| {
-        analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok())
-            .findings
-            .into_iter()
-            .next()
-    });
-    let io = result.io.as_ref().and_then(|io| {
-        analysis::analyze_io(
-            io.psi.as_ref().ok(),
-            io.diskstats.as_ref().ok(),
-            io.processes.as_ref().ok(),
-        )
-        .findings
-        .into_iter()
-        .next()
-    });
-    let cgroup_findings = result
+    let memory = analyses
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.findings.first());
+    let io = analyses.io.as_ref().and_then(|io| io.findings.first());
+    let cgroup_findings: &[crate::analysis::CgroupFinding] = analyses
         .cgroup
         .as_ref()
-        .and_then(|cgroup| cgroup.observation.as_ref().ok())
-        .map(|observation| analysis::analyze_cgroups(Some(observation)).findings)
-        .unwrap_or_default();
-    analysis::analyze_evidence_chains(memory.as_ref(), io.as_ref(), &cgroup_findings)
+        .map(|cgroup| cgroup.findings.as_slice())
+        .unwrap_or(&[]);
+    analysis::analyze_evidence_chains(memory, io, cgroup_findings)
 }
 
-fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
+pub(crate) fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
     let mut parts = Vec::new();
     if let Some(path) = &evidence.path {
         parts.push(format!("cgroup {path}"));
@@ -284,11 +312,11 @@ fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
     parts.join("; ")
 }
 
-fn cgroup_text_rank(cgroup: &CgroupHuntObservation) -> (u8, u8) {
-    let Ok(observation) = &cgroup.observation else {
+fn cgroup_text_rank(analysis: Option<&crate::analysis::CgroupAnalysisResult>) -> (u8, u8) {
+    let Some(analysis) = analysis else {
         return (0, 0);
     };
-    analysis::analyze_cgroups(Some(observation))
+    analysis
         .findings
         .iter()
         .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
@@ -296,11 +324,10 @@ fn cgroup_text_rank(cgroup: &CgroupHuntObservation) -> (u8, u8) {
         .unwrap_or((0, 0))
 }
 
-fn cgroup_hunt_text(cgroup: &CgroupHuntObservation) -> String {
-    let Ok(observation) = &cgroup.observation else {
+fn cgroup_hunt_text(analysis: Option<&crate::analysis::CgroupAnalysisResult>) -> String {
+    let Some(analysis) = analysis else {
         return "Scoped cgroup findings\nCgroup v2 assessment unavailable.\n".into();
     };
-    let analysis = analysis::analyze_cgroups(Some(observation));
     let pressured: Vec<_> = analysis
         .findings
         .iter()
@@ -420,17 +447,15 @@ fn cpu_hunt_text(
     options: &HuntOptions,
     psi: Result<CpuPsiObservation, crate::psi::CpuPsiError>,
     cpu: Result<CpuProcessObservation, crate::cpu::CpuError>,
+    analysis: &AnalysisResult,
 ) -> String {
     match (psi, cpu) {
-        (Ok(observation), Ok(cpu)) => {
-            let analysis = analysis::analyze_cpu(Some(&observation), Some(&cpu));
-            finding_text(
-                &analysis,
-                options.duration_ms,
-                observation.interval.elapsed,
-                Some(cpu.elapsed),
-            )
-        }
+        (Ok(observation), Ok(cpu)) => finding_text(
+            analysis,
+            options.duration_ms,
+            observation.interval.elapsed,
+            Some(cpu.elapsed),
+        ),
         (Err(error), Ok(cpu)) => format!(
             "CPU assessment unavailable\nVerdict: unavailable (no exact CPU PSI interval)\nCapability: CPU PSI {} — {}\nRetained context: host CPU {:.1}% busy across {} logical CPUs; {} stable process CPU interval(s); {} scheduler-delay candidate(s) ({}).\nLimitations:\n  CPU/process context was collected but cannot establish CPU contention without exact-interval PSI.\nTiming: requested {}; CPU/process measured {}\n",
             error.capability().as_str(),
@@ -450,9 +475,8 @@ fn cpu_hunt_text(
             human_duration(options.duration_ms),
         ),
         (Ok(psi), Err(error)) => {
-            let analysis = analysis::analyze_cpu(Some(&psi), None);
             let mut output =
-                finding_text(&analysis, options.duration_ms, psi.interval.elapsed, None);
+                finding_text(analysis, options.duration_ms, psi.interval.elapsed, None);
             output.push_str(&format!(
                 "CPU/process telemetry: unavailable — {}\n",
                 error.explanation()
@@ -462,7 +486,7 @@ fn cpu_hunt_text(
     }
 }
 
-fn text_finding_rank(
+pub(crate) fn text_finding_rank(
     severity: crate::analysis::Severity,
     confidence: crate::analysis::Confidence,
 ) -> (u8, u8) {
@@ -481,16 +505,17 @@ fn text_finding_rank(
     (severity, confidence)
 }
 
-fn memory_hunt_text(options: &HuntOptions, memory: MemoryHuntObservation) -> String {
+fn memory_hunt_text(
+    options: &HuntOptions,
+    memory: MemoryHuntObservation,
+    analysis: Option<&crate::analysis::MemoryAnalysisResult>,
+) -> String {
+    let analysis = analysis.expect("memory analysis is precomputed whenever memory is Some");
     match (memory.psi, memory.context) {
         (Ok(psi), Ok(context)) => {
-            let analysis = analysis::analyze_memory(Some(&psi), Some(&context));
-            memory_finding_text(&analysis, options.duration_ms, &psi, Some(&context))
+            memory_finding_text(analysis, options.duration_ms, &psi, Some(&context))
         }
-        (Ok(psi), Err(_)) => {
-            let analysis = analysis::analyze_memory(Some(&psi), None);
-            memory_finding_text(&analysis, options.duration_ms, &psi, None)
-        }
+        (Ok(psi), Err(_)) => memory_finding_text(analysis, options.duration_ms, &psi, None),
         (Err(error), Ok(context)) => {
             let occupancy = context.end_meminfo.as_ref().map_or_else(
                 || "unavailable".to_owned(),
@@ -646,19 +671,19 @@ fn memory_psi_error_explanation(error: crate::psi::MemoryPsiError) -> &'static s
     }
 }
 
-fn io_hunt_text(options: &HuntOptions, io: IoHuntObservation) -> String {
+fn io_hunt_text(
+    options: &HuntOptions,
+    io: IoHuntObservation,
+    analysis: Option<&crate::analysis::IoAnalysisResult>,
+) -> String {
     match (io.psi, io.diskstats, io.processes) {
-        (Ok(psi), diskstats, processes) => {
-            let analysis =
-                analysis::analyze_io(Some(&psi), diskstats.as_ref().ok(), processes.as_ref().ok());
-            io_finding_text(
-                &analysis,
-                options.duration_ms,
-                &psi,
-                diskstats.as_ref().ok(),
-                processes.as_ref().ok(),
-            )
-        }
+        (Ok(psi), diskstats, processes) => io_finding_text(
+            analysis.expect("io analysis is precomputed whenever io is Some"),
+            options.duration_ms,
+            &psi,
+            diskstats.as_ref().ok(),
+            processes.as_ref().ok(),
+        ),
         (Err(error), diskstats, processes) => format!(
             "I/O assessment unavailable\nVerdict: unavailable (no exact I/O PSI interval)\nCapability: I/O PSI {} — {}\nRetained context: diskstats {}; process I/O {}.\nContext and limitations:\n  Disk and process I/O activity cannot establish block-I/O pressure without exact-interval I/O PSI.\nTiming: requested {}{}{}\n",
             error.capability().as_str(),
@@ -846,7 +871,7 @@ fn optional_bytes(value: Option<u64>) -> String {
     value.map_or_else(|| "unavailable".to_owned(), human_bytes)
 }
 
-fn human_bytes(bytes: u64) -> String {
+pub(crate) fn human_bytes(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
     const GIB: f64 = MIB * 1024.0;
@@ -976,32 +1001,14 @@ fn finding_text(
     output
 }
 
-fn severity_name(severity: crate::analysis::Severity) -> &'static str {
-    match severity {
-        crate::analysis::Severity::None => "none",
-        crate::analysis::Severity::Low => "low",
-        crate::analysis::Severity::Moderate => "moderate",
-        crate::analysis::Severity::High => "high",
-        crate::analysis::Severity::Severe => "severe",
-    }
-}
-
-fn confidence_name(confidence: crate::analysis::Confidence) -> &'static str {
-    match confidence {
-        crate::analysis::Confidence::Low => "low",
-        crate::analysis::Confidence::Medium => "medium",
-        crate::analysis::Confidence::High => "high",
-    }
-}
-
-fn suspect_role(label: &str) -> &'static str {
+pub(crate) fn suspect_role(label: &str) -> &'static str {
     match label {
         "leading_concurrent_cpu_consumer" => "leading concurrent CPU consumer",
         _ => "concurrent CPU consumer",
     }
 }
 
-fn terminal_name(name: &str) -> String {
+pub(crate) fn terminal_name(name: &str) -> String {
     const MAX_CHARS: usize = 48;
     let mut rendered = String::new();
     for character in name.chars().take(MAX_CHARS) {
@@ -1715,11 +1722,11 @@ struct QualifierJson<'a> {
     message: &'a str,
 }
 
-fn human_duration(duration_ms: u64) -> String {
+pub(crate) fn human_duration(duration_ms: u64) -> String {
     human_duration_from_duration(Duration::from_millis(duration_ms))
 }
 
-fn human_duration_from_duration(duration: Duration) -> String {
+pub(crate) fn human_duration_from_duration(duration: Duration) -> String {
     if duration.is_zero() {
         return "0ms".to_owned();
     }
@@ -1763,7 +1770,7 @@ fn decimal_duration(whole: u128, fractional: u128, unit: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::cgroup::{
         CgroupCollectionIssues, CgroupCpuInterval, CgroupFileState, CgroupInterval,
@@ -2080,6 +2087,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         );
@@ -2095,6 +2104,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2120,6 +2131,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         );
@@ -2136,6 +2149,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| healthy,
         );
@@ -2155,6 +2170,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2177,6 +2194,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         );
@@ -2199,6 +2218,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         ))
@@ -2218,6 +2239,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Ok(observation()),
@@ -2237,6 +2260,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Ok(observation()),
@@ -2259,6 +2284,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         );
@@ -2279,6 +2306,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         );
@@ -2298,6 +2327,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2317,6 +2348,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| partial,
         ))
@@ -2340,6 +2373,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| missing,
         ))
@@ -2378,6 +2413,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(true, true),
         );
@@ -2407,6 +2444,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(true, true),
         ))
@@ -2432,6 +2471,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(false, true),
         ))
@@ -2442,6 +2483,8 @@ mod tests {
                 &HuntOptions {
                     duration_ms: 10_000,
                     output: OutputFormat::Text,
+                    verbose: false,
+                    no_color: false,
                 },
                 |_| chain_hunt_observation(false, true),
             )
@@ -2452,6 +2495,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(true, false),
         ))
@@ -2462,6 +2507,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         ))
@@ -2544,6 +2591,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| cgroup_chain_hunt_observation(),
         );
@@ -2568,6 +2617,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| cgroup_chain_hunt_observation(),
         ))
@@ -2599,6 +2650,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| coincident,
         ))
@@ -2617,6 +2670,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| combined,
         ))
@@ -2659,6 +2714,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2686,6 +2743,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2730,6 +2789,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2789,6 +2850,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2836,6 +2899,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2861,6 +2926,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
@@ -2880,6 +2947,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
@@ -2905,6 +2974,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| complete,
         );
@@ -2922,6 +2993,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| retained_partial,
         );
@@ -2936,6 +3009,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| empty_partial,
         );
@@ -2961,6 +3036,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| retained_scheduler_partial,
         );
@@ -2993,6 +3070,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| no_contention,
         );
@@ -3009,6 +3088,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 100,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| short,
         );
@@ -3124,6 +3205,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Ok(observation),
@@ -3139,6 +3222,118 @@ mod tests {
         );
         assert!(!output.contains('\u{1b}'));
         assert!(!output.contains("worker\nnext"));
+    }
+
+    /// The fixed multi-section (CPU + memory + I/O + cgroup) observation
+    /// shared by the legacy and compact-report full-baseline goldens
+    /// (`hunt-legacy-full.txt`, `hunt-compact-full.txt`), so the two are a
+    /// true side-by-side comparison of the same diagnosis.
+    pub(crate) fn hunt_legacy_full_fixture_observation() -> HuntObservation {
+        let observation = CpuPsiObservation {
+            requested: Duration::from_secs(10),
+            interval: CpuPsiInterval {
+                elapsed: Duration::from_secs(10),
+                total_delta_us: 2_000_000,
+                some_fraction: 0.2,
+            },
+            start: CpuPsiRaw {
+                avg10_percent: 0.0,
+                avg60_percent: 0.0,
+                avg300_percent: 0.0,
+                total_us: 1,
+            },
+            end: CpuPsiRaw {
+                avg10_percent: 0.0,
+                avg60_percent: 0.0,
+                avg300_percent: 0.0,
+                total_us: 2_000_001,
+            },
+        };
+        let cpu = CpuProcessObservation {
+            elapsed: Duration::from_secs(10),
+            clock_ticks_per_second: 100,
+            host: HostCpuInterval {
+                total_ticks: 1_000,
+                busy_ticks: 950,
+                idle_ticks: 50,
+                utilization_fraction: 0.95,
+                cpu_count: 8,
+            },
+            load: Some(LoadAverageRaw {
+                avg1: 9.0,
+                avg5: 8.0,
+                avg15: 7.0,
+                runnable_tasks: 9,
+                total_tasks: 100,
+                last_pid: 20,
+            }),
+            load_availability: LoadAverageAvailability::Available,
+            processes: vec![
+                ProcessCpuInterval {
+                    key: ProcessKey {
+                        pid: 20,
+                        start_time_ticks: 1,
+                    },
+                    name: "build".into(),
+                    state: 'R',
+                    cpu_ticks: 80,
+                    cpu_fraction_of_one: 0.8,
+                },
+                ProcessCpuInterval {
+                    key: ProcessKey {
+                        pid: 21,
+                        start_time_ticks: 1,
+                    },
+                    name: "worker".into(),
+                    state: 'R',
+                    cpu_ticks: 30,
+                    cpu_fraction_of_one: 0.3,
+                },
+            ],
+            collection_issues: ProcessCollectionIssues::default(),
+            scheduler_delay_candidates: vec![ProcessSchedulerDelayInterval {
+                key: ProcessKey {
+                    pid: 21,
+                    start_time_ticks: 1,
+                },
+                name: "worker".into(),
+                task_count: 1,
+                running_ns: 0,
+                runnable_wait_ns: 500_000_000,
+                runnable_delay_fraction: 0.05,
+                timeslices: 1,
+            }],
+            schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+            schedstat_capability: crate::cpu::SchedstatCapability::Available,
+        };
+        HuntObservation {
+            psi: Ok(observation),
+            cpu: Ok(cpu),
+            memory: Some(memory_hunt_observation(0.08, Some(0.01), true)),
+            io: Some(io_hunt_observation(0.08)),
+            cgroup: Some(scoped_memory_io_cgroup_observation(
+                Some(reclaim_events()),
+                true,
+            )),
+        }
+    }
+
+    #[test]
+    fn concise_text_output_matches_the_fixed_multi_section_fixture() {
+        let output = render_hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
+            },
+            |_| hunt_legacy_full_fixture_observation(),
+        );
+        assert_eq!(
+            output,
+            include_str!("../tests/fixtures/render/hunt-legacy-full.txt")
+        );
+        assert!(!output.contains('\u{1b}'));
     }
 
     #[test]
