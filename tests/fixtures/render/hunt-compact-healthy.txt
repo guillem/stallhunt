@@ -1,0 +1,10 @@
+stallhunt 0.1.2 · observed 10s
+Verdict: no meaningful contention detected
+  CPU      ok            PSI some 0.20% · 20ms stalled / 10s
+  Memory   ok            PSI some 0.00% · 0ms stalled / 10s · 95% used
+  I/O      ok            PSI some 0.40% · 40ms stalled / 10s
+
+Scoped cgroups: no pressure in the bounded selection
+
+measured: PSI 10s · CPU/process 10s · memory PSI 10s · I/O PSI 10s
+Use --verbose for full evidence, qualifiers, and timings · --json for machine-readable output

@@ -1,28 +1,28 @@
 # Project status
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 ## Current milestone
 
-**Milestone 8 — corrective maintenance release v0.1.2 shipped**
+**Milestone 9 — interface redesign (presentation layer), first slice
+implemented in the `stallhunt-zai` worktree; local user-testing phase.**
 
-Milestones 1–6 remain functionally complete. Since the v0.1.0 productization,
-v0.1.1 landed the `BOTTLENECK_*` → `STALLHUNT_*` acceptance-variable rename
-(closing that ADR-0012 open decision), regression tests intended to cover four
-documented gaps (16-chain truncation order, schema-1 decode without
-`memory_stat`, host-memory watch kind transitions, invalid host `full` blocking
-possible-thrashing), and a graceful first-SIGINT drain for unlimited watch. The
-release workflow's Node-20-deprecated actions were bumped to
-`actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
-v0.1.2 corrective release makes the advertised second-SIGINT termination real
-and ensures the 16-chain regression actually reaches truncation with 18
-eligible candidates. The repository remains parked: no additional M8 chain or
-M7 probe is approved.
-Do not start M7 merely because eBPF is interesting; add a probe only for
-a concrete diagnostic gap. M5 recording and replay remain available for offline
-re-analysis. M4 remains implemented with opt-in live observational validation;
-that test still requires a caller-owned delegated subtree that already contains
-the test process and does not mutate the hierarchy.
+M9 is a presentation-only response to user feedback that the default hunt
+text was a wall of text and that watch text was too primitive. Implemented so
+far (ADR-0013, ADR-0014): compact verdict-first human text for `hunt`/`replay`
+with `--verbose` restoring the complete pre-redesign renderer;
+`--no-color`/`NO_COLOR`/automatic-TTY color through one shared severity
+palette (`src/ui.rs`); and a `watch` TTY dashboard (PSI meters, scoped
+pressure, lifecycle rows, severity-history sparklines) redrawn in place with
+direct ANSI, hidden cursor, and width-adaptive layout. Piped text, JSON
+streams, exit codes, and the SIGINT contract are unchanged, and no
+inference, telemetry, or lifecycle semantics were touched. The slice is
+deliberately not merged or released: real users are testing the redesigns
+locally in this worktree and will provide feedback before a release cut.
+
+The diagnostic workstream remains parked exactly as recorded below: no
+additional M8 chain or M7 probe is approved, and M9 does not change that
+selection rule — it adds presentation, not diagnosis.
 
 ## Verified milestone assessment
 
@@ -52,8 +52,9 @@ the test process and does not mutate the hierarchy.
   recording.
 - **M6 complete within its exit condition:** `watch` classifies host and
   bounded cgroup pressure findings as new, persistent, or resolved across
-  contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
-  keeps 16 history windows. It is not a TUI and does not store full evidence.
+  contiguous rolling windows, appends piped text/JSON, and keeps 16 history
+  windows. Its TTY presentation is now the M9 dashboard (ADR-0014); it is
+  still not an interactive monitor and does not store full evidence.
   A second SIGINT while draining terminates immediately with the conventional
   exit status; `--count` bounds scripted runs.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
@@ -65,6 +66,15 @@ the test process and does not mutate the hierarchy.
   Watch does not track chain identities.
 - **M7 not started; remaining M8 chains not started:** no eBPF probe exists,
   and no CPU–I/O, host–cgroup, or process-device chain exists.
+
+- **M9 first slice implemented (worktree `stallhunt-zai`):** compact
+  verdict-first `hunt`/`replay` text with `--verbose` full detail
+  (ADR-0013), shared ANSI styling with `--no-color`/`NO_COLOR`/TTY gating
+  (ADR-0014), and the `watch` TTY dashboard with meters, scoped pressure,
+  lifecycle, history sparklines, in-place redraw, and cursor restoration on
+  every exit path including second-SIGINT termination. Presentation only:
+  analyzers, collectors, JSON kinds/shapes, exit codes, and watch lifecycle
+  semantics are unchanged. Not yet released; pending local user feedback.
 
 ## Implemented
 
@@ -248,6 +258,34 @@ the test process and does not mutate the hierarchy.
   `nr_throttled` without throttled time does not label. Throttle counters
   without PSI do not create pressure. Watch still keys off `Pressure`.
 - Cargo formatting, Clippy, and test quality gates are documented.
+- M9 adds `src/ui.rs`, the shared TTY presentation module: color resolution
+  (`--no-color`, `NO_COLOR` set-and-non-empty, stdout terminal detection), one
+  severity/status palette, SGR styling, visible-width-computed styled spans,
+  block bars, and terminal-width probing (clamped 60–160, 80 fallback) via
+  `rustix`'s `termios` feature. `rustix` remains the only syscall-shim
+  dependency; no TUI or color crate was added (ADR-0014 closes that open
+  decision).
+- M9 makes human `hunt`/`replay` text compact by default (ADR-0013): one-line
+  verdict, three-row resource table with exact-interval PSI evidence and
+  cumulative stalled time, pressure-only candidate lists capped at three per
+  role with inline correlation caveats, at most three scoped cgroup lines
+  (plus a one-line statement when scoped pressure is absent or the cgroup
+  observation is unavailable), one-line chain summaries, and dim
+  measured-timing/footer lines. `--verbose`
+  reproduces the complete pre-redesign renderer; JSON is unchanged. Golden
+  fixtures cover both renderers (`hunt-compact-healthy.txt`,
+  `hunt-compact-contention.txt`, plus the retained verbose goldens).
+- M9 replaces `watch` TTY text with the ADR-0014 dashboard: framed layout
+  (title, HOST PRESSURE meters with numeric percentages and status words,
+  SCOPED PRESSURE top six, FINDINGS lifecycle capped at eight rows with
+  overflow, HISTORY severity sparklines over the 16-window history, footer),
+  cursor-home + erase-below in-place redraw, hidden cursor restored on loop
+  exit and on immediate second-SIGINT termination, styled-span rows whose
+  border alignment ignores escape sequences, and `--no-color` support. Piped
+  text windows and the `stallhunt.watch_window` JSON stream are byte-for-byte
+  unchanged. The dashboard is golden-covered at width 80 (`watch-dashboard.txt`),
+  and a color test asserts stripping SGR sequences reproduces the colorless
+  dashboard exactly.
 
 ## Known limitations
 
@@ -304,8 +342,16 @@ the test process and does not mutate the hierarchy.
   finding stays unconfirmed until that scope is observed without ranked
   pressure. Unlimited `watch` without `--count` samples until interrupted and
   drains the current window after the first SIGINT; a second SIGINT exits
-  immediately. Consecutive 100 ms windows remain smoke observations, same as
-  hunt.
+  immediately (restoring the cursor first on a TTY). Consecutive 100 ms
+  windows remain smoke observations, same as hunt.
+- M9 presentation limits: the compact renderer truncates ranked roles to
+  three per list and scoped cgroup pressure to three lines (overflow is
+  counted, `--verbose` shows up to ten scoped findings and five victims); the
+  dashboard does not adapt its height, so terminals shorter than the frame
+  clip it; the dashboard is not interactive; the watch dashboard does not
+  render victims/suspects (they remain `hunt --verbose`/`--json` material);
+  dashboard scoped-pressure and lifecycle rows truncate long cgroup paths at
+  the frame width.
 - M8's chains are same-window correlation of independent PSI plus either host
   VM counters or same-cgroup `memory.events` high/max or `memory.stat`
   direct-reclaim/swap-in deltas. They do not prove reclaim or swap caused I/O
@@ -327,8 +373,16 @@ the test process and does not mutate the hierarchy.
 
 ## Pending work
 
-The repository is intentionally parked after the scoped possible-thrashing
-slice. No additional M8 chain or M7 probe is approved.
+M9 (interface redesign) pending items:
+
+- collect real-user feedback on the compact hunt text and the watch dashboard
+  from local runs of this worktree before any merge/release;
+- iterate on or revert presentation details based on that feedback
+  (candidate known gaps: dashboard height adaptation, long cgroup path
+  truncation, compact candidate caps, dashboard density on small terminals).
+
+The diagnostic workstream remains intentionally parked after the scoped
+possible-thrashing slice. No additional M8 chain or M7 probe is approved.
 
 Diagnostic and attribution gaps:
 
@@ -377,7 +431,13 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Write down one concrete diagnostic question and the independent evidence needed
+Collect user feedback on the M9 compact text and watch dashboard from local
+test runs of this worktree, then iterate on presentation details (or revert
+specific elements) before cutting any release. No merge or release action
+should happen before that feedback round.
+
+For the diagnostic workstream the previous selection rule still applies:
+write down one concrete diagnostic question and the independent evidence needed
 to answer it before selecting another feature. No such question is currently
 selected. Do not start Milestone 7 unless the question cannot be answered with
 current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain unless
@@ -461,10 +521,15 @@ Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 Not yet decided:
 
 - serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
-- color/terminal crate,
 - eventual eBPF framework,
 - compatibility policy, additional targets, and signing/provenance for
   pre-built release artifacts.
+
+Decided in ADR-0014 (was previously open):
+
+- color/terminal crate: **none**; renderers emit ANSI directly, revisited only
+  if a concrete need (input handling, cell buffering, resize semantics)
+  appears.
 
 Decided in ADR-0012:
 
@@ -478,6 +543,23 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-24, the M9 interface-redesign slice was validated in the
+`stallhunt-zai` worktree: default-gate formatting, Clippy with `-D warnings`,
+and the full test suite passed; live TTY runs of the compact hunt renderer
+(healthy, smoke-window, and `--verbose` paths) and of the watch dashboard
+(`script`-driven pseudo-TTY, including `NO_COLOR` and `--no-color`) were
+inspected manually. New golden fixtures cover the compact renderer (healthy
+and pressured scenarios) and the width-80 dashboard; a color test asserts
+that stripping SGR sequences reproduces the colorless dashboard byte for
+byte. Default-gate coverage is now 169 unit tests, 14 CLI tests, three
+replay-fixture tests, and five ignored Linux acceptance tests.
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
 
 Later on 2026-08-23, a documentation consistency audit reconciled the v0.1.1
 and v0.1.2 SIGINT/truncation history, current JSON examples, watch semantics,

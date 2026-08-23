@@ -1,0 +1,29 @@
+stallhunt 0.1.2 · observed 10s
+Verdict: CPU scheduling contention — high (confidence high)
+  CPU      pressure  high      PSI some 20.00% · 2s stalled / 10s
+  Memory   pressure  moderate  PSI some 8.00% · 800ms stalled / 10s · 95% used
+  I/O      pressure  moderate  PSI some 12.00% · 1.2s stalled / 10s
+
+CPU scheduling contention · high · confidence high
+  Victims — observed runnable delay, not confirmed harm:
+    worker [21]  1.8s delayed
+  Suspects — same window only, not proven causal:
+    build�[31m [20]  80.0% of one CPU
+
+Memory reclaim pressure · moderate · confidence high
+  PSI some 8.00% over 10s · full 1.00% (all tasks stalled) · 95% used · mechanism confidence low
+
+Block-I/O pressure · moderate · confidence high
+  Devices — same-window activity, not mapped to victims:
+    sda  500ms busy · 4.0 MiB read · 8.0 MiB written
+  Processes — same-window accounting, not proven causes:
+    writer [42]  1.0 KiB read · 8.0 KiB charged write
+
+Scoped cgroup pressure
+  /workload.service · cpu (quota throttle) high · PSI some 20.00%
+
+Related evidence
+  memory reclaim pressure is consistent with block-I/O pressure in the same window (confidence low)
+
+measured: PSI 10s · CPU/process 10s · memory PSI 10s · I/O PSI 10s
+Use --verbose for full evidence, qualifiers, and timings · --json for machine-readable output

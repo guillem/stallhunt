@@ -6,10 +6,13 @@ Milestones 1–6 are functionally complete. Milestone 8's first two conservative
 evidence-chain slices relate memory mechanism pressure to I/O pressure, first
 host-wide and then same-cgroup, without claiming causality. Scoped cgroup
 findings can also carry reclaim, swap, possible-thrashing, or quota-throttle
-context labels without creating pressure. The repository is currently parked;
-`status.md` is the authoritative record of implemented behavior, pending work,
-and the gate for selecting a future slice. `experiments.md` retains controlled
-validation and overhead evidence.
+context labels without creating pressure. Milestone 9's first
+interface-redesign slice (compact-by-default human text, `--verbose`,
+`--no-color`/`NO_COLOR` color, and the `watch` TTY dashboard) is implemented
+in the `stallhunt-zai` worktree awaiting local user feedback; the diagnostic
+workstream remains parked. `status.md` is the authoritative record of
+implemented behavior, pending work, and the gate for selecting a future
+slice. `experiments.md` retains controlled validation and overhead evidence.
 
 ## Read this first
 
@@ -50,6 +53,9 @@ Accepted initial decisions:
 - ADR-0006: bounded cgroup-v2 scoped attribution
 - ADR-0007: versioned normalized-observation recordings without a compatibility promise
 - ADR-0008: watch tracks finding lifecycle rather than providing a TUI monitor
+- ADR-0012: Stallhunt product identity
+- ADR-0013: compact-by-default human output with `--verbose` full detail
+- ADR-0014: watch TTY dashboard rendering with direct ANSI, no TUI framework (supersedes ADR-0008's presentation clauses)
 - ADR-0009: evidence chains require independent mechanism evidence and never claim causality
 - ADR-0010: same-cgroup memory plus I/O chains stay on one path and never join host findings
 - ADR-0011: same-cgroup chains may use memory.stat page deltas in addition to memory.events

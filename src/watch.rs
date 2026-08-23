@@ -6,7 +6,7 @@
 //! not create tracked findings; missing data does not resolve an active one.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::thread;
 use std::time::Duration;
 
@@ -21,11 +21,15 @@ use crate::cli::{OutputFormat, WatchOptions};
 use crate::observe::{
     HuntObservation, observation_from_endpoints, read_end_endpoint, read_start_endpoint,
 };
+use crate::ui::{self, ColorUse, WatchDisplay};
 
 pub const MAX_HISTORY_WINDOWS: usize = 16;
 pub const MAX_TRACKED_CGROUPS: usize = 16;
 pub const WATCH_WINDOW_KIND: &str = "stallhunt.watch_window";
-const CLEAR_SCREEN: &str = "\u{1b}[H\u{1b}[2J";
+const CURSOR_HOME: &str = "\u{1b}[H";
+const CLEAR_BELOW: &str = "\u{1b}[J";
+const HIDE_CURSOR: &str = "\u{1b}[?25l";
+const SHOW_CURSOR: &str = "\u{1b}[?25h";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "scope", rename_all = "snake_case")]
@@ -379,28 +383,56 @@ const fn state_rank(state: LifecycleState) -> u8 {
 
 pub fn run(options: &WatchOptions) -> io::Result<()> {
     let stdout = io::stdout();
-    let refresh = options.output == OutputFormat::Text && stdout.is_terminal();
+    let display = WatchDisplay::probe(options);
     let mut writer = stdout.lock();
-    run_on(&mut writer, options, refresh)
+    run_on(&mut writer, options, &display)
 }
 fn write_window(
     writer: &mut dyn Write,
     options: &WatchOptions,
     window: &WatchWindow,
-    refresh: bool,
+    display: &WatchDisplay,
 ) -> io::Result<()> {
-    write!(writer, "{}", render_window(options, window, refresh)?)?;
+    write!(writer, "{}", render_window(options, window, display)?)?;
     writer.flush()?;
     Ok(())
 }
 
-fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::Result<()> {
+fn run_on(
+    writer: &mut dyn Write,
+    options: &WatchOptions,
+    display: &WatchDisplay,
+) -> io::Result<()> {
     let requested = Duration::from_millis(options.interval_ms);
     if requested.is_zero() {
         return Ok(());
     }
 
-    let interrupt = InterruptFlag::install(options.count.is_none());
+    // When the dashboard owns the terminal, the cursor stays hidden for the
+    // whole run and must be restored on every exit path, including the
+    // immediate second-SIGINT termination inside the interrupt handler.
+    let interactive = display.refresh;
+    let interrupt = InterruptFlag::install(options.count.is_none(), interactive);
+    if interactive {
+        write!(writer, "{HIDE_CURSOR}")?;
+        writer.flush()?;
+    }
+    let result = run_windows(writer, options, display, &interrupt);
+    if interactive {
+        let _ = write!(writer, "{SHOW_CURSOR}");
+        let _ = writer.write_all(b"\n");
+        let _ = writer.flush();
+    }
+    result
+}
+
+fn run_windows(
+    writer: &mut dyn Write,
+    options: &WatchOptions,
+    display: &WatchDisplay,
+    interrupt: &InterruptFlag,
+) -> io::Result<()> {
+    let requested = Duration::from_millis(options.interval_ms);
     let mut start = read_start_endpoint();
     let mut tracker = WatchTracker::new();
     let mut completed = 0_u32;
@@ -416,7 +448,7 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
         let mut window = tracker.ingest(&observation);
         window.count = options.count;
         window.interval_ms = options.interval_ms;
-        write_window(writer, options, &window, refresh).or_else(|error| {
+        write_window(writer, options, &window, display).or_else(|error| {
             if error.kind() == io::ErrorKind::BrokenPipe {
                 Ok(())
             } else {
@@ -434,12 +466,16 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
 /// replaced by a flag so an in-flight `watch` window can complete and be
 /// written before the loop exits. Without installation (bounded `--count`
 /// runs), SIGINT keeps its default terminating behavior.
+///
+/// When `restore_terminal` is set (dashboard mode), the second-SIGINT exit
+/// restores the visible cursor before terminating so the operator's shell is
+/// not left with a hidden cursor.
 struct InterruptFlag {
     raised: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl InterruptFlag {
-    fn install(enabled: bool) -> Self {
+    fn install(enabled: bool, restore_terminal: bool) -> Self {
         let raised = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         if enabled {
             let handler_flag = std::sync::Arc::clone(&raised);
@@ -449,6 +485,12 @@ impl InterruptFlag {
                     // preserve the default shell-visible exit status when the
                     // operator interrupts a second time rather than waiting
                     // for a potentially five-minute window to drain.
+                    if restore_terminal {
+                        let mut stdout = std::io::stdout();
+                        let _ = stdout.write_all(SHOW_CURSOR.as_bytes());
+                        let _ = stdout.write_all(b"\n");
+                        let _ = stdout.flush();
+                    }
                     std::process::exit(130);
                 }
             });
@@ -464,21 +506,28 @@ impl InterruptFlag {
 pub fn render_window(
     options: &WatchOptions,
     window: &WatchWindow,
-    refresh: bool,
+    display: &WatchDisplay,
 ) -> Result<String, serde_json::Error> {
     match options.output {
         OutputFormat::Json => watch_json(window),
-        OutputFormat::Text => Ok(watch_text(window, refresh)),
+        OutputFormat::Text => Ok(if display.refresh {
+            // Redraw in place: home the cursor, paint the frame, and erase
+            // any leftover rows below it. No alternate screen is used, so
+            // scrollback keeps the session history.
+            format!(
+                "{CURSOR_HOME}{}{CLEAR_BELOW}",
+                watch_dashboard(window, display)
+            )
+        } else {
+            watch_text(window)
+        }),
     }
 }
 
-fn watch_text(window: &WatchWindow, refresh: bool) -> String {
+/// Piped/append text: one block per window (ADR-0008 contract).
+fn watch_text(window: &WatchWindow) -> String {
     let mut output = String::new();
-    if refresh {
-        output.push_str(CLEAR_SCREEN);
-    } else {
-        output.push_str(&format!("--- window {} ---\n", window.index));
-    }
+    output.push_str(&format!("--- window {} ---\n", window.index));
     output.push_str(&format!(
         "WATCH  window {}  interval {}\n\n",
         window_index_label(window),
@@ -584,6 +633,284 @@ fn current_line(label: &str, signal: &ResourceSignal) -> String {
         severity_name(signal.severity),
         psi_suffix(signal.psi_some_fraction)
     )
+}
+
+// Dashboard renderer --------------------------------------------------------
+//
+// The TTY presentation of `watch`: a framed, in-place-refreshing screen with
+// PSI pressure meters, scoped pressure, finding lifecycle, and a severity
+// history. It renders exactly the same `WatchWindow` data as the JSON stream
+// and the piped text format; it adds presentation, not semantics. Rows are
+// composed from styled spans so borders stay aligned and truncation is
+// computed on visible characters even when ANSI sequences are present.
+// Colors are never the only carrier of meaning: every meter also prints its
+// percentage and a textual status.
+
+use crate::ui::Span;
+
+struct DashboardFrame {
+    inner: usize,
+    lines: Vec<String>,
+}
+
+impl DashboardFrame {
+    fn new(width: usize, title: &str) -> Self {
+        let inner = width.saturating_sub(4);
+        let title_text = format!("─ {title} ");
+        let fill = (inner + 2).saturating_sub(title_text.chars().count());
+        let mut frame = Self {
+            inner,
+            lines: Vec::new(),
+        };
+        frame
+            .lines
+            .push(format!("┌{title_text}{}┐", "─".repeat(fill)));
+        frame
+    }
+
+    fn row_spans(&mut self, spans: &[Span], color: ColorUse) {
+        let mut visible = 0;
+        let mut rendered = String::new();
+        for span in spans {
+            let width = span.visible_width();
+            if visible + width > self.inner {
+                let remaining = self.inner.saturating_sub(visible);
+                let truncated: String = span.text.chars().take(remaining).collect();
+                let mut piece = match span.style {
+                    Some(style) => ui::paint(&truncated, style, color),
+                    None => truncated,
+                };
+                if remaining == 0 {
+                    piece = String::new();
+                }
+                rendered.push_str(&piece);
+                visible += remaining;
+                break;
+            }
+            rendered.push_str(&span.render(color));
+            visible += width;
+        }
+        let padding = self.inner.saturating_sub(visible);
+        self.lines
+            .push(format!("│ {rendered}{} │", " ".repeat(padding)));
+    }
+
+    fn section(&mut self, name: &str, color: ColorUse) {
+        self.row_spans(&[Span::plain("")], ColorUse::Disabled);
+        self.row_spans(&[Span::styled(name, ui::Style::Bold)], color);
+    }
+
+    fn render(self) -> String {
+        let bottom = "─".repeat(self.inner + 2);
+        self.lines
+            .into_iter()
+            .chain(std::iter::once(format!("└{bottom}┘")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+const fn severity_spark(severity: Severity, state: LifecycleState) -> char {
+    match state {
+        LifecycleState::Resolved => '·',
+        _ => match severity {
+            Severity::None => '·',
+            Severity::Low => '▁',
+            Severity::Moderate => '▃',
+            Severity::High => '▅',
+            Severity::Severe => '█',
+        },
+    }
+}
+
+fn meter_spans(label: &str, signal: &ResourceSignal, inner: usize) -> Vec<Span> {
+    let bar_width = (inner / 3).clamp(10, 40);
+    let (style, percentage, status) = match (signal.status, signal.psi_some_fraction) {
+        (ObservationStatus::Pressure, Some(fraction)) => (
+            ui::severity_style(signal.severity),
+            format!("{:>5.1}%", fraction * 100.0),
+            Span::styled(
+                severity_name(signal.severity),
+                ui::severity_style(signal.severity),
+            ),
+        ),
+        (ObservationStatus::Healthy, Some(fraction)) => (
+            ui::severity_style(Severity::None),
+            format!("{:>5.1}%", fraction * 100.0),
+            Span::styled("ok", ui::status_style(ui::StatusWord::Ok)),
+        ),
+        (ObservationStatus::Unconfirmed, Some(fraction)) => (
+            ui::status_style(ui::StatusWord::Unconfirmed),
+            format!("{:>5.1}%", fraction * 100.0),
+            Span::styled("unconfirmed", ui::status_style(ui::StatusWord::Unconfirmed)),
+        ),
+        (_, None) => (
+            ui::status_style(ui::StatusWord::Unavailable),
+            format!("{:>5}", "n/a"),
+            Span::styled(
+                ui::StatusWord::Unavailable.label(),
+                ui::status_style(ui::StatusWord::Unavailable),
+            ),
+        ),
+    };
+    vec![
+        Span::plain(format!(" {label:<8}")),
+        Span::styled(
+            ui::bar_text(signal.psi_some_fraction.unwrap_or(0.0), bar_width),
+            style,
+        ),
+        Span::plain(format!("  {percentage}  ")),
+        status,
+    ]
+}
+
+fn lifecycle_spans(finding: &TrackedFinding) -> Vec<Span> {
+    // Same vocabulary as the piped text and JSON lifecycle states.
+    let (state_word, state_style) = match finding.state {
+        LifecycleState::New => ("NEW", ui::Style::Yellow),
+        LifecycleState::Persistent => ("PERSISTENT", ui::severity_style(finding.severity)),
+        LifecycleState::Resolved => ("RESOLVED", ui::status_style(ui::StatusWord::Unavailable)),
+    };
+    let mut extra = String::new();
+    match finding.state {
+        LifecycleState::New => extra.push_str("new"),
+        LifecycleState::Persistent => {
+            extra.push_str(&format!("{}w", finding.consecutive_windows));
+            if !finding.confirmed {
+                extra.push_str(" unconfirmed");
+            }
+        }
+        LifecycleState::Resolved => extra.push_str("resolved"),
+    }
+    if let Some(previous) = finding.previous_severity {
+        extra.push_str(&format!(" (was {})", severity_name(previous)));
+    }
+    let psi = finding
+        .psi_some_fraction
+        .map(|fraction| format!("PSI {:.1}%", fraction * 100.0))
+        .unwrap_or_default();
+    vec![
+        Span::styled(format!("{state_word:<11}"), state_style),
+        Span::plain(format!(" {} · {} ", id_label(&finding.id), finding.kind)),
+        Span::styled(
+            severity_name(finding.severity),
+            ui::severity_style(finding.severity),
+        ),
+        Span::plain(format!(" {extra} {psi}")),
+    ]
+}
+
+pub fn watch_dashboard(window: &WatchWindow, display: &WatchDisplay) -> String {
+    let color = display.color;
+    let inner = display.width.saturating_sub(4);
+    let mut frame = DashboardFrame::new(
+        display.width,
+        &format!(
+            "stallhunt {} · window {} · interval {}",
+            env!("CARGO_PKG_VERSION"),
+            window_index_label(window),
+            format_ms(window.interval_ms)
+        ),
+    );
+
+    frame.section(
+        "HOST PRESSURE · PSI some (% of window with stalled work)",
+        color,
+    );
+    frame.row_spans(&meter_spans("CPU", &window.current.cpu, inner), color);
+    frame.row_spans(&meter_spans("Memory", &window.current.memory, inner), color);
+    frame.row_spans(&meter_spans("I/O", &window.current.io, inner), color);
+
+    let scoped: Vec<_> = window
+        .current
+        .cgroups
+        .iter()
+        .filter(|(_, signal)| signal.status == ObservationStatus::Pressure)
+        .take(6)
+        .collect();
+    if !scoped.is_empty() {
+        frame.section(
+            &format!("SCOPED PRESSURE · cgroups ({} shown)", scoped.len()),
+            color,
+        );
+        let label_width = (display.width / 3).clamp(16, 48);
+        for (id, signal) in scoped {
+            let psi = signal
+                .psi_some_fraction
+                .map(|fraction| format!("PSI {:.1}%", fraction * 100.0))
+                .unwrap_or_default();
+            frame.row_spans(
+                &[
+                    Span::plain(format!(" {:<width$}", id_label(id), width = label_width)),
+                    Span::plain(format!("{} ", signal.kind)),
+                    Span::styled(
+                        severity_name(signal.severity),
+                        ui::severity_style(signal.severity),
+                    ),
+                    Span::plain(format!(" {psi}")),
+                ],
+                color,
+            );
+        }
+    }
+
+    frame.section("FINDINGS · lifecycle (new / persistent / resolved)", color);
+    if window.lifecycle.is_empty() {
+        frame.row_spans(&[Span::plain(" (no pressure findings)")], color);
+    } else {
+        let shown = window.lifecycle.len().min(8);
+        for finding in window.lifecycle.iter().take(shown) {
+            frame.row_spans(&lifecycle_spans(finding), color);
+        }
+        if window.lifecycle.len() > shown {
+            frame.row_spans(
+                &[Span::plain(format!(
+                    " … {} more",
+                    window.lifecycle.len() - shown
+                ))],
+                color,
+            );
+        }
+    }
+
+    frame.section("HISTORY · severity by window (oldest → newest)", color);
+    for (label, id) in [
+        ("CPU", FindingId::Cpu),
+        ("Memory", FindingId::Memory),
+        ("I/O", FindingId::Io),
+    ] {
+        let spark: String = window
+            .history
+            .iter()
+            .map(|entry| {
+                entry
+                    .events
+                    .iter()
+                    .find(|event| event.id == id)
+                    .map(|event| severity_spark(event.severity, event.state))
+                    .unwrap_or('·')
+            })
+            .collect();
+        frame.row_spans(&[Span::plain(format!(" {label:<8}{spark}"))], color);
+    }
+    if window.current.cgroup_tracking_capped {
+        frame.row_spans(
+            &[Span::plain(
+                " cgroup tracking is capped; additional scoped pressure not shown",
+            )],
+            color,
+        );
+    }
+
+    frame.row_spans(&[Span::plain("")], ColorUse::Disabled);
+    frame.row_spans(
+        &[Span::styled(
+            "Ctrl-C: drain & exit · twice: quit now · full evidence: hunt --verbose",
+            ui::Style::Dim,
+        )],
+        color,
+    );
+    frame.render()
 }
 
 fn watch_json(window: &WatchWindow) -> Result<String, serde_json::Error> {
@@ -961,6 +1288,23 @@ mod tests {
     use super::*;
     use crate::analysis::CgroupEvidence;
     use crate::cgroup::{CgroupFileState, CgroupResource};
+    use crate::ui::{ColorUse, WatchDisplay};
+
+    fn piped_display() -> WatchDisplay {
+        WatchDisplay {
+            refresh: false,
+            color: ColorUse::Disabled,
+            width: 80,
+        }
+    }
+
+    fn dashboard_display() -> WatchDisplay {
+        WatchDisplay {
+            refresh: true,
+            color: ColorUse::Disabled,
+            width: 80,
+        }
+    }
 
     fn pressure(kind: &'static str, severity: Severity, psi: f64) -> ResourceSignal {
         ResourceSignal {
@@ -1244,9 +1588,10 @@ mod tests {
                 interval_ms: 2_000,
                 count: Some(3),
                 output: OutputFormat::Text,
+                color: crate::ui::ColorMode::Never,
             },
             &first,
-            false,
+            &piped_display(),
         )
         .expect("watch text render");
         assert!(text.contains("WATCH  window 1/3  interval 2s"));
@@ -1266,9 +1611,10 @@ mod tests {
                     interval_ms: 2_000,
                     count: Some(3),
                     output: OutputFormat::Json,
+                    color: crate::ui::ColorMode::Never,
                 },
                 &first,
-                false,
+                &piped_display(),
             )
             .expect("watch json render"),
         )
@@ -1374,6 +1720,130 @@ mod tests {
         assert_eq!(resolved.lifecycle[0].id, FindingId::Memory);
         assert_eq!(resolved.lifecycle[0].state, LifecycleState::Resolved);
         assert_eq!(resolved.lifecycle[0].kind, "memory_swap_pressure");
+    }
+
+    fn assert_or_update_fixture(actual: &str, path: &str, expected: &str) {
+        if std::env::var_os("STALLHUNT_UPDATE_FIXTURES").is_some() {
+            let full = format!("tests/fixtures/render/{path}");
+            std::fs::write(&full, actual).expect("write fixture");
+            return;
+        }
+        assert_eq!(
+            actual, expected,
+            "golden fixture mismatch for {path}; inspect the diff and refresh with \
+             STALLHUNT_UPDATE_FIXTURES=1 cargo test if intentional"
+        );
+    }
+
+    #[test]
+    fn dashboard_renders_meters_lifecycle_and_history_golden() {
+        let cgroup_id = FindingId::Cgroup {
+            path: "/app.slice/app.service".into(),
+            resource: CgroupResourceKind::Memory,
+        };
+        let mut tracker = WatchTracker::new();
+
+        // Window 1: CPU pressure appears alongside scoped memory pressure.
+        let mut first = host_signals(
+            pressure("cpu_scheduling_contention", Severity::High, 0.2),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        );
+        first.cgroups.push((
+            cgroup_id.clone(),
+            pressure("cgroup_memory_reclaim_pressure", Severity::Moderate, 0.21),
+        ));
+        tracker.ingest_signals(first);
+
+        // Window 2: CPU escalates to severe; I/O pressure appears.
+        tracker.ingest_signals(host_signals(
+            pressure("cpu_scheduling_contention", Severity::Severe, 0.4),
+            healthy("memory_no_harmful_pressure"),
+            pressure("io_pressure", Severity::Low, 0.02),
+        ));
+
+        // Window 3: CPU persists severe; I/O resolves; scoped pressure persists.
+        let mut third = host_signals(
+            pressure("cpu_scheduling_contention", Severity::Severe, 0.38),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        );
+        third.cgroups.push((
+            cgroup_id,
+            pressure("cgroup_memory_swap_pressure", Severity::Moderate, 0.19),
+        ));
+        let mut window = tracker.ingest_signals(third);
+        window.interval_ms = 2_000;
+        window.count = None;
+
+        let body = watch_dashboard(&window, &dashboard_display());
+        assert!(!body.contains('\u{1b}'));
+        assert_or_update_fixture(
+            &body,
+            "watch-dashboard.txt",
+            include_str!("../tests/fixtures/render/watch-dashboard.txt"),
+        );
+
+        // The refresh frame homes the cursor and clears leftover rows below.
+        let frame = render_window(
+            &WatchOptions {
+                interval_ms: 2_000,
+                count: None,
+                output: OutputFormat::Text,
+                color: crate::ui::ColorMode::Never,
+            },
+            &window,
+            &dashboard_display(),
+        )
+        .expect("dashboard frame render");
+        assert!(frame.starts_with("\u{1b}[H"));
+        assert!(frame.ends_with("\u{1b}[J"));
+    }
+
+    /// Remove SGR escape sequences so colored output can be compared to the
+    /// plain rendering character for character.
+    fn strip_ansi(text: &str) -> String {
+        let mut plain = String::new();
+        let mut characters = text.chars().peekable();
+        while let Some(character) = characters.next() {
+            if character == '\u{1b}' {
+                for escaped in characters.by_ref() {
+                    if escaped == 'm' {
+                        break;
+                    }
+                }
+            } else {
+                plain.push(character);
+            }
+        }
+        plain
+    }
+
+    #[test]
+    fn dashboard_color_styling_keeps_the_plain_layout() {
+        let mut tracker = WatchTracker::new();
+        let mut window = tracker.ingest_signals(host_signals(
+            pressure("cpu_scheduling_contention", Severity::Severe, 0.4),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        window.interval_ms = 2_000;
+        let colored = watch_dashboard(
+            &window,
+            &crate::ui::WatchDisplay {
+                refresh: true,
+                color: ColorUse::Enabled,
+                width: 80,
+            },
+        );
+        assert!(colored.contains("\u{1b}[1;31msevere\u{1b}[0m"));
+        assert!(colored.contains("ok"));
+
+        // Color must not change the visible layout: stripping SGR sequences
+        // yields exactly the colorless dashboard.
+        let plain = watch_dashboard(&window, &dashboard_display());
+        assert!(!plain.contains('\u{1b}'));
+        assert_eq!(strip_ansi(&colored), plain);
     }
 
     #[test]

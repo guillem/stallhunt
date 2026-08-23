@@ -26,10 +26,12 @@ cargo install --path .
 stallhunt
 ```
 
-Bare `stallhunt` runs a default 10-second hunt. Use `--json` for the full structured evidence:
+Bare `stallhunt` runs a default 10-second hunt. Human output is compact and
+verdict-first; `--verbose` shows the full evidence, qualifiers, and timings,
+and `--json` emits the complete structured report:
 
 ```bash
-stallhunt --json
+stallhunt --verbose
 stallhunt hunt --duration 30s
 ```
 
@@ -41,7 +43,9 @@ stallhunt replay incident.json
 stallhunt redact incident.json --output incident.redacted.json
 ```
 
-Follow finding lifecycle for a bounded number of rolling windows:
+Follow finding lifecycle for a bounded number of rolling windows. On a
+terminal, `watch` renders a live dashboard with pressure meters, scoped
+findings, lifecycle, and severity history; piped output and `--json` append:
 
 ```bash
 stallhunt watch --interval 2s --count 3
@@ -69,36 +73,36 @@ High utilization is not automatically a problem. A machine using 95% of its RAM 
 - network-related waits,
 - eventually deeper blocking chains.
 
-Example output shape:
+Example default output (compact renderer; severity colors on a TTY):
 
 ```text
 $ stallhunt
 
-SYSTEM HEALTH: DEGRADED
+stallhunt 0.1.2 · observed 10s
+Verdict: CPU scheduling contention — high (confidence high)
+  CPU      pressure  high      PSI some 23.40% · 2.3s stalled / 10s
+  Memory   ok                   PSI some 0.12% · 37% used
+  I/O      pressure  moderate  PSI some 12.20% · 1.2s stalled / 10s
 
-1. CPU scheduling contention                         SEVERE
-   Impact:    23.4% pressure during observation
-   Victims:   postgres [4812], nginx [5120]
-   Suspects:  rustc [9231], ffmpeg [9401]
-   Confidence: high
+CPU scheduling contention · high · confidence high
+  Victims — observed runnable delay, not confirmed harm:
+    postgres [4812]  1.81s delayed
+  Suspects — same window only, not proven causal:
+    rustc [9231]     583.0% of one CPU
 
-   Evidence:
-     CPU PSI some avg10:          23.4%
-     run queue latency estimate:  elevated
-     rustc CPU consumption:       735%
-     postgres runnable delay:     3.8s / 10s
+Scoped cgroup pressure
+  /app.slice/app.service · memory (reclaim) moderate · PSI some 21.0%
 
-2. Block I/O contention                              MODERATE
-   Device:    nvme0n1
-   Victim:    postgres [4812]
-   Suspect:   restic [7712]
-   Confidence: medium
+Related evidence
+  memory reclaim pressure is consistent with block-I/O pressure in the same window (confidence low)
 
-Memory: no significant pressure detected.
-High memory occupancy alone is not treated as a bottleneck.
+measured: PSI 10s · CPU/process 10s · memory PSI 10s · I/O PSI 10s
+Use --verbose for full evidence, qualifiers, and timings · --json for machine-readable output
 ```
 
-This output is aspirational; the project will reach it incrementally.
+`--verbose` expands every finding with complete evidence, qualifiers, and
+timings. A healthy host stays compact and states the negative result
+explicitly.
 
 ## Product principles
 
@@ -157,6 +161,7 @@ Later releases may add:
 │   ├── psi.rs
 │   ├── record.rs
 │   ├── render.rs
+│   ├── ui.rs
 │   └── watch.rs
 ├── tests/
 │   ├── cgroup_acceptance.rs
@@ -197,7 +202,10 @@ Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your 
 ## Current state
 
 Milestones 1–6 are functionally complete. Milestone 8's first two evidence-chain
-slices are implemented. Milestone 2's host-memory slice is
+slices are implemented. Milestone 9's first interface-redesign slice
+(compact-by-default hunt text with `--verbose`, `--no-color`/`NO_COLOR` color,
+and the watch TTY dashboard) is implemented in the `stallhunt-zai` worktree
+awaiting local user feedback. Milestone 2's host-memory slice is
 implemented and has a recorded delegated-cgroup harmful-pressure acceptance.
 The repository contains a Rust binary named `stallhunt` with real `hunt`, `watch`, `record`,
 `replay`, `redact`, `capabilities`, help, version, duration parsing, and
@@ -276,11 +284,14 @@ M6 adds `watch`. Rolling windows reuse the previous endpoint snapshot. The
 command tracks host CPU/memory/I/O and a bounded set of cgroup pressure
 findings as new, persistent, or resolved. Scoped cgroup `kind` values name the
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label.
-TTY text refreshes the screen; JSON emits one compact
-`stallhunt.watch_window` object per window. Watch is not a TUI and is not a
-recording. On an unlimited watch, the first SIGINT drains and writes the
-in-flight window; a second SIGINT terminates immediately. Full evidence remains
-on `hunt --json` and `record`.
+On a terminal, watch renders a live dashboard — PSI pressure meters, scoped
+pressure, lifecycle rows, and severity-history sparklines — redrawn in place
+without a TUI framework; piped text appends and JSON emits one compact
+`stallhunt.watch_window` object per window. Watch is not an interactive
+monitor and is not a recording. On an unlimited watch, the first SIGINT
+drains and writes the in-flight window; a second SIGINT terminates
+immediately. Full evidence remains on `hunt --verbose`, `hunt --json`, and
+`record`.
 
 M8 adds a conservative evidence chain: when memory reclaim, swap, or possible
 thrashing coexists with I/O pressure, hunt text and JSON may report that the

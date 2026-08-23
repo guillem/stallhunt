@@ -61,9 +61,25 @@ fn hunt_handles_every_cpu_psi_capability_state() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
+    // Piped output must never contain ANSI escape sequences.
+    assert!(!stdout.contains('\u{1b}'));
+    if stdout.contains("short window") {
+        assert!(stdout.contains("inconclusive — observation window shorter than 1s"));
+        assert!(stdout.contains("PSI some"));
+        assert!(stdout.contains("measured:"));
+    } else {
+        assert!(stdout.contains("unavailable"));
+        assert!(stdout.contains("(PSI"));
+    }
+}
+
+#[test]
+fn hunt_verbose_restores_the_full_text_renderer() {
+    let output = stallhunt(&["hunt", "--duration", "100ms", "--verbose"]);
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+
+    assert!(output.status.success());
     if stdout.contains("Verdict: insufficient observation") {
-        assert!(stdout.contains("Verdict: insufficient observation"));
-        assert!(stdout.contains("CPU PSI some"));
         assert!(stdout.contains("Timing: requested 100ms; PSI measured"));
     } else {
         assert!(stdout.contains("CPU assessment unavailable"));

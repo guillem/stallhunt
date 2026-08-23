@@ -220,7 +220,8 @@ Create ADR before promising format compatibility.
 
 Status: complete. Finding-lifecycle watch over contiguous rolling windows is
 implemented. It is not a TUI. ADR-0008 records the output and lifecycle
-contract. The first SIGINT drains the in-flight window before exit and a
+contract; its TTY presentation clause was superseded by M9 (ADR-0014).
+The first SIGINT drains the in-flight window before exit and a
 second SIGINT terminates immediately; there is still no multi-window recording.
 
 Goal:
@@ -282,6 +283,37 @@ CPU-heavy build
 ```
 
 Avoid overclaiming causality.
+
+## Milestone 9 — Interface redesign (presentation layer)
+
+Status: first slice complete; local user-testing phase, deliberately not
+merged/released yet.
+
+Goal:
+
+> Present the same diagnosis much more clearly: compact verdict-first human
+> text by default with the full explanation on demand, and a modern TTY
+> dashboard for `watch`, without adding a TUI framework or changing any
+> inference, telemetry, JSON, or lifecycle semantics.
+
+Deliver (ADR-0013, ADR-0014):
+
+- compact-by-default `hunt`/`replay` text: one-line verdict, resource status
+  table with PSI evidence, capped candidate lists with inline correlation
+  caveats, scoped-pressure summary, one-line chains, `--verbose` footer;
+- `--verbose` retaining the complete pre-redesign renderer;
+- `--no-color` plus `NO_COLOR` and automatic TTY color with one shared
+  severity palette that is never the only carrier of meaning;
+- `watch` TTY dashboard: PSI meters, scoped pressure, lifecycle rows,
+  severity-history sparklines, in-place redraw, hidden cursor restored on
+  every exit path, width-adaptive layout;
+- piped text, JSON streams, exit codes, and SIGINT behavior unchanged;
+- deterministic golden coverage for the compact renderer and the dashboard.
+
+Exit condition:
+
+Real users validate the redesigns locally (this worktree) and the feedback
+loop converges before any release cut.
 
 ## Future possibilities
 

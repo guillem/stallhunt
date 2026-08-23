@@ -5,8 +5,11 @@
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
 block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, and the
 first two Milestone 8 evidence-chain slices. Scoped cgroup findings can also
-carry reclaim, swap, possible-thrashing, or quota-throttle context labels. The
-repository is currently parked pending selection of another concrete diagnostic
+carry reclaim, swap, possible-thrashing, or quota-throttle context labels.
+Milestone 9's first interface-redesign slice (compact hunt text with
+`--verbose`, color policy, and the watch TTY dashboard) is implemented in the
+`stallhunt-zai` worktree awaiting local user feedback; the diagnostic
+workstream remains parked pending selection of another concrete diagnostic
 question; see `status.md`.
 
 Build and run it from the repository root:
@@ -55,8 +58,11 @@ meaningful CPU scheduling contention or a provisional low, moderate, high, or
 severe finding. Host/process collection failure does not discard a valid PSI
 resource verdict, but leaves attribution empty and qualified. Runnable-delay
 victims and same-window CPU consumers are qualified attribution candidates, not
-proven causes. M1.6 adds a concise finding-first text renderer; `--json`
-retains the complete structured evidence and collection context.
+proven causes. Human text is compact and verdict-first (ADR-0013) with the
+complete renderer behind `--verbose` and ANSI color on terminals via
+`--no-color`/`NO_COLOR` (ADR-0014); `--json` retains the complete structured
+evidence and collection context. On a terminal, `watch` renders the
+in-place-refreshing dashboard described in ADR-0014.
 
 ## Toolchain
 

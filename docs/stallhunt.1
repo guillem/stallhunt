@@ -6,13 +6,13 @@ stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 [\fIcommand\fR] [\fIoptions\fR]
 .PP
 .B stallhunt
-[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR] [\fB\-\-verbose\fR] [\fB\-\-no\-color\fR]
 .PP
 .B stallhunt hunt
-[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR] [\fB\-\-verbose\fR] [\fB\-\-no\-color\fR]
 .PP
 .B stallhunt watch
-[\fB\-\-interval\fR \fIDURATION\fR] [\fB\-\-count\fR \fIN\fR] [\fB\-\-json\fR]
+[\fB\-\-interval\fR \fIDURATION\fR] [\fB\-\-count\fR \fIN\fR] [\fB\-\-json\fR] [\fB\-\-no\-color\fR]
 .PP
 .B stallhunt capabilities
 [\fB\-\-json\fR]
@@ -46,10 +46,11 @@ Running
 .B stallhunt
 with no subcommand is equivalent to
 .BR "stallhunt hunt" .
-Default human output is finding-first and concise.
-Use
+Default human output is compact and verdict-first;
+.B \-\-verbose
+expands every finding with the complete evidence, qualifiers, and timings, and
 .B \-\-json
-wherever supported to emit the full structured report.
+emits the full structured report wherever supported.
 .SH COMMANDS
 .TP
 .B hunt
@@ -59,10 +60,12 @@ The default duration is 10 seconds.
 .B watch
 Track rolling finding lifecycle across repeated observation windows.
 The default interval is 2 seconds.
-On a TTY, text output refreshes the screen; with
+On a TTY, text output renders a live dashboard (host PSI pressure meters,
+scoped cgroup pressure, lifecycle rows, and severity-history sparklines) that
+redraws in place each window; piped text appends window blocks, and with
 .BR \-\-json ,
 one compact JSON object is printed per window.
-Watch is not a TUI and does not write recordings.
+Watch is not an interactive monitor and does not write recordings.
 For an unlimited watch, the first SIGINT drains and writes the in-flight
 window; a second SIGINT terminates immediately.
 .TP
@@ -142,6 +145,27 @@ Supported by
 and
 .BR replay .
 .TP
+.B \-\-verbose
+Select the full-detail human renderer for
+.B hunt
+and
+.B replay :
+every verdict and evidence line, ranked role with confidence labels,
+qualifiers and limitations, controller context, and measured timings.
+.TP
+.B \-\-no\-color
+Disable ANSI colors even when standard output is a terminal.
+Supported by
+.BR hunt ,
+.BR watch ,
+and
+.BR replay .
+Colors are enabled automatically on terminals unless the
+.B NO_COLOR
+environment variable is set to a non-empty value.
+Color is never the only carrier of meaning: severity and status words,
+percentages, and meters remain readable without color.
+.TP
 .BR \-\-output " " \fIPATH\fR
 Output path for
 .B record
@@ -161,10 +185,21 @@ or
 By default, existing paths are not overwritten.
 .SH OUTPUT
 .SS Text
-Human output summarizes findings, evidence, qualifiers, and timing.
+Human
+.B hunt
+and
+.B replay
+output is compact by default: a one-line verdict, a per-resource status table
+with exact-interval PSI evidence, capped candidate lists for pressured
+resources with inline correlation caveats, scoped-pressure and related-
+evidence summaries, and measured timings.
+.B \-\-verbose
+selects the complete renderer.
 Partial collection is reported explicitly rather than failing silently.
 Sub-second hunts are telemetry smoke observations and do not receive healthy or
 pressure verdicts.
+On a terminal, severity and status are additionally colored with a shared
+palette; stripped of color the text is identical.
 .SS JSON
 .B hunt
 and
@@ -298,6 +333,12 @@ Run a one-second hunt and emit JSON:
 .PP
 .RS
 stallhunt hunt \-\-duration 1s \-\-json
+.RE
+.PP
+Show the full evidence and qualifiers for a hunt:
+.PP
+.RS
+stallhunt hunt \-\-verbose
 .RE
 .PP
 Inspect available telemetry on the host:

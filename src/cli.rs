@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
+use crate::ui::ColorMode;
+
 pub const DEFAULT_HUNT_DURATION_MS: u64 = 10_000;
 #[allow(dead_code)] // referenced by CLI defaults, docs, and unit tests
 pub const DEFAULT_WATCH_INTERVAL_MS: u64 = 2_000;
@@ -16,10 +18,24 @@ pub enum OutputFormat {
     Json,
 }
 
+/// How much explanation the human renderer includes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Detail {
+    /// Verdict-first summary: statuses, PSI evidence, and ranked candidates
+    /// without the full qualifier and timing prose.
+    #[default]
+    Compact,
+    /// The complete finding text with every qualifier, limitation, and
+    /// measured timing.
+    Verbose,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HuntOptions {
     pub duration_ms: u64,
     pub output: OutputFormat,
+    pub detail: Detail,
+    pub color: ColorMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +55,8 @@ pub struct RecordOptions {
 pub struct ReplayOptions {
     pub input: PathBuf,
     pub output: OutputFormat,
+    pub detail: Detail,
+    pub color: ColorMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +71,7 @@ pub struct WatchOptions {
     pub interval_ms: u64,
     pub count: Option<u32>,
     pub output: OutputFormat,
+    pub color: ColorMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +151,12 @@ struct HuntArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Show full evidence, qualifiers, and measured timings
+    #[arg(long)]
+    verbose: bool,
+    /// Disable ANSI colors even on a terminal
+    #[arg(long)]
+    no_color: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -164,6 +189,12 @@ struct ReplayArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Show full evidence, qualifiers, and measured timings
+    #[arg(long)]
+    verbose: bool,
+    /// Disable ANSI colors even on a terminal
+    #[arg(long)]
+    no_color: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -189,6 +220,9 @@ struct WatchArgs {
     /// Emit one compact JSON object per window
     #[arg(long)]
     json: bool,
+    /// Disable ANSI colors even on a terminal
+    #[arg(long)]
+    no_color: bool,
 }
 
 impl From<HuntArgs> for HuntOptions {
@@ -196,6 +230,8 @@ impl From<HuntArgs> for HuntOptions {
         Self {
             duration_ms: args.duration,
             output: output_format(args.json),
+            detail: detail(args.verbose),
+            color: color_mode(args.no_color),
         }
     }
 }
@@ -228,6 +264,8 @@ impl From<ReplayArgs> for ReplayOptions {
         Self {
             input: args.path,
             output: output_format(args.json),
+            detail: detail(args.verbose),
+            color: color_mode(args.no_color),
         }
     }
 }
@@ -248,6 +286,7 @@ impl From<WatchArgs> for WatchOptions {
             interval_ms: args.interval,
             count: args.count,
             output: output_format(args.json),
+            color: color_mode(args.no_color),
         }
     }
 }
@@ -258,6 +297,8 @@ impl Cli {
             None => Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                detail: Detail::Compact,
+                color: ColorMode::Auto,
             }),
             Some(Commands::Hunt(args)) => Command::Hunt(args.into()),
             Some(Commands::Watch(args)) => Command::Watch(args.into()),
@@ -276,6 +317,22 @@ const fn output_format(json: bool) -> OutputFormat {
         OutputFormat::Json
     } else {
         OutputFormat::Text
+    }
+}
+
+const fn detail(verbose: bool) -> Detail {
+    if verbose {
+        Detail::Verbose
+    } else {
+        Detail::Compact
+    }
+}
+
+const fn color_mode(no_color: bool) -> ColorMode {
+    if no_color {
+        ColorMode::Never
+    } else {
+        ColorMode::Auto
     }
 }
 
@@ -397,30 +454,39 @@ mod tests {
         parse(arguments).expect("parse should succeed")
     }
 
+    const COMPACT_DEFAULTS: (Detail, ColorMode) = (Detail::Compact, ColorMode::Auto);
+
     #[test]
     fn no_arguments_defaults_to_hunt() {
+        let (detail, color) = COMPACT_DEFAULTS;
         assert_eq!(
             expect_parse(["stallhunt"]),
             Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                detail,
+                color,
             })
         );
     }
 
     #[test]
     fn hunt_uses_documented_defaults() {
+        let (detail, color) = COMPACT_DEFAULTS;
         assert_eq!(
             expect_parse(["stallhunt", "hunt"]),
             Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                detail,
+                color,
             })
         );
     }
 
     #[test]
     fn hunt_accepts_supported_duration_units_and_json() {
+        let (detail, color) = COMPACT_DEFAULTS;
         for (value, expected_ms) in [
             ("500ms", 500),
             ("2s", 2_000),
@@ -432,6 +498,8 @@ mod tests {
                 Command::Hunt(HuntOptions {
                     duration_ms: expected_ms,
                     output: OutputFormat::Json,
+                    detail,
+                    color,
                 })
             );
         }
@@ -439,13 +507,31 @@ mod tests {
 
     #[test]
     fn hunt_accepts_duration_equals_syntax() {
+        let (detail, color) = COMPACT_DEFAULTS;
         assert_eq!(
             expect_parse(["stallhunt", "hunt", "--duration=750ms"]),
             Command::Hunt(HuntOptions {
                 duration_ms: 750,
                 output: OutputFormat::Text,
+                detail,
+                color,
             })
         );
+    }
+
+    #[test]
+    fn hunt_verbose_and_no_color_are_opt_in() {
+        assert_eq!(
+            expect_parse(["stallhunt", "hunt", "--verbose", "--no-color"]),
+            Command::Hunt(HuntOptions {
+                duration_ms: DEFAULT_HUNT_DURATION_MS,
+                output: OutputFormat::Text,
+                detail: Detail::Verbose,
+                color: ColorMode::Never,
+            })
+        );
+        assert!(parse(["stallhunt", "hunt", "--verbose", "--verbose"]).is_err());
+        assert!(parse(["stallhunt", "hunt", "--no-color", "--no-color"]).is_err());
     }
 
     #[test]
@@ -490,7 +576,7 @@ mod tests {
     #[test]
     fn unknown_commands_and_options_are_errors() {
         assert!(parse(["stallhunt", "explain"]).is_err());
-        assert!(parse(["stallhunt", "hunt", "--verbose"]).is_err());
+        assert!(parse(["stallhunt", "hunt", "--quiet"]).is_err());
         assert!(parse(["stallhunt", "capabilities", "extra"]).is_err());
     }
 
@@ -502,6 +588,7 @@ mod tests {
                 interval_ms: DEFAULT_WATCH_INTERVAL_MS,
                 count: None,
                 output: OutputFormat::Text,
+                color: ColorMode::Auto,
             })
         );
         assert_eq!(
@@ -511,12 +598,14 @@ mod tests {
                 "--json",
                 "--interval",
                 "1s",
-                "--count=3"
+                "--count=3",
+                "--no-color"
             ]),
             Command::Watch(WatchOptions {
                 interval_ms: 1_000,
                 count: Some(3),
                 output: OutputFormat::Json,
+                color: ColorMode::Never,
             })
         );
         assert!(parse(["stallhunt", "watch", "--count", "0"]).is_err());
@@ -553,6 +642,23 @@ mod tests {
             Command::Replay(ReplayOptions {
                 input: PathBuf::from("incident.json"),
                 output: OutputFormat::Json,
+                detail: Detail::Compact,
+                color: ColorMode::Auto,
+            })
+        );
+        assert_eq!(
+            expect_parse([
+                "stallhunt",
+                "replay",
+                "--verbose",
+                "--no-color",
+                "incident.json"
+            ]),
+            Command::Replay(ReplayOptions {
+                input: PathBuf::from("incident.json"),
+                output: OutputFormat::Text,
+                detail: Detail::Verbose,
+                color: ColorMode::Never,
             })
         );
         assert_eq!(

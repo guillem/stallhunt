@@ -96,10 +96,19 @@ Avoid brittle tests for every whitespace character unless formatting is intentio
 
 JSON output can be validated structurally.
 
-M1.6 adds a checked-in concise CPU renderer text fixture driven by a fixed
-in-memory observation. It verifies the finding-first layout, bounded ranked
-roles, same-window/non-causal language, context/limitation wording, timing,
-and terminal-safe process names. Renderer tests also assert JSON finding shape structurally, without
+M1.6 adds a checked-in CPU renderer text fixture driven by a fixed in-memory
+observation. It verifies the finding-first layout, bounded ranked roles,
+same-window/non-causal language, context/limitation wording, timing, and
+terminal-safe process names. M9 adds golden fixtures for the compact default
+renderer (healthy and pressured scenarios) and the width-80 watch dashboard,
+a test that stripping SGR sequences from colored dashboard output reproduces
+the colorless dashboard byte for byte, and unit coverage for the color
+policy (`--no-color`, `NO_COLOR`, terminal detection) and visible-width
+span/bar layout in `src/ui.rs`. Renderer goldens are refreshed deliberately
+via `STALLHUNT_UPDATE_FIXTURES=1 cargo test` after inspecting the diff. The
+compact and dashboard goldens embed the tool version in their headers, so a
+version bump requires one such deliberate refresh.
+Renderer tests also assert JSON finding shape structurally, without
 comparing host-collected or wall-clock-dependent output.
 
 ### 5. Host integration tests
@@ -299,6 +308,11 @@ tests/
       busy_but_not_pressured.json
     render/
       cpu-contention.txt
+      evidence-chain.txt
+      evidence-chain-cgroup.txt
+      hunt-compact-healthy.txt
+      hunt-compact-contention.txt
+      watch-dashboard.txt
       watch-lifecycle.txt
     proc-loadavg-valid
     proc-pid-stat-unusual-name

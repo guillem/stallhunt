@@ -10,7 +10,9 @@ use crate::cgroup::{
     CgroupCapability, CgroupObservation, cgroup_capability_explanation,
     cgroup_capability_from_observation,
 };
-use crate::cli::{CapabilitiesOptions, HuntOptions, OutputFormat, RedactOptions, ReplayOptions};
+use crate::cli::{
+    CapabilitiesOptions, Detail, HuntOptions, OutputFormat, RedactOptions, ReplayOptions,
+};
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
 use crate::io::{DiskstatsError, IoCapabilities, IoCapability, ProcessIoObservation};
 use crate::memory::{
@@ -23,6 +25,7 @@ use crate::psi::{
     CpuPsiCapability, CpuPsiObservation, IoPsiCapability, IoPsiFullInterval, IoPsiObservation,
     MemoryPsiCapability, MemoryPsiFullInterval, MemoryPsiObservation,
 };
+use crate::ui::{self, ColorUse, StatusWord, Style};
 
 pub fn version() -> String {
     format!("stallhunt {}\n", env!("CARGO_PKG_VERSION"))
@@ -54,6 +57,8 @@ pub fn replay(
         &HuntOptions {
             duration_ms: recording.requested_duration_ms,
             output: options.output,
+            detail: options.detail,
+            color: options.color,
         },
         |_| observation,
     )
@@ -70,7 +75,13 @@ where
 {
     let result = observe(Duration::from_millis(options.duration_ms));
     match options.output {
-        OutputFormat::Text => Ok(hunt_text(options, result)),
+        OutputFormat::Text => {
+            let color = ColorUse::resolve_stdout(options.color);
+            Ok(match options.detail {
+                Detail::Compact => hunt_text_compact(options, result, color),
+                Detail::Verbose => hunt_text(options, result),
+            })
+        }
         OutputFormat::Json => hunt_json(options, result),
     }
 }
@@ -200,6 +211,872 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
         text.push_str(&chain_text);
     }
     text
+}
+
+// Compact renderer -----------------------------------------------------------
+//
+// The compact renderer is verdict-first: a one-line verdict, a per-resource
+// status table carrying the deciding PSI evidence, short candidate lists for
+// pressured resources, and a pointer to `--verbose`/`--json` for the full
+// explanation. It re-formats the same analyzer findings as the verbose
+// renderer; it never recomputes a diagnosis and drops only prose, never an
+// evidence class.
+
+#[derive(Debug, Clone)]
+struct CompactCpu {
+    finding: Option<crate::analysis::CpuFinding>,
+    psi_capability: Option<&'static str>,
+}
+
+#[derive(Debug, Clone)]
+struct CompactMemory {
+    finding: Option<crate::analysis::MemoryFinding>,
+    psi_capability: Option<&'static str>,
+}
+
+#[derive(Debug, Clone)]
+struct CompactIo {
+    finding: Option<crate::analysis::IoFinding>,
+    psi_capability: Option<&'static str>,
+}
+
+fn compact_analyses(
+    result: &HuntObservation,
+) -> (CompactCpu, Option<CompactMemory>, Option<CompactIo>) {
+    let cpu = match result.psi {
+        Ok(ref psi) => CompactCpu {
+            finding: analysis::analyze_cpu(Some(psi), result.cpu.as_ref().ok())
+                .findings
+                .into_iter()
+                .next(),
+            psi_capability: None,
+        },
+        Err(ref error) => CompactCpu {
+            finding: None,
+            psi_capability: Some(error.capability().as_str()),
+        },
+    };
+    let memory = result.memory.as_ref().map(|memory| match memory.psi {
+        Ok(ref psi) => CompactMemory {
+            finding: analysis::analyze_memory(Some(psi), memory.context.as_ref().ok())
+                .findings
+                .into_iter()
+                .next(),
+            psi_capability: None,
+        },
+        Err(ref error) => CompactMemory {
+            finding: None,
+            psi_capability: Some(error.capability().as_str()),
+        },
+    });
+    let io = result.io.as_ref().map(|io| match io.psi {
+        Ok(ref psi) => CompactIo {
+            finding: analysis::analyze_io(
+                Some(psi),
+                io.diskstats.as_ref().ok(),
+                io.processes.as_ref().ok(),
+            )
+            .findings
+            .into_iter()
+            .next(),
+            psi_capability: None,
+        },
+        Err(ref error) => CompactIo {
+            finding: None,
+            psi_capability: Some(error.capability().as_str()),
+        },
+    });
+    (cpu, memory, io)
+}
+
+fn hunt_text_compact(options: &HuntOptions, result: HuntObservation, color: ColorUse) -> String {
+    let (cpu, memory, io) = compact_analyses(&result);
+
+    let mut output = String::new();
+    output.push_str(&ui::paint(
+        &format!(
+            "stallhunt {} · observed {}",
+            env!("CARGO_PKG_VERSION"),
+            human_duration(options.duration_ms)
+        ),
+        Style::Dim,
+        color,
+    ));
+    output.push('\n');
+    output.push_str(&compact_verdict_line(
+        &cpu,
+        memory.as_ref(),
+        io.as_ref(),
+        color,
+    ));
+    output.push('\n');
+    output.push_str(&compact_resource_table(
+        &cpu,
+        memory.as_ref(),
+        io.as_ref(),
+        color,
+    ));
+    output.push('\n');
+
+    for block in compact_pressure_blocks(&cpu, memory.as_ref(), io.as_ref(), color) {
+        output.push_str(&block);
+        output.push('\n');
+    }
+    let cgroup_section = compact_cgroup_section(result.cgroup.as_ref(), color);
+    if !cgroup_section.is_empty() {
+        output.push_str(&cgroup_section);
+        output.push('\n');
+    }
+    let chain_section = compact_chain_section(&result);
+    if !chain_section.is_empty() {
+        output.push_str(&chain_section);
+        output.push('\n');
+    }
+    let timing_line = compact_timing_line(&result, color);
+    if !timing_line.is_empty() {
+        output.push_str(&timing_line);
+    }
+    output.push_str(&ui::paint(
+        "Use --verbose for full evidence, qualifiers, and timings · --json for machine-readable output",
+        Style::Dim,
+        color,
+    ));
+    output.push('\n');
+    output
+}
+
+/// One pressured finding headline: `<name> · <severity> · confidence <c>`.
+fn compact_finding_header(
+    name: &str,
+    severity: crate::analysis::Severity,
+    confidence: crate::analysis::Confidence,
+    color: ColorUse,
+) -> String {
+    format!(
+        "{} · {} · confidence {}",
+        name,
+        paint_severity(severity, color),
+        confidence_name(confidence)
+    )
+}
+
+fn paint_severity(severity: crate::analysis::Severity, color: ColorUse) -> String {
+    ui::paint(severity_name(severity), ui::severity_style(severity), color)
+}
+
+const fn compact_cpu_name(kind: crate::analysis::AssessmentKind) -> &'static str {
+    match kind {
+        crate::analysis::AssessmentKind::CpuContention => "CPU scheduling contention",
+        crate::analysis::AssessmentKind::CpuNoMeaningfulContention => "no CPU contention",
+        crate::analysis::AssessmentKind::InsufficientObservation => "CPU observation too short",
+    }
+}
+
+const fn compact_memory_name(kind: crate::analysis::MemoryAssessmentKind) -> &'static str {
+    match kind {
+        crate::analysis::MemoryAssessmentKind::NoHarmfulPressure => "no harmful memory pressure",
+        crate::analysis::MemoryAssessmentKind::Pressure => "Memory pressure",
+        crate::analysis::MemoryAssessmentKind::ReclaimPressure => "Memory reclaim pressure",
+        crate::analysis::MemoryAssessmentKind::SwapPressure => "Memory swap pressure",
+        crate::analysis::MemoryAssessmentKind::PossibleThrashing => "Possible memory thrashing",
+        crate::analysis::MemoryAssessmentKind::InsufficientObservation => {
+            "memory observation too short"
+        }
+    }
+}
+
+const fn compact_memory_is_pressure(kind: crate::analysis::MemoryAssessmentKind) -> bool {
+    matches!(
+        kind,
+        crate::analysis::MemoryAssessmentKind::Pressure
+            | crate::analysis::MemoryAssessmentKind::ReclaimPressure
+            | crate::analysis::MemoryAssessmentKind::SwapPressure
+            | crate::analysis::MemoryAssessmentKind::PossibleThrashing
+    )
+}
+
+struct VerdictCandidate {
+    severity_rank: u8,
+    confidence_rank: u8,
+    resource_rank: u8,
+    name: &'static str,
+    severity: crate::analysis::Severity,
+    confidence: crate::analysis::Confidence,
+}
+
+fn compact_verdict_line(
+    cpu: &CompactCpu,
+    memory: Option<&CompactMemory>,
+    io: Option<&CompactIo>,
+    color: ColorUse,
+) -> String {
+    let mut candidates: Vec<VerdictCandidate> = Vec::new();
+    let mut any_insufficient = false;
+    let mut available = 0_u32;
+
+    if let Some(finding) = cpu.finding.as_ref() {
+        available += 1;
+        if finding.kind == crate::analysis::AssessmentKind::CpuContention {
+            candidates.push(compact_candidate(
+                0,
+                compact_cpu_name(finding.kind),
+                finding.severity,
+                finding.resource_confidence,
+            ));
+        } else if finding.kind == crate::analysis::AssessmentKind::InsufficientObservation {
+            any_insufficient = true;
+        }
+    }
+    if let Some(finding) = memory.and_then(|memory| memory.finding.as_ref()) {
+        available += 1;
+        if compact_memory_is_pressure(finding.kind) {
+            candidates.push(compact_candidate(
+                1,
+                compact_memory_name(finding.kind),
+                finding.severity,
+                finding.resource_confidence,
+            ));
+        } else if finding.kind == crate::analysis::MemoryAssessmentKind::InsufficientObservation {
+            any_insufficient = true;
+        }
+    }
+    if let Some(finding) = io.and_then(|io| io.finding.as_ref()) {
+        available += 1;
+        if finding.kind == crate::analysis::IoAssessmentKind::Pressure {
+            candidates.push(compact_candidate(
+                2,
+                "Block-I/O pressure",
+                finding.severity,
+                finding.resource_confidence,
+            ));
+        } else if finding.kind == crate::analysis::IoAssessmentKind::InsufficientObservation {
+            any_insufficient = true;
+        }
+    }
+
+    let headline = if let Some(top) = candidates.iter().max_by(|left, right| {
+        left.severity_rank
+            .cmp(&right.severity_rank)
+            .then_with(|| left.confidence_rank.cmp(&right.confidence_rank))
+            .then_with(|| right.resource_rank.cmp(&left.resource_rank))
+    }) {
+        format!(
+            "{} — {} (confidence {})",
+            top.name,
+            paint_severity(top.severity, color),
+            confidence_name(top.confidence)
+        )
+    } else if any_insufficient {
+        "inconclusive — observation window shorter than 1s".to_owned()
+    } else if available == 0 {
+        "no diagnosis — telemetry unavailable".to_owned()
+    } else if cpu.psi_capability.is_some()
+        || memory.is_some_and(|memory| memory.psi_capability.is_some())
+        || io.is_some_and(|io| io.psi_capability.is_some())
+    {
+        "no meaningful contention detected · some telemetry unavailable".to_owned()
+    } else {
+        "no meaningful contention detected".to_owned()
+    };
+    format!("Verdict: {headline}")
+}
+
+fn compact_candidate(
+    resource_rank: u8,
+    name: &'static str,
+    severity: crate::analysis::Severity,
+    confidence: crate::analysis::Confidence,
+) -> VerdictCandidate {
+    let (severity_rank, confidence_rank) = text_finding_rank(severity, confidence);
+    VerdictCandidate {
+        severity_rank,
+        confidence_rank,
+        resource_rank,
+        name,
+        severity,
+        confidence,
+    }
+}
+
+enum CompactStatus {
+    Pressure(crate::analysis::Severity),
+    Ok,
+    ShortWindow,
+    Unavailable,
+}
+
+impl CompactStatus {
+    fn word_width(&self) -> usize {
+        match self {
+            Self::Pressure(_) => "pressure".len(),
+            Self::Ok => StatusWord::Ok.label().len(),
+            Self::ShortWindow => "short window".len(),
+            Self::Unavailable => StatusWord::Unavailable.label().len(),
+        }
+    }
+
+    fn paint(&self, color: ColorUse) -> String {
+        match self {
+            Self::Pressure(severity) => ui::paint("pressure", ui::severity_style(*severity), color),
+            Self::Ok => ui::paint(
+                StatusWord::Ok.label(),
+                ui::status_style(StatusWord::Ok),
+                color,
+            ),
+            Self::ShortWindow => ui::paint(
+                "short window",
+                ui::status_style(StatusWord::Unconfirmed),
+                color,
+            ),
+            Self::Unavailable => ui::paint(
+                StatusWord::Unavailable.label(),
+                ui::status_style(StatusWord::Unavailable),
+                color,
+            ),
+        }
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn compact_resource_table(
+    cpu: &CompactCpu,
+    memory: Option<&CompactMemory>,
+    io: Option<&CompactIo>,
+    color: ColorUse,
+) -> String {
+    // (label, status, severity, detail)
+    let mut rows: Vec<(
+        String,
+        CompactStatus,
+        Option<crate::analysis::Severity>,
+        String,
+    )> = Vec::new();
+    if let Some(finding) = cpu.finding.as_ref() {
+        rows.push(compact_cpu_row(finding, color));
+    } else {
+        rows.push(compact_unavailable_row(
+            "CPU",
+            cpu.psi_capability.unwrap_or("failed"),
+            color,
+        ));
+    }
+    if let Some(memory) = memory {
+        if let Some(finding) = memory.finding.as_ref() {
+            rows.push(compact_memory_row(finding, color));
+        } else {
+            rows.push(compact_unavailable_row(
+                "Memory",
+                memory.psi_capability.unwrap_or("failed"),
+                color,
+            ));
+        }
+    }
+    if let Some(io) = io {
+        if let Some(finding) = io.finding.as_ref() {
+            rows.push(compact_io_row(finding, color));
+        } else {
+            rows.push(compact_unavailable_row(
+                "I/O",
+                io.psi_capability.unwrap_or("failed"),
+                color,
+            ));
+        }
+    }
+    let status_width = rows
+        .iter()
+        .map(|(_, status, _, _)| status.word_width())
+        .max()
+        .unwrap_or(0)
+        + 1;
+    let severity_width = "moderate".len() + 1;
+    let mut output = String::new();
+    for (label, status, severity, detail) in rows {
+        let severity_text = severity.map(|severity| paint_severity(severity, color));
+        output.push_str(&format!(
+            "  {:<8} {:<status_width$} {:<severity_width$} {}\n",
+            label,
+            status.paint(color),
+            severity_text.unwrap_or_default(),
+            detail,
+        ));
+    }
+    output
+}
+
+#[allow(clippy::type_complexity)]
+fn compact_unavailable_row(
+    label: &str,
+    capability: &'static str,
+    color: ColorUse,
+) -> (
+    String,
+    CompactStatus,
+    Option<crate::analysis::Severity>,
+    String,
+) {
+    (
+        label.to_owned(),
+        CompactStatus::Unavailable,
+        None,
+        ui::paint(&format!("(PSI {capability})"), Style::Dim, color),
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn compact_cpu_row(
+    finding: &crate::analysis::CpuFinding,
+    color: ColorUse,
+) -> (
+    String,
+    CompactStatus,
+    Option<crate::analysis::Severity>,
+    String,
+) {
+    let is_pressure = finding.kind == crate::analysis::AssessmentKind::CpuContention;
+    (
+        "CPU".to_owned(),
+        compact_status_for(
+            is_pressure,
+            finding.kind == crate::analysis::AssessmentKind::InsufficientObservation,
+            finding.severity,
+        ),
+        pressure_severity(is_pressure, finding.severity),
+        compact_psi_detail(
+            finding.evidence.psi_some_fraction,
+            finding.evidence.psi_total_delta_us,
+            finding.evidence.psi_window_us,
+            color,
+        ),
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn compact_memory_row(
+    finding: &crate::analysis::MemoryFinding,
+    color: ColorUse,
+) -> (
+    String,
+    CompactStatus,
+    Option<crate::analysis::Severity>,
+    String,
+) {
+    let is_pressure = compact_memory_is_pressure(finding.kind);
+    let mut detail = compact_psi_detail(
+        finding.evidence.psi_some_fraction,
+        finding.evidence.psi_some_total_delta_us,
+        finding.evidence.psi_window_us,
+        color,
+    );
+    if let Some(occupancy) = finding.evidence.memory_occupancy_fraction {
+        detail.push_str(&format!(" · {:.0}% used", occupancy * 100.0));
+    }
+    if let Some(swap) = finding.evidence.swap_used_bytes.filter(|swap| *swap > 0) {
+        detail.push_str(&format!(" · {} swap used", human_bytes(swap)));
+    }
+    (
+        "Memory".to_owned(),
+        compact_status_for(
+            is_pressure,
+            finding.kind == crate::analysis::MemoryAssessmentKind::InsufficientObservation,
+            finding.severity,
+        ),
+        pressure_severity(is_pressure, finding.severity),
+        detail,
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn compact_io_row(
+    finding: &crate::analysis::IoFinding,
+    color: ColorUse,
+) -> (
+    String,
+    CompactStatus,
+    Option<crate::analysis::Severity>,
+    String,
+) {
+    let is_pressure = finding.kind == crate::analysis::IoAssessmentKind::Pressure;
+    (
+        "I/O".to_owned(),
+        compact_status_for(
+            is_pressure,
+            finding.kind == crate::analysis::IoAssessmentKind::InsufficientObservation,
+            finding.severity,
+        ),
+        pressure_severity(is_pressure, finding.severity),
+        compact_psi_detail(
+            finding.evidence.psi_some_fraction,
+            finding.evidence.psi_some_total_delta_us,
+            finding.evidence.psi_window_us,
+            color,
+        ),
+    )
+}
+
+fn compact_status_for(
+    is_pressure: bool,
+    is_insufficient: bool,
+    severity: crate::analysis::Severity,
+) -> CompactStatus {
+    if is_pressure {
+        CompactStatus::Pressure(severity)
+    } else if is_insufficient {
+        CompactStatus::ShortWindow
+    } else {
+        CompactStatus::Ok
+    }
+}
+
+const fn pressure_severity(
+    is_pressure: bool,
+    severity: crate::analysis::Severity,
+) -> Option<crate::analysis::Severity> {
+    if is_pressure { Some(severity) } else { None }
+}
+
+fn compact_psi_detail(
+    some_fraction: f64,
+    total_delta_us: u64,
+    window_us: u128,
+    color: ColorUse,
+) -> String {
+    let stalled = ui::paint(
+        &human_duration_from_duration(Duration::from_micros(total_delta_us)),
+        Style::Dim,
+        color,
+    );
+    format!(
+        "PSI some {:.2}% · {} stalled / {}",
+        some_fraction * 100.0,
+        stalled,
+        human_duration_from_duration(Duration::from_micros(
+            u64::try_from(window_us).unwrap_or(u64::MAX)
+        ))
+    )
+}
+
+fn compact_pressure_blocks(
+    cpu: &CompactCpu,
+    memory: Option<&CompactMemory>,
+    io: Option<&CompactIo>,
+    color: ColorUse,
+) -> Vec<String> {
+    let mut blocks = Vec::new();
+    if let Some(finding) = cpu.finding.as_ref() {
+        if finding.kind == crate::analysis::AssessmentKind::CpuContention {
+            blocks.push(compact_cpu_block(finding, color));
+        }
+    }
+    if let Some(finding) = memory.and_then(|memory| memory.finding.as_ref()) {
+        if compact_memory_is_pressure(finding.kind) {
+            blocks.push(compact_memory_block(finding, color));
+        }
+    }
+    if let Some(finding) = io.and_then(|io| io.finding.as_ref()) {
+        if finding.kind == crate::analysis::IoAssessmentKind::Pressure {
+            blocks.push(compact_io_block(finding, color));
+        }
+    }
+    blocks
+}
+
+/// Pad `name [pid]` columns so compact candidate lists align.
+fn aligned_candidates(entries: &[(String, String)]) -> String {
+    let width = entries
+        .iter()
+        .map(|(name, _)| name.chars().count())
+        .max()
+        .unwrap_or(0);
+    entries
+        .iter()
+        .map(|(name, value)| format!("    {:<width$}  {}\n", name, value, width = width))
+        .collect()
+}
+
+fn compact_cpu_block(finding: &crate::analysis::CpuFinding, color: ColorUse) -> String {
+    let mut output = compact_finding_header(
+        compact_cpu_name(finding.kind),
+        finding.severity,
+        finding.resource_confidence,
+        color,
+    );
+    output.push('\n');
+    if !finding.victims.is_empty() {
+        output.push_str("  Victims — observed runnable delay, not confirmed harm:\n");
+        let victims: Vec<_> = finding
+            .victims
+            .iter()
+            .take(3)
+            .map(|victim| {
+                (
+                    format!("{} [{}]", terminal_name(&victim.name), victim.key.pid),
+                    format!(
+                        "{} delayed",
+                        human_duration_from_duration(Duration::from_nanos(victim.runnable_wait_ns))
+                    ),
+                )
+            })
+            .collect();
+        output.push_str(&aligned_candidates(&victims));
+    }
+    if !finding.suspects.is_empty() {
+        output.push_str("  Suspects — same window only, not proven causal:\n");
+        let suspects: Vec<_> = finding
+            .suspects
+            .iter()
+            .take(3)
+            .map(|suspect| {
+                (
+                    format!("{} [{}]", terminal_name(&suspect.name), suspect.key.pid),
+                    format!("{:.1}% of one CPU", suspect.cpu_fraction_of_one * 100.0),
+                )
+            })
+            .collect();
+        output.push_str(&aligned_candidates(&suspects));
+    }
+    output
+}
+
+fn compact_memory_block(finding: &crate::analysis::MemoryFinding, color: ColorUse) -> String {
+    let mut detail = format!(
+        "PSI some {:.2}% over {}",
+        finding.evidence.psi_some_fraction * 100.0,
+        human_duration_from_duration(Duration::from_micros(finding.evidence.psi_window_us as u64))
+    );
+    if let Some(full) = finding.evidence.psi_full_fraction {
+        detail.push_str(&format!(" · full {:.2}% (all tasks stalled)", full * 100.0));
+    }
+    if let Some(occupancy) = finding.evidence.memory_occupancy_fraction {
+        detail.push_str(&format!(" · {:.0}% used", occupancy * 100.0));
+    }
+    if let Some(confidence) = finding.mechanism_confidence {
+        detail.push_str(&format!(
+            " · mechanism confidence {}",
+            confidence_name(confidence)
+        ));
+    }
+    format!(
+        "{}\n  {}\n",
+        compact_finding_header(
+            compact_memory_name(finding.kind),
+            finding.severity,
+            finding.resource_confidence,
+            color,
+        ),
+        detail
+    )
+}
+
+fn compact_io_block(finding: &crate::analysis::IoFinding, color: ColorUse) -> String {
+    let mut output = compact_finding_header(
+        "Block-I/O pressure",
+        finding.severity,
+        finding.resource_confidence,
+        color,
+    );
+    output.push('\n');
+    if !finding.device_candidates.is_empty() {
+        output.push_str("  Devices — same-window activity, not mapped to victims:\n");
+        let devices: Vec<_> = finding
+            .device_candidates
+            .iter()
+            .take(3)
+            .map(|device| {
+                let mut value = String::new();
+                if let Some(busy) = device.io_ticks_ms {
+                    value.push_str(&format!(
+                        "{} busy",
+                        human_duration_from_duration(Duration::from_millis(busy))
+                    ));
+                }
+                if let Some(read) = device.read_sectors_512 {
+                    let separator = if value.is_empty() { "" } else { " · " };
+                    value.push_str(&format!("{}{} read", separator, human_bytes(read * 512)));
+                }
+                if let Some(write) = device.write_sectors_512 {
+                    value.push_str(&format!(" · {} written", human_bytes(write * 512)));
+                }
+                (terminal_name(&device.name), value)
+            })
+            .collect();
+        output.push_str(&aligned_candidates(&devices));
+    }
+    if !finding.process_suspects.is_empty() {
+        output.push_str("  Processes — same-window accounting, not proven causes:\n");
+        let processes: Vec<_> = finding
+            .process_suspects
+            .iter()
+            .take(3)
+            .map(|suspect| {
+                let mut value = String::new();
+                if let Some(read) = suspect.read_bytes {
+                    value.push_str(&format!("{} read", human_bytes(read)));
+                }
+                if let Some(write) = suspect.write_bytes {
+                    let separator = if value.is_empty() { "" } else { " · " };
+                    value.push_str(&format!(
+                        "{}{} charged write",
+                        separator,
+                        human_bytes(write)
+                    ));
+                }
+                (
+                    format!("{} [{}]", terminal_name(&suspect.name), suspect.key.pid),
+                    value,
+                )
+            })
+            .collect();
+        output.push_str(&aligned_candidates(&processes));
+    }
+    output
+}
+
+fn compact_cgroup_section(cgroup: Option<&CgroupHuntObservation>, color: ColorUse) -> String {
+    let Some(cgroup) = cgroup else {
+        return String::new();
+    };
+    let Ok(observation) = &cgroup.observation else {
+        // Unavailability stays visible in compact mode too; the per-resource
+        // PSI rows above only cover host resources.
+        let capability = match &cgroup.observation {
+            Err(crate::cgroup::CgroupError::Unsupported) => "unsupported",
+            Err(crate::cgroup::CgroupError::PermissionDenied) => "permission_denied",
+            Err(_) => "failed",
+            Ok(_) => unreachable!("guarded by the Ok arm"),
+        };
+        return format!(
+            "{}\n",
+            ui::paint(
+                &format!("Scoped cgroups: unavailable ({capability})"),
+                Style::Dim,
+                color,
+            )
+        );
+    };
+    let pressured: Vec<_> = analysis::analyze_cgroups(Some(observation))
+        .findings
+        .into_iter()
+        .filter(|finding| finding.kind == crate::analysis::CgroupAssessmentKind::Pressure)
+        .collect();
+    if pressured.is_empty() {
+        return format!(
+            "{}\n",
+            ui::paint(
+                "Scoped cgroups: no pressure in the bounded selection",
+                Style::Dim,
+                color,
+            )
+        );
+    }
+    let shown = pressured.len().min(3);
+    let mut output = String::from("Scoped cgroup pressure");
+    if pressured.len() > shown {
+        output.push_str(&format!(" · {} more", pressured.len() - shown));
+    }
+    output.push('\n');
+    for finding in pressured.iter().take(shown) {
+        let mut resource = cgroup_resource_label(finding.resource).to_owned();
+        if let Some(mechanism) = finding.mechanism {
+            resource.push_str(&format!(" ({})", cgroup_mechanism_label(mechanism)));
+        }
+        output.push_str(&format!(
+            "  {} · {} {} · PSI some {:.2}%\n",
+            finding.path,
+            resource,
+            paint_severity(finding.severity, color),
+            finding.evidence.psi_some_fraction.unwrap_or(0.0) * 100.0
+        ));
+    }
+    output
+}
+
+const fn cgroup_resource_label(resource: crate::analysis::CgroupResourceKind) -> &'static str {
+    match resource {
+        crate::analysis::CgroupResourceKind::Cpu => "cpu",
+        crate::analysis::CgroupResourceKind::Memory => "memory",
+        crate::analysis::CgroupResourceKind::Io => "io",
+    }
+}
+
+const fn cgroup_mechanism_label(mechanism: crate::analysis::CgroupMechanism) -> &'static str {
+    match mechanism {
+        crate::analysis::CgroupMechanism::Reclaim => "reclaim",
+        crate::analysis::CgroupMechanism::Swap => "swap",
+        crate::analysis::CgroupMechanism::PossibleThrashing => "possible thrashing",
+        crate::analysis::CgroupMechanism::CpuQuotaThrottle => "quota throttle",
+    }
+}
+
+fn compact_chain_section(result: &HuntObservation) -> String {
+    let chains = evidence_chains_from_observation(result);
+    if chains.is_empty() {
+        return String::new();
+    }
+    let mut output = String::from("Related evidence\n");
+    for chain in chains {
+        let summary = lowercase_first(trim_sentence(&chain.summary));
+        output.push_str(&format!(
+            "  {} (confidence {})\n",
+            summary,
+            confidence_name(chain.confidence)
+        ));
+    }
+    output
+}
+
+fn trim_sentence(sentence: &str) -> &str {
+    sentence.trim_end_matches('.')
+}
+
+fn lowercase_first(text: &str) -> String {
+    let mut characters = text.chars();
+    match characters.next() {
+        Some(first) => first.to_lowercase().collect::<String>() + characters.as_str(),
+        None => String::new(),
+    }
+}
+
+fn compact_timing_line(result: &HuntObservation, color: ColorUse) -> String {
+    let mut parts = Vec::new();
+    if let Ok(psi) = &result.psi {
+        parts.push(format!(
+            "PSI {}",
+            human_duration_from_duration(psi.interval.elapsed)
+        ));
+    }
+    if let Ok(cpu) = &result.cpu {
+        parts.push(format!(
+            "CPU/process {}",
+            human_duration_from_duration(cpu.elapsed)
+        ));
+    }
+    if let Some(memory) = &result.memory {
+        if let Ok(psi) = &memory.psi {
+            parts.push(format!(
+                "memory PSI {}",
+                human_duration_from_duration(psi.interval.elapsed)
+            ));
+        }
+    }
+    if let Some(io) = &result.io {
+        if let Ok(psi) = &io.psi {
+            parts.push(format!(
+                "I/O PSI {}",
+                human_duration_from_duration(psi.interval.elapsed)
+            ));
+        }
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(
+        "{}\n",
+        ui::paint(
+            &format!("measured: {}", parts.join(" · ")),
+            Style::Dim,
+            color
+        )
+    )
 }
 
 fn evidence_chain_hunt_text(result: &HuntObservation) -> Option<String> {
@@ -1783,12 +2660,53 @@ mod tests {
         CpuPsiInterval, CpuPsiRaw, IoPsiInterval, IoPsiLine, IoPsiLineInterval, IoPsiRaw,
         MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval, MemoryPsiRaw,
     };
+    use crate::ui::ColorMode;
 
     fn render_hunt<F>(options: &HuntOptions, observe: F) -> String
     where
         F: FnOnce(Duration) -> HuntObservation,
     {
         super::hunt(options, observe).expect("hunt render")
+    }
+
+    /// Verbose, colorless text options: the pre-redesign renderer retained by
+    /// `--verbose`.
+    fn hunt_text_options(duration_ms: u64) -> HuntOptions {
+        HuntOptions {
+            duration_ms,
+            output: OutputFormat::Text,
+            detail: crate::cli::Detail::Verbose,
+            color: ColorMode::Never,
+        }
+    }
+
+    fn hunt_json_options(duration_ms: u64) -> HuntOptions {
+        HuntOptions {
+            duration_ms,
+            output: OutputFormat::Json,
+            detail: crate::cli::Detail::Compact,
+            color: ColorMode::Never,
+        }
+    }
+
+    /// Compact, colorless text options: the new default human output.
+    fn hunt_compact_options(duration_ms: u64) -> HuntOptions {
+        HuntOptions {
+            duration_ms,
+            output: OutputFormat::Text,
+            detail: crate::cli::Detail::Compact,
+            color: ColorMode::Never,
+        }
+    }
+
+    /// Compact text options with forced color for escape-sequence tests.
+    fn hunt_compact_color_options(duration_ms: u64) -> HuntOptions {
+        HuntOptions {
+            duration_ms,
+            output: OutputFormat::Text,
+            detail: crate::cli::Detail::Compact,
+            color: ColorMode::Auto,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2076,13 +2994,7 @@ mod tests {
         let mut observation = hunt_observation();
         observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
         observation.cgroup = Some(scoped_cgroup_observation(true));
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| observation,
-        );
+        let text = render_hunt(&hunt_text_options(1_000), |_| observation);
         assert!(text.starts_with("Scoped cgroup findings"));
         assert!(text.contains("Scoped CPU quota-throttle pressure"));
         assert!(text.contains("mechanism confidence low"));
@@ -2091,14 +3003,8 @@ mod tests {
 
         let mut observation = hunt_observation();
         observation.cgroup = Some(scoped_cgroup_observation(true));
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
-            |_| observation,
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(1_000), |_| observation)).unwrap();
         assert_eq!(json["capabilities"]["cgroup_v2"]["state"], "partial");
         assert_eq!(json["status"], "incomplete");
         assert_eq!(
@@ -2116,13 +3022,7 @@ mod tests {
     fn io_renderer_keeps_psi_pressure_independent_of_context_and_never_claims_mapping() {
         let mut observation = hunt_observation();
         observation.io = Some(io_hunt_observation(0.08));
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| observation,
-        );
+        let text = render_hunt(&hunt_text_options(10_000), |_| observation);
         assert!(text.contains("Block-I/O pressure observed"));
         assert!(
             text.contains("Device activity candidates (same window only; not mapped to workloads)")
@@ -2132,13 +3032,7 @@ mod tests {
 
         let mut healthy = hunt_observation();
         healthy.io = Some(io_hunt_observation(0.005));
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| healthy,
-        );
+        let text = render_hunt(&hunt_text_options(10_000), |_| healthy);
         assert!(text.contains("No meaningful block-I/O pressure observed"));
         assert!(text.contains("activity counters do not override that verdict"));
         assert!(text.contains("not ranked without an I/O pressure finding"));
@@ -2151,14 +3045,9 @@ mod tests {
         io.diskstats = Err(DiskstatsError::Unreadable);
         io.processes = Err(DiskstatsError::PermissionDenied);
         observation.io = Some(io);
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| observation,
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| observation))
+                .unwrap();
         let finding = json["findings"]
             .as_array()
             .unwrap()
@@ -2173,13 +3062,7 @@ mod tests {
 
     #[test]
     fn hunt_renders_interval_pressure_with_a_diagnosis() {
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| hunt_observation(),
-        );
+        let output = render_hunt(&hunt_text_options(1_000), |_| hunt_observation());
         assert!(output.contains("CPU scheduling contention observed"));
         assert!(output.contains("Verdict: contention · severity high · CPU confidence medium"));
         assert!(output.contains("CPU PSI some 20.00% over exact 1.25s interval"));
@@ -2195,14 +3078,11 @@ mod tests {
 
     #[test]
     fn contention_json_is_typed_and_cpu_failure_retains_psi_finding() {
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
-            |_| hunt_observation(),
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(1_000), |_| {
+                hunt_observation()
+            }))
+            .unwrap();
         let finding = &json["findings"][0];
         assert_eq!(finding["kind"], "cpu_scheduling_contention");
         assert_eq!(finding["resource"], "cpu");
@@ -2214,38 +3094,29 @@ mod tests {
                 && finding["suspects"].is_array()
                 && finding["qualifiers"].is_array()
         );
-        let partial: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
-            |_| HuntObservation {
-                psi: Ok(observation()),
-                cpu: Err(crate::cpu::CpuError::Unreadable),
-                memory: None,
-                io: None,
-                cgroup: None,
-            },
-        ))
-        .unwrap();
+        let partial: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(1_000), |_| {
+                HuntObservation {
+                    psi: Ok(observation()),
+                    cpu: Err(crate::cpu::CpuError::Unreadable),
+                    memory: None,
+                    io: None,
+                    cgroup: None,
+                }
+            }))
+            .unwrap();
         assert_eq!(partial["status"], "incomplete");
         assert_eq!(partial["findings"][0]["kind"], "cpu_scheduling_contention");
         assert!(partial["findings"][0]["evidence"]["host_utilization_fraction"].is_null());
         assert!(partial["qualifiers"][0]["kind"].is_string());
 
-        let partial_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| HuntObservation {
-                psi: Ok(observation()),
-                cpu: Err(crate::cpu::CpuError::Unreadable),
-                memory: None,
-                io: None,
-                cgroup: None,
-            },
-        );
+        let partial_text = render_hunt(&hunt_text_options(1_000), |_| HuntObservation {
+            psi: Ok(observation()),
+            cpu: Err(crate::cpu::CpuError::Unreadable),
+            memory: None,
+            io: None,
+            cgroup: None,
+        });
         assert!(partial_text.contains("CPU interval context is unavailable"));
         assert!(partial_text.contains("CPU/process telemetry: unavailable"));
         assert!(partial_text.contains("Victim candidates: unavailable"));
@@ -2255,13 +3126,7 @@ mod tests {
 
     #[test]
     fn hunt_json_contains_typed_cpu_psi_evidence() {
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
-            |_| hunt_observation(),
-        );
+        let output = render_hunt(&hunt_json_options(1_000), |_| hunt_observation());
         let json: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(json["status"], "observed");
         assert_eq!(json["observation"]["cpu_psi"]["total_delta_us"], 250_000);
@@ -2275,13 +3140,7 @@ mod tests {
         cpu_psi.interval.some_fraction = 0.005;
         cpu_psi.interval.total_delta_us = 50_000;
         observation.memory = Some(memory_hunt_observation(0.08, Some(0.01), true));
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| observation,
-        );
+        let text = render_hunt(&hunt_text_options(10_000), |_| observation);
         assert!(
             text.starts_with("Memory pressure observed with correlated direct reclaim activity")
         );
@@ -2294,14 +3153,9 @@ mod tests {
         cpu_psi.interval.some_fraction = 0.005;
         cpu_psi.interval.total_delta_us = 50_000;
         observation.memory = Some(memory_hunt_observation(0.08, Some(0.01), true));
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| observation,
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| observation))
+                .unwrap();
         assert_eq!(json["findings"][0]["resource"], "memory");
         assert_eq!(json["findings"][0]["kind"], "memory_reclaim_pressure");
         assert_eq!(json["observation"]["memory_psi"]["full_state"], "available");
@@ -2313,14 +3167,8 @@ mod tests {
     fn memory_partial_and_missing_telemetry_never_create_a_false_negative() {
         let mut partial = hunt_observation();
         partial.memory = Some(memory_hunt_observation(0.08, None, false));
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| partial,
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| partial)).unwrap();
         let memory_finding = json["findings"]
             .as_array()
             .unwrap()
@@ -2336,14 +3184,8 @@ mod tests {
             psi: Err(crate::psi::MemoryPsiError::PermissionDenied),
             context: memory_hunt_observation(0.0, Some(0.0), true).context,
         });
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| missing,
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| missing)).unwrap();
         assert!(
             json["findings"]
                 .as_array()
@@ -2374,13 +3216,9 @@ mod tests {
 
     #[test]
     fn evidence_chain_is_rendered_only_when_independent_mechanism_supports_it() {
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| chain_hunt_observation(true, true),
-        );
+        let text = render_hunt(&hunt_text_options(10_000), |_| {
+            chain_hunt_observation(true, true)
+        });
         let related = text
             .split_once("Related evidence\n")
             .map(|(prefix, related)| {
@@ -2403,14 +3241,11 @@ mod tests {
         );
         assert!(related.contains("does not prove"));
 
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| chain_hunt_observation(true, true),
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| {
+                chain_hunt_observation(true, true)
+            }))
+            .unwrap();
         let chain = &json["evidence_chains"][0];
         assert_eq!(chain["kind"], "memory_mechanism_consistent_with_io");
         assert_eq!(chain["relation"], "consistent_with");
@@ -2428,44 +3263,31 @@ mod tests {
                 .any(|qualifier| qualifier["kind"] == "chain_not_causal")
         );
 
-        let coincident: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| chain_hunt_observation(false, true),
-        ))
-        .unwrap();
+        let coincident: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| {
+                chain_hunt_observation(false, true)
+            }))
+            .unwrap();
         assert_eq!(coincident["evidence_chains"].as_array().unwrap().len(), 0);
         assert!(
-            !render_hunt(
-                &HuntOptions {
-                    duration_ms: 10_000,
-                    output: OutputFormat::Text,
-                },
-                |_| chain_hunt_observation(false, true),
-            )
+            !render_hunt(&hunt_text_options(10_000), |_| chain_hunt_observation(
+                false, true
+            ),)
             .contains("Related evidence")
         );
 
-        let io_healthy: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| chain_hunt_observation(true, false),
-        ))
-        .unwrap();
+        let io_healthy: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| {
+                chain_hunt_observation(true, false)
+            }))
+            .unwrap();
         assert_eq!(io_healthy["evidence_chains"].as_array().unwrap().len(), 0);
 
-        let cpu_only: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
-            |_| hunt_observation(),
-        ))
-        .unwrap();
+        let cpu_only: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(1_000), |_| {
+                hunt_observation()
+            }))
+            .unwrap();
         assert_eq!(cpu_only["evidence_chains"].as_array().unwrap().len(), 0);
     }
 
@@ -2540,13 +3362,9 @@ mod tests {
 
     #[test]
     fn same_cgroup_evidence_chain_is_rendered_without_host_linking() {
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| cgroup_chain_hunt_observation(),
-        );
+        let text = render_hunt(&hunt_text_options(10_000), |_| {
+            cgroup_chain_hunt_observation()
+        });
         let related = text
             .split_once("Related evidence\n")
             .map(|(_, related)| format!("Related evidence\n{related}"))
@@ -2564,14 +3382,11 @@ mod tests {
                 .contains("cause")
         );
 
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| cgroup_chain_hunt_observation(),
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| {
+                cgroup_chain_hunt_observation()
+            }))
+            .unwrap();
         let chains = json["evidence_chains"].as_array().unwrap();
         assert_eq!(chains.len(), 1);
         let chain = &chains[0];
@@ -2595,14 +3410,8 @@ mod tests {
 
         let mut coincident = hunt_observation();
         coincident.cgroup = Some(scoped_memory_io_cgroup_observation(None, true));
-        let coincident_json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| coincident,
-        ))
-        .unwrap();
+        let coincident_json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| coincident)).unwrap();
         assert_eq!(
             coincident_json["evidence_chains"].as_array().unwrap().len(),
             0
@@ -2613,14 +3422,8 @@ mod tests {
             Some(reclaim_events()),
             true,
         ));
-        let combined_json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| combined,
-        ))
-        .unwrap();
+        let combined_json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| combined)).unwrap();
         let combined_chains = combined_json["evidence_chains"].as_array().unwrap();
         assert_eq!(combined_chains.len(), 2);
         assert_eq!(
@@ -2655,14 +3458,9 @@ mod tests {
             );
         }
         observation.cgroup = Some(cgroup);
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| observation,
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| observation))
+                .unwrap();
         let chain = &json["evidence_chains"][0];
         assert_eq!(chain["kind"], "cgroup_memory_consistent_with_io");
         assert_eq!(chain["evidence"]["scan_direct_pages"], 12);
@@ -2682,31 +3480,25 @@ mod tests {
                 .unwrap()
                 .contains("reclaim pressure")
         );
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| {
-                let mut observation = hunt_observation();
-                observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
-                observation.psi.as_mut().unwrap().interval.total_delta_us = 50_000;
-                let mut cgroup = scoped_memory_io_cgroup_observation(None, true);
-                if let Ok(value) = cgroup.observation.as_mut() {
-                    value.groups[0].memory_stat = cgroup_resource(
-                        Some(CgroupMemoryStatRaw {
-                            pgscan_direct: Some(12),
-                            pgsteal_direct: Some(8),
-                            pswpin: Some(0),
-                            pswpout: Some(0),
-                        }),
-                        CgroupFileState::Available,
-                    );
-                }
-                observation.cgroup = Some(cgroup);
-                observation
-            },
-        );
+        let text = render_hunt(&hunt_text_options(10_000), |_| {
+            let mut observation = hunt_observation();
+            observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+            observation.psi.as_mut().unwrap().interval.total_delta_us = 50_000;
+            let mut cgroup = scoped_memory_io_cgroup_observation(None, true);
+            if let Ok(value) = cgroup.observation.as_mut() {
+                value.groups[0].memory_stat = cgroup_resource(
+                    Some(CgroupMemoryStatRaw {
+                        pgscan_direct: Some(12),
+                        pgsteal_direct: Some(8),
+                        pswpin: Some(0),
+                        pswpout: Some(0),
+                    }),
+                    CgroupFileState::Available,
+                );
+            }
+            observation.cgroup = Some(cgroup);
+            observation
+        });
         assert!(text.contains("Scoped memory reclaim pressure"));
         assert!(text.contains("mechanism confidence low"));
         assert!(text.contains("12 direct-reclaim scan pages"));
@@ -2726,12 +3518,8 @@ mod tests {
     #[test]
     fn scoped_possible_thrashing_label_is_rendered_without_claiming_causality() {
         let elapsed = Duration::from_secs(5);
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 5_000,
-                output: OutputFormat::Json,
-            },
-            |_| {
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(5_000), |_| {
                 let mut observation = hunt_observation();
                 observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
                 observation.psi.as_mut().unwrap().interval.total_delta_us = 25_000;
@@ -2759,9 +3547,8 @@ mod tests {
                 }
                 observation.cgroup = Some(cgroup);
                 observation
-            },
-        ))
-        .unwrap();
+            }))
+            .unwrap();
         let memory = json["cgroup_findings"]
             .as_array()
             .unwrap()
@@ -2785,41 +3572,35 @@ mod tests {
                 .contains("cause")
         );
 
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 5_000,
-                output: OutputFormat::Text,
-            },
-            |_| {
-                let mut observation = hunt_observation();
-                observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
-                observation.psi.as_mut().unwrap().interval.total_delta_us = 25_000;
-                let mut cgroup = scoped_memory_io_cgroup_observation(None, false);
-                if let Ok(value) = cgroup.observation.as_mut() {
-                    value.elapsed = elapsed;
-                    value.groups[0].memory_pressure = cgroup_resource(
-                        Some(CgroupPsiInterval {
-                            elapsed: Some(elapsed),
-                            some_total_usec: Some(1_000_000),
-                            full_total_usec: Some(100_000),
-                            state: CgroupPsiIntervalState::Available,
-                        }),
-                        CgroupFileState::Available,
-                    );
-                    value.groups[0].memory_stat = cgroup_resource(
-                        Some(CgroupMemoryStatRaw {
-                            pgscan_direct: Some(5_120),
-                            pgsteal_direct: Some(5_120),
-                            pswpin: Some(5_120),
-                            pswpout: Some(5_120),
-                        }),
-                        CgroupFileState::Available,
-                    );
-                }
-                observation.cgroup = Some(cgroup);
-                observation
-            },
-        );
+        let text = render_hunt(&hunt_text_options(5_000), |_| {
+            let mut observation = hunt_observation();
+            observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+            observation.psi.as_mut().unwrap().interval.total_delta_us = 25_000;
+            let mut cgroup = scoped_memory_io_cgroup_observation(None, false);
+            if let Ok(value) = cgroup.observation.as_mut() {
+                value.elapsed = elapsed;
+                value.groups[0].memory_pressure = cgroup_resource(
+                    Some(CgroupPsiInterval {
+                        elapsed: Some(elapsed),
+                        some_total_usec: Some(1_000_000),
+                        full_total_usec: Some(100_000),
+                        state: CgroupPsiIntervalState::Available,
+                    }),
+                    CgroupFileState::Available,
+                );
+                value.groups[0].memory_stat = cgroup_resource(
+                    Some(CgroupMemoryStatRaw {
+                        pgscan_direct: Some(5_120),
+                        pgsteal_direct: Some(5_120),
+                        pswpin: Some(5_120),
+                        pswpout: Some(5_120),
+                    }),
+                    CgroupFileState::Available,
+                );
+            }
+            observation.cgroup = Some(cgroup);
+            observation
+        });
         assert!(text.contains("possible thrashing"));
         assert!(text.contains("mechanism confidence medium"));
         assert!(!text.to_lowercase().contains("caused"));
@@ -2832,14 +3613,9 @@ mod tests {
         memory.psi.as_mut().unwrap().interval.full = MemoryPsiFullInterval::CounterRegressed;
         observation.memory = Some(memory);
 
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
-            |_| observation,
-        ))
-        .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&render_hunt(&hunt_json_options(10_000), |_| observation))
+                .unwrap();
 
         assert_eq!(json["capabilities"]["memory_psi"]["state"], "partial");
         assert!(
@@ -2857,38 +3633,26 @@ mod tests {
 
     #[test]
     fn hunt_reports_unavailable_cpu_psi_explicitly() {
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| HuntObservation {
-                psi: Err(crate::psi::CpuPsiError::Malformed),
-                cpu: Err(crate::cpu::CpuError::Malformed),
-                memory: None,
-                io: None,
-                cgroup: None,
-            },
-        );
+        let output = render_hunt(&hunt_text_options(1_000), |_| HuntObservation {
+            psi: Err(crate::psi::CpuPsiError::Malformed),
+            cpu: Err(crate::cpu::CpuError::Malformed),
+            memory: None,
+            io: None,
+            cgroup: None,
+        });
         assert!(output.contains("Capability: CPU PSI failed"));
         assert!(output.contains("did not match the expected kernel format"));
     }
 
     #[test]
     fn psi_failure_retains_scheduler_delay_text_context() {
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| HuntObservation {
-                psi: Err(crate::psi::CpuPsiError::Malformed),
-                cpu: hunt_observation().cpu,
-                memory: None,
-                io: None,
-                cgroup: None,
-            },
-        );
+        let output = render_hunt(&hunt_text_options(1_000), |_| HuntObservation {
+            psi: Err(crate::psi::CpuPsiError::Malformed),
+            cpu: hunt_observation().cpu,
+            memory: None,
+            io: None,
+            cgroup: None,
+        });
         assert!(output.contains("CPU assessment unavailable"));
         assert!(output.contains("CPU/process context was collected"));
         assert!(output.contains("Retained context: host CPU"));
@@ -2901,13 +3665,7 @@ mod tests {
         let cpu = complete.cpu.as_mut().unwrap();
         cpu.processes.clear();
         cpu.schedstat_capability = crate::cpu::SchedstatCapability::Available;
-        let complete_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| complete,
-        );
+        let complete_text = render_hunt(&hunt_text_options(1_000), |_| complete);
         assert!(complete_text.contains("no positive stable runnable-delay candidates"));
         assert!(complete_text.contains("no consumers above 25% of one CPU"));
 
@@ -2918,13 +3676,7 @@ mod tests {
             .unwrap()
             .collection_issues
             .appeared = 1;
-        let retained_partial_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| retained_partial,
-        );
+        let retained_partial_text = render_hunt(&hunt_text_options(1_000), |_| retained_partial);
         assert!(retained_partial_text.contains("consumer [9]"));
         assert!(retained_partial_text.contains("Process collection is partial"));
 
@@ -2932,13 +3684,7 @@ mod tests {
         let cpu = empty_partial.cpu.as_mut().unwrap();
         cpu.processes.clear();
         cpu.collection_issues.appeared = 1;
-        let empty_partial_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| empty_partial,
-        );
+        let empty_partial_text = render_hunt(&hunt_text_options(1_000), |_| empty_partial);
         assert!(empty_partial_text.contains("Suspect candidates: unavailable or incomplete"));
 
         let mut retained_scheduler_partial = hunt_observation();
@@ -2957,13 +3703,8 @@ mod tests {
                 runnable_delay_fraction: 0.0002,
                 timeslices: 1,
             });
-        let retained_scheduler_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| retained_scheduler_partial,
-        );
+        let retained_scheduler_text =
+            render_hunt(&hunt_text_options(1_000), |_| retained_scheduler_partial);
         assert!(retained_scheduler_text.contains("consumer [9] — 250µs delay"));
         assert!(retained_scheduler_text.contains("Scheduler accounting is unavailable or partial"));
     }
@@ -2989,13 +3730,7 @@ mod tests {
                 runnable_delay_fraction: 0.0002,
                 timeslices: 1,
             });
-        let no_contention_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| no_contention,
-        );
+        let no_contention_text = render_hunt(&hunt_text_options(1_000), |_| no_contention);
         assert!(no_contention_text.contains("not ranked without a contention finding"));
         assert!(!no_contention_text.contains("no consumers above 25%"));
         assert!(!no_contention_text.contains("no positive stable runnable-delay"));
@@ -3005,13 +3740,7 @@ mod tests {
         psi.requested = Duration::from_millis(100);
         psi.interval.elapsed = Duration::from_millis(100);
         short.cpu.as_mut().unwrap().elapsed = Duration::from_millis(100);
-        let short_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 100,
-                output: OutputFormat::Text,
-            },
-            |_| short,
-        );
+        let short_text = render_hunt(&hunt_text_options(100), |_| short);
         assert!(short_text.contains("not assessed for a short observation"));
         assert!(!short_text.contains("no consumers above 25%"));
     }
@@ -3120,19 +3849,13 @@ mod tests {
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| HuntObservation {
-                psi: Ok(observation),
-                cpu: Ok(cpu),
-                memory: None,
-                io: None,
-                cgroup: None,
-            },
-        );
+        let output = render_hunt(&hunt_text_options(10_000), |_| HuntObservation {
+            psi: Ok(observation),
+            cpu: Ok(cpu),
+            memory: None,
+            io: None,
+            cgroup: None,
+        });
         assert_eq!(
             output,
             include_str!("../tests/fixtures/render/cpu-contention.txt")
@@ -3175,5 +3898,198 @@ mod tests {
             assert!(output.contains(capability.explanation()));
             assert!(output.contains("I/O PSI: available"));
         }
+    }
+
+    fn assert_or_update_fixture(actual: &str, path: &str, expected: &str) {
+        if std::env::var_os("STALLHUNT_UPDATE_FIXTURES").is_some() {
+            let full = format!("tests/fixtures/render/{path}");
+            std::fs::write(&full, actual).expect("write fixture");
+            return;
+        }
+        assert_eq!(
+            actual, expected,
+            "golden fixture mismatch for {path}; inspect the diff and refresh with              STALLHUNT_UPDATE_FIXTURES=1 cargo test if intentional"
+        );
+    }
+
+    fn compact_psi(elapsed: Duration, some_fraction: f64) -> CpuPsiObservation {
+        let total_delta_us = (some_fraction * elapsed.as_micros() as f64) as u64;
+        CpuPsiObservation {
+            requested: elapsed,
+            interval: CpuPsiInterval {
+                elapsed,
+                total_delta_us,
+                some_fraction,
+            },
+            start: CpuPsiRaw {
+                avg10_percent: 0.0,
+                avg60_percent: 0.0,
+                avg300_percent: 0.0,
+                total_us: 0,
+            },
+            end: CpuPsiRaw {
+                avg10_percent: some_fraction * 100.0,
+                avg60_percent: 0.0,
+                avg300_percent: 0.0,
+                total_us: total_delta_us,
+            },
+        }
+    }
+
+    fn compact_cpu_with_candidates() -> CpuProcessObservation {
+        CpuProcessObservation {
+            elapsed: Duration::from_secs(10),
+            clock_ticks_per_second: 100,
+            host: HostCpuInterval {
+                total_ticks: 1_000,
+                busy_ticks: 950,
+                idle_ticks: 50,
+                utilization_fraction: 0.95,
+                cpu_count: 8,
+            },
+            load: Some(LoadAverageRaw {
+                avg1: 9.0,
+                avg5: 8.0,
+                avg15: 7.0,
+                runnable_tasks: 9,
+                total_tasks: 100,
+                last_pid: 20,
+            }),
+            load_availability: LoadAverageAvailability::Available,
+            processes: vec![ProcessCpuInterval {
+                key: ProcessKey {
+                    pid: 20,
+                    start_time_ticks: 1,
+                },
+                name: "build\u{1b}[31m".into(),
+                state: 'R',
+                cpu_ticks: 80,
+                cpu_fraction_of_one: 0.8,
+            }],
+            collection_issues: ProcessCollectionIssues::default(),
+            scheduler_delay_candidates: vec![ProcessSchedulerDelayInterval {
+                key: ProcessKey {
+                    pid: 21,
+                    start_time_ticks: 1,
+                },
+                name: "worker".into(),
+                task_count: 1,
+                running_ns: 0,
+                runnable_wait_ns: 1_800_000_000,
+                runnable_delay_fraction: 0.18,
+                timeslices: 1,
+            }],
+            schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+            schedstat_capability: crate::cpu::SchedstatCapability::Available,
+        }
+    }
+
+    fn compact_pressured_hunt_observation() -> HuntObservation {
+        HuntObservation {
+            psi: Ok(compact_psi(Duration::from_secs(10), 0.2)),
+            cpu: Ok(compact_cpu_with_candidates()),
+            memory: Some(memory_hunt_observation(0.08, Some(0.01), true)),
+            io: Some(io_hunt_observation(0.12)),
+            cgroup: Some(scoped_cgroup_observation(false)),
+        }
+    }
+
+    fn compact_healthy_hunt_observation() -> HuntObservation {
+        let mut cgroup = scoped_cgroup_observation(false);
+        if let Ok(observation) = cgroup.observation.as_mut() {
+            if let Some(group) = observation.groups.first_mut() {
+                // Keep the healthy fixture actually scoped-healthy: minimal
+                // CPU pressure and no throttle time to label.
+                group.cpu.value = group.cpu.value.take().map(|mut cpu| {
+                    cpu.throttled_usec = None;
+                    cpu
+                });
+                if let Some(psi) = group.cpu_pressure.value.as_mut() {
+                    psi.some_total_usec = Some(20_000);
+                }
+            }
+        }
+        HuntObservation {
+            psi: Ok(compact_psi(Duration::from_secs(10), 0.002)),
+            cpu: Ok(compact_cpu_with_candidates()),
+            memory: Some(memory_hunt_observation(0.0, Some(0.0), true)),
+            io: Some(io_hunt_observation(0.004)),
+            cgroup: Some(cgroup),
+        }
+    }
+
+    #[test]
+    fn compact_hunt_text_has_a_golden_healthy_fixture() {
+        let output = render_hunt(&hunt_compact_options(10_000), |_| {
+            compact_healthy_hunt_observation()
+        });
+        assert!(!output.contains('\u{1b}'));
+        assert!(output.contains("Verdict:"));
+        assert_or_update_fixture(
+            &output,
+            "hunt-compact-healthy.txt",
+            include_str!("../tests/fixtures/render/hunt-compact-healthy.txt"),
+        );
+    }
+
+    #[test]
+    fn compact_hunt_text_has_a_golden_pressured_fixture() {
+        let output = render_hunt(&hunt_compact_options(10_000), |_| {
+            compact_pressured_hunt_observation()
+        });
+        assert!(!output.contains('\u{1b}'));
+        // Correlation language survives compaction.
+        assert!(output.contains("not confirmed harm"));
+        assert!(output.contains("not proven causal"));
+        assert!(output.contains("confidence low"));
+        assert_or_update_fixture(
+            &output,
+            "hunt-compact-contention.txt",
+            include_str!("../tests/fixtures/render/hunt-compact-contention.txt"),
+        );
+    }
+
+    #[test]
+    fn compact_hunt_text_keeps_unavailable_and_short_windows_honest() {
+        let psi_error = HuntObservation {
+            psi: Err(crate::psi::CpuPsiError::PermissionDenied),
+            cpu: Err(crate::cpu::CpuError::Unreadable),
+            memory: Some(memory_hunt_observation(0.0, None, false)),
+            io: Some(io_hunt_observation(0.004)),
+            cgroup: Some(CgroupHuntObservation {
+                observation: Err(crate::cgroup::CgroupError::Unsupported),
+            }),
+        };
+        let output = render_hunt(&hunt_compact_options(10_000), |_| psi_error);
+        assert!(output.contains("Verdict: no meaningful contention detected"));
+        assert!(output.contains("unavailable"));
+        assert!(output.contains("(PSI permission_denied)"));
+        assert!(output.contains("Scoped cgroups: unavailable (unsupported)"));
+        assert!(output.contains("Use --verbose"));
+
+        let smoke = HuntObservation {
+            psi: Ok(compact_psi(Duration::from_millis(500), 0.05)),
+            cpu: Ok(compact_cpu_with_candidates()),
+            memory: Some(memory_hunt_observation(0.0, None, false)),
+            io: Some(io_hunt_observation(0.004)),
+            cgroup: None,
+        };
+        let output = render_hunt(&hunt_compact_options(500), |_| smoke);
+        assert!(output.contains("inconclusive — observation window shorter than 1s"));
+        assert!(output.contains("short window"));
+    }
+
+    #[test]
+    fn compact_hunt_text_color_wraps_severity_words_only() {
+        let output = super::hunt_text_compact(
+            &hunt_compact_color_options(10_000),
+            compact_pressured_hunt_observation(),
+            ColorUse::Enabled,
+        );
+        assert!(output.contains("\u{1b}[91mhigh\u{1b}[0m"));
+        assert!(output.contains("\u{1b}[33mmoderate\u{1b}[0m"));
+        assert!(output.contains("\u{1b}[2m"));
+        // The colored renderer still contains the plain-text labels.
+        assert!(output.contains("Verdict: CPU scheduling contention"));
     }
 }

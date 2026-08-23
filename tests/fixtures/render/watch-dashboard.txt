@@ -1,0 +1,22 @@
+┌─ stallhunt 0.1.2 · window 3 · interval 2s ───────────────────────────────────┐
+│                                                                              │
+│ HOST PRESSURE · PSI some (% of window with stalled work)                     │
+│  CPU     ██████████░░░░░░░░░░░░░░░   38.0%  severe                           │
+│  Memory  ░░░░░░░░░░░░░░░░░░░░░░░░░    0.1%  ok                               │
+│  I/O     ░░░░░░░░░░░░░░░░░░░░░░░░░    0.1%  ok                               │
+│                                                                              │
+│ SCOPED PRESSURE · cgroups (1 shown)                                          │
+│  /app.slice/app.service (memory)cgroup_memory_swap_pressure moderate PSI 19. │
+│                                                                              │
+│ FINDINGS · lifecycle (new / persistent / resolved)                           │
+│ PERSISTENT  CPU · cpu_scheduling_contention severe 3w PSI 38.0%              │
+│ PERSISTENT  /app.slice/app.service (memory) · cgroup_memory_swap_pressure mo │
+│ RESOLVED    I/O · io_pressure low resolved PSI 0.1%                          │
+│                                                                              │
+│ HISTORY · severity by window (oldest → newest)                               │
+│  CPU     ▅██                                                                 │
+│  Memory  ···                                                                 │
+│  I/O     ·▁·                                                                 │
+│                                                                              │
+│ Ctrl-C: drain & exit · twice: quit now · full evidence: hunt --verbose       │
+└──────────────────────────────────────────────────────────────────────────────┘

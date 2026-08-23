@@ -4,6 +4,21 @@ All notable user-facing changes to Stallhunt are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once public releases begin.
 
+## [Unreleased]
+
+Interface redesign (ADR-0013, ADR-0014), implemented in the `stallhunt-zai`
+worktree pending local user feedback; not yet released.
+
+### Changed
+
+- Default `hunt`/`replay` human text is now compact and verdict-first: one-line verdict, a per-resource status table with exact-interval PSI evidence, capped candidate lists with inline correlation caveats, scoped-pressure summary, one-line related-evidence chains, and measured-timing/footer hints. The full previous renderer is available with `--verbose`. JSON output is unchanged.
+- `watch` on a terminal now renders a live dashboard (PSI pressure meters, scoped pressure, finding lifecycle, severity-history sparklines) that redraws in place with a hidden cursor; the cursor is restored on every exit path including a second SIGINT. Piped text and `--json` output are unchanged.
+
+### Added
+
+- `hunt --verbose` and `replay --verbose` select the full-detail human renderer.
+- `--no-color` on `hunt`, `replay`, and `watch`; ANSI color is enabled automatically on terminals and respects the `NO_COLOR` convention. Color is never the only carrier of meaning.
+
 ## [0.1.2] - 2026-08-23
 
 ### Fixed

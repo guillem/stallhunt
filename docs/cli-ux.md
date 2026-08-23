@@ -43,7 +43,10 @@ Options may include:
 --no-color
 ```
 
-Do not add flags before a real use case exists.
+Do not add flags before a real use case exists. Implemented today:
+`hunt --duration [--json] [--verbose] [--no-color]`, `replay [--json]
+[--verbose] [--no-color]`, and `watch --interval [--count] [--json]
+[--no-color]` (ADR-0013, ADR-0014).
 
 ## Early command set
 
@@ -97,17 +100,21 @@ Replace identifiers in an existing recording for sharing.
 stallhunt redact incident.json --output incident.redacted.json [--force]
 ```
 
-Implemented in Milestone 6:
-
 ### `watch`
 
-Follow rolling bottlenecks by finding lifecycle.
+M6 added `watch` (ADR-0008); ADR-0014 supersedes its TTY presentation:
 
 ```bash
-stallhunt watch [--interval 2s] [--count N] [--json]
+stallhunt watch [--interval 2s] [--count N] [--json] [--no-color]
 ```
 
-This is not a TUI and not a generic resource monitor.
+On a TTY, text output is a framed dashboard that redraws in place each
+window: host PSI pressure meters with numeric percentages and status words,
+up to six currently pressured cgroups, finding lifecycle rows
+(`NEW`/`PERSISTENT`/`RESOLVED`), severity-history sparklines for the last 16
+windows, and a footer with the SIGINT contract. Piped text appends the pre-redesign
+window blocks. This is not an interactive utilization monitor and not a
+generic resource dashboard.
 
 ## Current CPU diagnosis behavior
 
@@ -189,19 +196,20 @@ M6 adds `watch`. `--interval` uses the same 100 ms–5 m duration parser as
 `hunt` and defaults to 2 seconds. `--count` stops after N windows; without it,
 watch runs until interrupted. For an unlimited watch, the first SIGINT drains
 and writes the in-flight window; a second SIGINT terminates immediately with
-status 130. Bounded `--count` runs retain the default signal disposition. Each
-window reuses the previous endpoint snapshot. Text reports `new` / `persistent`
-/ `resolved` pressure findings plus a compact current-window summary. A TTY
-refreshes the screen with ANSI clear/home; piped text and `--json` append. JSON
-is one compact `stallhunt.watch_window` object per window. It is not hunt JSON
-and not a recording, and it omits full evidence. Host memory `kind` values
-already name reclaim, swap, or possible thrashing. Scoped cgroup `kind` values
-name the resource and, when labeled, the mechanism
+status 130 (restoring the cursor first in dashboard mode). Bounded `--count`
+runs retain the default signal disposition. Each window reuses the previous
+endpoint snapshot. On a TTY, text renders the ADR-0014 dashboard (meters,
+scoped pressure, lifecycle, history sparklines) and redraws in place with
+hidden cursor; piped text appends window blocks and `--json` appends one
+compact `stallhunt.watch_window` object per window. It is not hunt JSON and
+not a recording, and it omits full evidence. Host memory `kind` values
+already name reclaim, swap, or possible thrashing. Scoped cgroup `kind`
+values name the resource and, when labeled, the mechanism
 (`cgroup_memory_reclaim_pressure`, `cgroup_memory_swap_pressure`,
 `cgroup_memory_possible_thrashing`, `cgroup_cpu_quota_throttle_pressure`);
-identity remains path plus resource, so a mechanism change stays `persistent`. Use
-`hunt --json` or `record` when the full evidence payload is required. Invalid
-`--count` still exits 2.
+identity remains path plus resource, so a mechanism change stays `persistent`.
+Use `hunt --json` or `record` when the full evidence payload is required.
+Invalid `--count` still exits 2.
 
 Tracked watch pressure kinds are:
 
@@ -220,22 +228,65 @@ path-plus-resource identity.
 
 ## Human output structure
 
-Current `hunt` text output is concise and finding-first. It shows the CPU
-verdict, severity, and resource confidence; exact-interval PSI evidence;
-bounded ranked victim candidates (at most five) and suspect candidates (at
-most three), including role and confidence; relevant context and limitations;
-and requested and measured timings. Suspect output explicitly states that it
-is same-window correlation rather than proof of causality. Missing or partial
-attribution is rendered as unavailable or incomplete rather than as an observed
-empty result.
+Human `hunt`/`replay` text is **compact by default** (ADR-0013) and fully
+detailed with `--verbose`. Both renderers are deterministic and covered by
+checked-in golden fixtures.
 
-Process names are terminal-safe and bounded in text output. The default text
-renderer does not dump raw host counters, rolling PSI averages, or a separate
-top-ten process list. `--json` remains the full structured-evidence interface:
-it retains the complete observation, typed evidence, ranked roles, capabilities,
-and collection qualifiers rather than mirroring the concise text summary.
+### Compact default
 
-Example:
+The compact renderer answers the primary question first:
+
+```text
+stallhunt 0.2.0 · observed 10s
+Verdict: CPU scheduling contention — high (confidence high)
+  CPU      pressure  high      PSI some 23.40% · 2.3s stalled / 10s
+  Memory   ok                   PSI some 0.12% · 37% used
+  I/O      pressure  moderate  PSI some 12.20% · 1.2s stalled / 10s
+
+CPU scheduling contention · high · confidence high
+  Victims — observed runnable delay, not confirmed harm:
+    postgres [4812]  1.81s delayed
+  Suspects — same window only, not proven causal:
+    rustc [9231]     583.0% of one CPU
+
+Scoped cgroup pressure
+  /app.slice/app.service · memory (reclaim) moderate · PSI some 21.0%
+
+Related evidence
+  memory reclaim pressure is consistent with block-I/O pressure in the same window (confidence low)
+
+measured: PSI 10s · CPU/process 10s · memory PSI 10s · I/O PSI 10s
+Use --verbose for full evidence, qualifiers, and timings · --json for machine-readable output
+```
+
+Rules:
+
+- one-line verdict: the highest-severity pressured finding, an explicit
+  healthy/inconclusive/no-telemetry result, or `some telemetry unavailable`;
+- the resource table always shows all observed resources with the deciding
+  exact-interval PSI evidence and cumulative stalled time; unavailability is
+  shown as `unavailable (PSI <capability>)`, sub-second windows as
+  `short window`;
+- candidate lists appear only for pressured resources and are capped at
+  three per role; correlation caveats stay inline;
+- scoped cgroup pressure is capped at three lines plus an overflow count;
+  absence is the one-line `no pressure in the bounded selection` statement,
+  and an unavailable cgroup observation stays visible as
+  `Scoped cgroups: unavailable (<capability>)` so collection limits are never
+  silently omitted;
+- chains render as one line each and never claim causality;
+- the dim footer advertises `--verbose`/`--json`, and one dim line carries
+  measured intervals.
+
+Process names remain terminal-safe and bounded. The compact renderer never
+dumps raw host counters, rolling PSI averages, or a top-ten process list, and
+never recomputes a diagnosis — it re-formats analyzer findings.
+
+### `--verbose`
+
+The verbose renderer reproduces the complete pre-redesign text: every
+verdict/evidence line, ranked role with confidence labels, qualifier and
+limitation list, controller context, and per-resource timing:
 
 ```text
 CPU scheduling contention observed
@@ -250,21 +301,23 @@ Context and limitations:
 Timing: requested 10s; PSI measured 10s; CPU/process measured 10s
 ```
 
+`--json` remains the full structured-evidence interface regardless of detail
+level: it retains the complete observation, typed evidence, ranked roles,
+capabilities, and collection qualifiers.
+
 ## Negative results
 
-A healthy result should still be informative:
+A healthy compact result keeps the negative finding explicit:
 
 ```text
-Observed 10.0s · no significant resource contention detected.
+stallhunt 0.2.0 · observed 10s
+Verdict: no meaningful contention detected
+  CPU      ok   PSI some 0.20% · 20ms stalled / 10s
+  Memory   ok   PSI some 0.00% · 0ms stalled / 10s · 95% used
+  I/O      ok   PSI some 0.40% · 40ms stalled / 10s
 
-CPU     healthy   PSI 0.2%
-Memory  healthy   PSI 0.0%
-I/O     healthy   PSI 0.4%
-
-Highest CPU consumer:
-  firefox [8121]  122% of one CPU
-
-No evidence indicates that it is materially delaying other work.
+Scoped cgroups: no pressure in the bounded selection
+Use --verbose for full evidence, qualifiers, and timings · --json for machine-readable output
 ```
 
 This distinguishes "busy" from "bottlenecked".
@@ -288,15 +341,8 @@ Avoid unexplained jargon such as:
 
 ## Color
 
-Color may communicate severity but must never be the only carrier of meaning.
-
-Support:
-
-- automatic TTY detection,
-- `--no-color`,
-- `NO_COLOR` convention if practical.
-
-Do not overdesign terminal visuals before core output stabilizes.
+Color communicates severity but is never the only carrier of meaning; see
+the implemented policy under [Color and TTY presentation](#color-and-tty-presentation).
 
 ## Exit codes
 
@@ -429,7 +475,9 @@ Until then:
 
 ## Verbose/debug output
 
-`--verbose` should add diagnostic context, not turn the normal renderer into a raw `/proc` dump.
+`--verbose` selects the full human renderer (ADR-0013): every qualifier,
+limitation, ranked role label, and measured timing. It does not turn the
+renderer into a raw `/proc` dump.
 
 A future `--debug-dump` can emit normalized observation data for bug reports.
 
@@ -455,11 +503,28 @@ conclusions, and experiments may justify revising the limits.
 
 Warn or reduce confidence for observation windows too short to support robust inference.
 
-## TUI
+## Color and TTY presentation
 
-A TUI is explicitly not an early priority. M6 `watch` refreshes finding
-lifecycle on a TTY without introducing a TUI framework.
+Implemented policy (ADR-0013, ADR-0014):
 
-The differentiator is diagnosis.
+- Color is emitted only when stdout is a terminal, `--no-color` was not
+  passed, and the `NO_COLOR` environment variable is unset or empty.
+- One shared severity palette is used everywhere: `ok`/none green, low cyan,
+  moderate yellow, high bright red, severe bold red; `unconfirmed` magenta,
+  `unavailable` dim; dashboard section headers are bold.
+- Color is never the only carrier of meaning: every colored element keeps its
+  textual label, percentage, or word, and stripping SGR sequences from any
+  colored output reproduces the colorless output.
+- `--verbose` hunt text and all piped/non-TTY output are unstyled plain text.
 
-If a TUI is added later, it should display changing findings rather than simply reproduce `htop`.
+## TTY dashboard for `watch`
+
+`watch` text on a TTY renders the ADR-0014 dashboard: PSI pressure meters,
+scoped pressure, lifecycle rows, and severity-history sparklines, redrawn in
+place each window with a hidden cursor and no alternate screen. Piped text and
+`--json` keep the ADR-0008 append contract.
+
+The differentiator remains diagnosis. Watch does not show per-process
+utilization tables, and there is no interactive navigation; if a future TUI
+adds interaction it should display and expand changing findings rather than
+reproduce `htop`.
