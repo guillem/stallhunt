@@ -58,6 +58,8 @@ pub struct WatchOptions {
     pub interval_ms: u64,
     pub count: Option<u32>,
     pub output: OutputFormat,
+    pub no_color: bool,
+    pub plain: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,6 +211,12 @@ struct WatchArgs {
     /// Emit one compact JSON object per window
     #[arg(long)]
     json: bool,
+    /// Disable colored text output
+    #[arg(long)]
+    no_color: bool,
+    /// Disable the interactive interface; use the classic refreshing text display
+    #[arg(long)]
+    plain: bool,
 }
 
 impl From<HuntArgs> for HuntOptions {
@@ -273,6 +281,8 @@ impl From<WatchArgs> for WatchOptions {
             interval_ms: args.interval,
             count: args.count,
             output: output_format(args.json),
+            no_color: args.no_color,
+            plain: args.plain,
         }
     }
 }
@@ -477,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_accepts_no_color() {
+    fn capabilities_and_watch_accept_no_color() {
         assert_eq!(
             expect_parse(["stallhunt", "capabilities", "--no-color"]),
             Command::Capabilities(CapabilitiesOptions {
@@ -485,6 +495,10 @@ mod tests {
                 no_color: true,
             })
         );
+        assert!(matches!(
+            expect_parse(["stallhunt", "watch", "--no-color"]),
+            Command::Watch(WatchOptions { no_color: true, .. })
+        ));
     }
 
     #[test]
@@ -493,6 +507,7 @@ mod tests {
         assert!(parse(["stallhunt", "hunt", "--no-color", "--no-color"]).is_err());
         assert!(parse(["stallhunt", "replay", "in.json", "--explain", "--explain"]).is_err());
         assert!(parse(["stallhunt", "capabilities", "--no-color", "--no-color"]).is_err());
+        assert!(parse(["stallhunt", "watch", "--no-color", "--no-color"]).is_err());
     }
 
     #[test]
@@ -583,6 +598,8 @@ mod tests {
                 interval_ms: DEFAULT_WATCH_INTERVAL_MS,
                 count: None,
                 output: OutputFormat::Text,
+                no_color: false,
+                plain: false,
             })
         );
         assert_eq!(
@@ -598,10 +615,21 @@ mod tests {
                 interval_ms: 1_000,
                 count: Some(3),
                 output: OutputFormat::Json,
+                no_color: false,
+                plain: false,
             })
         );
         assert!(parse(["stallhunt", "watch", "--count", "0"]).is_err());
         assert!(parse(["stallhunt", "watch", "--interval", "1s", "--interval=2s"]).is_err());
+    }
+
+    #[test]
+    fn watch_accepts_plain_and_rejects_repetition() {
+        assert!(matches!(
+            expect_parse(["stallhunt", "watch", "--plain"]),
+            Command::Watch(WatchOptions { plain: true, .. })
+        ));
+        assert!(parse(["stallhunt", "watch", "--plain", "--plain"]).is_err());
     }
 
     #[test]

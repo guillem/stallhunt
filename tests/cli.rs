@@ -356,6 +356,21 @@ fn watch_emits_one_lifecycle_window_and_json_stream_object() {
 }
 
 #[test]
+fn watch_plain_keeps_the_legacy_refresh_path() {
+    let text = stallhunt(&["watch", "--plain", "--interval", "100ms", "--count", "1"]);
+    let stdout = String::from_utf8(text.stdout).expect("stdout should be UTF-8");
+    assert!(
+        text.status.success(),
+        "{}",
+        String::from_utf8_lossy(&text.stderr)
+    );
+    assert!(stdout.contains("WATCH  window 1/1  interval 100ms"));
+    assert!(stdout.contains("Lifecycle"));
+    assert!(stdout.contains("Current window"));
+    assert!(stdout.contains("NEW") || stdout.contains("no pressure findings this window"));
+}
+
+#[test]
 fn second_sigint_terminates_unlimited_watch_immediately() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_stallhunt"))
         .args(["watch", "--interval", "5m"])

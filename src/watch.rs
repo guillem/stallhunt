@@ -377,11 +377,20 @@ const fn state_rank(state: LifecycleState) -> u8 {
     }
 }
 
+/// Mode selection: `--json` always streams JSON, non-terminal stdout always
+/// gets the appended text form, `--plain` keeps the classic clear/home refresh
+/// on a terminal, and a terminal default opens the interactive TUI.
 pub fn run(options: &WatchOptions) -> io::Result<()> {
     let stdout = io::stdout();
-    let refresh = options.output == OutputFormat::Text && stdout.is_terminal();
-    let mut writer = stdout.lock();
-    run_on(&mut writer, options, refresh)
+    if options.output == OutputFormat::Json || !stdout.is_terminal() {
+        let mut writer = stdout.lock();
+        return run_on(&mut writer, options, false);
+    }
+    if options.plain {
+        let mut writer = stdout.lock();
+        return run_on(&mut writer, options, true);
+    }
+    crate::tui::run(options)
 }
 fn write_window(
     writer: &mut dyn Write,
@@ -434,7 +443,7 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
 /// replaced by a flag so an in-flight `watch` window can complete and be
 /// written before the loop exits. Without installation (bounded `--count`
 /// runs), SIGINT keeps its default terminating behavior.
-struct InterruptFlag {
+pub(crate) struct InterruptFlag {
     raised: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -456,7 +465,27 @@ impl InterruptFlag {
         Self { raised }
     }
 
-    fn raised(&self) -> bool {
+    /// TUI variant. The handler is always installed so the alternate screen
+    /// is restored even when a bounded run is interrupted. With `drain`, the
+    /// first SIGINT only raises the flag so the in-flight window completes; a
+    /// second SIGINT restores the terminal explicitly and exits 130. Without
+    /// `drain`, the first SIGINT restores the terminal and exits 130
+    /// immediately. `Drop` does not run on `process::exit`, hence the
+    /// explicit restore inside the handler.
+    pub(crate) fn install_restoring(drain: bool, restore: fn()) -> Self {
+        let raised = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let handler_flag = std::sync::Arc::clone(&raised);
+        let _ = ctrlc::set_handler(move || {
+            if drain && !handler_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            restore();
+            std::process::exit(130);
+        });
+        Self { raised }
+    }
+
+    pub(crate) fn raised(&self) -> bool {
         self.raised.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
@@ -643,14 +672,14 @@ struct CgroupCurrentJson<'a> {
     signal: &'a ResourceSignal,
 }
 
-fn window_index_label(window: &WatchWindow) -> String {
+pub(crate) fn window_index_label(window: &WatchWindow) -> String {
     match window.count {
         Some(count) => format!("{}/{}", window.index, count),
         None => window.index.to_string(),
     }
 }
 
-fn state_label(state: LifecycleState) -> &'static str {
+pub(crate) fn state_label(state: LifecycleState) -> &'static str {
     match state {
         LifecycleState::New => "NEW",
         LifecycleState::Persistent => "PERSISTENT",
@@ -658,7 +687,7 @@ fn state_label(state: LifecycleState) -> &'static str {
     }
 }
 
-fn status_label(status: ObservationStatus) -> &'static str {
+pub(crate) fn status_label(status: ObservationStatus) -> &'static str {
     match status {
         ObservationStatus::Pressure => "pressure",
         ObservationStatus::Healthy => "healthy",
@@ -666,7 +695,7 @@ fn status_label(status: ObservationStatus) -> &'static str {
     }
 }
 
-fn id_label(id: &FindingId) -> String {
+pub(crate) fn id_label(id: &FindingId) -> String {
     match id {
         FindingId::Cpu => "CPU".into(),
         FindingId::Memory => "Memory".into(),
@@ -689,7 +718,7 @@ fn psi_suffix(fraction: Option<f64>) -> String {
     }
 }
 
-fn format_ms(duration_ms: u64) -> String {
+pub(crate) fn format_ms(duration_ms: u64) -> String {
     if duration_ms % 60_000 == 0 && duration_ms >= 60_000 {
         format!("{}m", duration_ms / 60_000)
     } else if duration_ms % 1_000 == 0 {
@@ -699,7 +728,7 @@ fn format_ms(duration_ms: u64) -> String {
     }
 }
 
-const fn severity_name(severity: Severity) -> &'static str {
+pub(crate) const fn severity_name(severity: Severity) -> &'static str {
     match severity {
         Severity::None => "none",
         Severity::Low => "low",
@@ -1244,6 +1273,8 @@ mod tests {
                 interval_ms: 2_000,
                 count: Some(3),
                 output: OutputFormat::Text,
+                no_color: false,
+                plain: false,
             },
             &first,
             false,
@@ -1266,6 +1297,8 @@ mod tests {
                     interval_ms: 2_000,
                     count: Some(3),
                     output: OutputFormat::Json,
+                    no_color: false,
+                    plain: false,
                 },
                 &first,
                 false,
