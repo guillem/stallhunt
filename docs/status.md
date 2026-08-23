@@ -461,7 +461,6 @@ Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 Not yet decided:
 
 - serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
-- color/terminal crate,
 - eventual eBPF framework,
 - compatibility policy, additional targets, and signing/provenance for
   pre-built release artifacts.
@@ -473,6 +472,11 @@ Decided in ADR-0012:
 - MSRV: Rust 1.85,
 - minimum Linux baseline: 4.20+,
 - CLI: clap 4 with derive; bare `stallhunt` defaults to 10s hunt; `stallhunt completions <shell>`.
+
+Decided in ADR-0013:
+
+- color/terminal crate: `ratatui` 0.29 (`crossterm` 0.28 backend) for the
+  watch TUI; `--no-color`/`NO_COLOR` for color, TTY-vs-pipe for layout.
 
 These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.

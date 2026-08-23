@@ -71,7 +71,11 @@ Linux **4.20+** with procfs and PSI is the supported runtime baseline (ADR-0012)
 
 ## Default quality gates
 
-After dependencies are available in the local Cargo cache:
+After dependencies are available in the local Cargo cache. Adding or
+upgrading a dependency (for example, `ratatui`/`crossterm`, added in
+ADR-0013) needs one `cargo build` or `cargo update` with network access to
+populate the cache and regenerate `Cargo.lock`; commit the updated lock
+file so the gate below stays `--offline`-clean afterward:
 
 ```bash
 cargo fmt --all -- --check
