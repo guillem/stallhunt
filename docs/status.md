@@ -16,8 +16,13 @@ release workflow's Node-20-deprecated actions were bumped to
 `actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
 v0.1.2 corrective release makes the advertised second-SIGINT termination real
 and ensures the 16-chain regression actually reaches truncation with 18
-eligible candidates. The repository remains parked: no additional M8 chain or
-M7 probe is approved.
+eligible candidates. Since v0.1.2, ADR-0013 redesigned the interface on user
+feedback that default `hunt` output was a wall of text and `watch` was too
+primitive: `hunt`/`replay` gained a compact styled report and `--verbose`,
+and `watch` gained an interactive TUI, both TTY-only and both leaving piped
+text/JSON unchanged. This is presentation only; no analyzer, finding kind, or
+telemetry source changed, and the repository remains parked otherwise: no
+additional M8 chain or M7 probe is approved.
 Do not start M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -52,10 +57,12 @@ the test process and does not mutate the hierarchy.
   recording.
 - **M6 complete within its exit condition:** `watch` classifies host and
   bounded cgroup pressure findings as new, persistent, or resolved across
-  contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
-  keeps 16 history windows. It is not a TUI and does not store full evidence.
+  contiguous rolling windows, appends piped text/JSON unchanged, keeps 16
+  history windows, and does not store full evidence in its JSON stream. Per
+  ADR-0013, a TTY renders an interactive TUI over that same lifecycle model
+  (not a utilization dashboard) instead of the earlier screen-clearing text.
   A second SIGINT while draining terminates immediately with the conventional
-  exit status; `--count` bounds scripted runs.
+  exit status on both the piped and TUI paths; `--count` bounds scripted runs.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
   reclaim, swap, or possible-thrashing finding to host I/O pressure, and can
   relate same-cgroup memory plus I/O pressure when `memory.events` high/max or
@@ -218,11 +225,21 @@ the test process and does not mutate the hierarchy.
   windows. Host CPU, memory, and I/O pressure plus at most 16 cgroup pressure
   identities are classified as new, persistent, or resolved. Healthy results do
   not create findings; missing or short-window data does not resolve an active
-  finding. History is capped at 16 compact windows. TTY text clears the screen;
-  JSON emits one `stallhunt.watch_window` object per window. Watch JSON is not
-  hunt JSON and not a recording. Scoped cgroup lifecycle `kind` values name the
-  resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
-  identity remains path plus resource.
+  finding. History is capped at 16 compact windows. A TTY renders an
+  interactive TUI (ADR-0013); piped text appends `--- window N ---` frames
+  and JSON emits one `stallhunt.watch_window` object per window, both
+  unchanged by the TUI's existence. Watch JSON is not hunt JSON and not a
+  recording. Scoped cgroup lifecycle `kind` values name the resource and any
+  reclaim, swap, possible-thrashing, or quota-throttle label; identity
+  remains path plus resource.
+- Per ADR-0013, `hunt`/`replay` render a compact, color-coded, width-aware
+  report (`src/report.rs`) on a TTY instead of the stacked plain-text
+  sections; piped output is byte-for-byte unchanged. The 61 per-finding
+  qualifier messages collapse by default to a tag summary; `--verbose`
+  restores the full text on hunt/replay, and the watch TUI's detail pane
+  shows it per finding with no flag. `--no-color` and `NO_COLOR` disable
+  color without changing layout on hunt, replay, and watch. `ratatui` 0.29
+  and `crossterm` 0.28 are new dependencies, justified in ADR-0013.
 - M8 relates a memory reclaim, swap, or possible-thrashing finding to host I/O
   pressure as `consistent_with` when both exist. It also relates same-cgroup
   memory and I/O pressure when that path has a positive `memory.events` high or
@@ -360,6 +377,11 @@ Operational and delivery gaps:
   workstation, so scoped context is partial and can omit higher-PID groups;
 - unlimited watch drains gracefully: the first SIGINT installs a flag so the
   in-flight window completes and is written before exit;
+- `MANIFEST.txt` (tracked-file byte sizes) predates several source files,
+  including ones added by the ADR-0013 redesign; it has no generator script
+  and is not read by CI or the release workflow, so it was left as-is rather
+  than hand-regenerated — decide whether to keep it, automate it, or remove
+  it before it is trusted for anything;
 - recordings are single-window, pre-1.0, and have no compatibility promise;
 - the five Linux acceptance scenarios remain intentionally opt-in rather than
   automated CI jobs;
@@ -482,6 +504,32 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+Later still on 2026-08-23, the ADR-0013 interface redesign (compact
+hunt/replay report, watch TUI, `--verbose`/`--no-color`/`NO_COLOR`) landed in
+four gate-passing commits, each confirming the pre-existing golden fixtures
+stayed byte-identical before adding new ones. Formatting, locked-offline
+Clippy, and the full default test suite passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
+
+The gate ran 183 unit tests (one fixture writer ignored), 13 CLI tests, three
+replay-fixture tests, and five ignored Linux acceptance tests. The full
+`ratatui`/`crossterm` dependency closure (~70 packages) was confirmed to
+resolve and build offline against the local registry cache before the
+updated `Cargo.lock` was committed. The man page still rendered successfully
+with `groff -man -Tascii`. Beyond the automated gate: an external `kill -INT`
+to a `--count`-bounded TUI session was manually verified (via a pty) to
+restore the terminal before exit — a gap in the initial implementation,
+fixed before commit; single and double SIGINT to both bounded and unbounded
+TUI sessions were each confirmed to leave the terminal in a clean state; the
+watch JSON stream was confirmed structurally to carry no new keys; and the
+compact report was confirmed to render roughly 4.7x shorter than the
+equivalent legacy output on the same fixed multi-section fixture.
 
 Later on 2026-08-23, a documentation consistency audit reconciled the v0.1.1
 and v0.1.2 SIGINT/truncation history, current JSON examples, watch semantics,

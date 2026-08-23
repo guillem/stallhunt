@@ -219,13 +219,16 @@ Create ADR before promising format compatibility.
 ## Milestone 6 — Continuous watch mode
 
 Status: complete. Finding-lifecycle watch over contiguous rolling windows is
-implemented. It is not a TUI. ADR-0008 records the output and lifecycle
-contract. The first SIGINT drains the in-flight window before exit and a
-second SIGINT terminates immediately; there is still no multi-window recording.
+implemented. ADR-0008 records the lifecycle contract; ADR-0013 replaced its
+TTY presentation with an interactive `ratatui`/`crossterm` TUI whose panels
+are that same lifecycle model, not a utilization dashboard. Piped text and
+`--json` are unchanged. The first SIGINT drains the in-flight window before
+exit and a second SIGINT terminates immediately, on both the piped and TUI
+paths; there is still no multi-window recording.
 
 Goal:
 
-Track rolling bottlenecks without becoming a generic TUI monitor.
+Track rolling bottlenecks without becoming a generic utilization monitor.
 
 Deliver:
 

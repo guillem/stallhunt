@@ -195,8 +195,10 @@ This should be the primary early workflow.
 
 Continuous rolling diagnosis.
 
-M6 implements finding-lifecycle watch over contiguous rolling windows. It is
-not a TUI. See ADR-0008.
+M6 implements finding-lifecycle watch over contiguous rolling windows; see
+ADR-0008. ADR-0013 gives it an interactive TUI on a terminal, displaying that
+same lifecycle model rather than a utilization dashboard. Piped output and
+`--json` are unchanged.
 
 ### `explain`
 
