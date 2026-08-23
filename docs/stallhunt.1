@@ -1,4 +1,4 @@
-.TH STALLHUNT 1 "August 2026" "stallhunt 0.1.2" "User Commands"
+.TH STALLHUNT 1 "August 2026" "stallhunt 0.2.0" "User Commands"
 .SH NAME
 stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 .SH SYNOPSIS
@@ -6,13 +6,14 @@ stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 [\fIcommand\fR] [\fIoptions\fR]
 .PP
 .B stallhunt
-[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR] [\fB\-\-explain\fR]
 .PP
 .B stallhunt hunt
-[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR] [\fB\-\-explain\fR]
 .PP
 .B stallhunt watch
 [\fB\-\-interval\fR \fIDURATION\fR] [\fB\-\-count\fR \fIN\fR] [\fB\-\-json\fR]
+[\fB\-\-no\-tui\fR]
 .PP
 .B stallhunt capabilities
 [\fB\-\-json\fR]
@@ -23,7 +24,7 @@ stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 [\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-redact\fR] [\fB\-\-force\fR]
 .PP
 .B stallhunt replay
-[\fB\-\-json\fR]
+[\fB\-\-json\fR] [\fB\-\-explain\fR]
 .I PATH
 .PP
 .B stallhunt redact
@@ -46,8 +47,11 @@ Running
 .B stallhunt
 with no subcommand is equivalent to
 .BR "stallhunt hunt" .
-Default human output is finding-first and concise.
+Default human output is compact and verdict-first: one headline, one line per
+resource, and the leading affected/suspect candidates.
 Use
+.B \-\-explain
+for the full evidence, qualifiers, and timing report, and
 .B \-\-json
 wherever supported to emit the full structured report.
 .SH COMMANDS
@@ -59,12 +63,30 @@ The default duration is 10 seconds.
 .B watch
 Track rolling finding lifecycle across repeated observation windows.
 The default interval is 2 seconds.
-On a TTY, text output refreshes the screen; with
+On a terminal, watch renders a full-screen TUI with host pressure gauges,
+the finding-lifecycle table, scoped cgroup pressure, and a severity history
+sparkline.
+Keys:
+.B q
+quits,
+.B e
+toggles a details pane with full per-finding summaries,
+.B ?
+or
+.B h
+toggles help, and
+.B Esc
+closes the help overlay.
+Use
+.B \-\-no\-tui
+(or a non-terminal, or
+.BR TERM=dumb )
+for the classic refreshing text renderer; with
 .BR \-\-json ,
 one compact JSON object is printed per window.
-Watch is not a TUI and does not write recordings.
-For an unlimited watch, the first SIGINT drains and writes the in-flight
-window; a second SIGINT terminates immediately.
+Watch does not write recordings.
+For an unlimited watch, the first SIGINT (or Ctrl-C) drains the in-flight
+window before exit; a second terminates immediately with status 130.
 .TP
 .B capabilities
 Report which telemetry sources are available, partially available, unsupported,
@@ -142,6 +164,21 @@ Supported by
 and
 .BR replay .
 .TP
+.B \-\-explain
+Show the full evidence, qualifiers, and timing details instead of the compact
+verdict-first summary.
+Supported by
+.B hunt
+and
+.BR replay .
+Ignored when
+.B \-\-json
+is used: JSON always carries the complete structured evidence.
+.TP
+.B \-\-no\-tui
+Render the classic refreshing text output instead of the full-screen TUI on a
+terminal.
+.TP
 .BR \-\-output " " \fIPATH\fR
 Output path for
 .B record
@@ -161,10 +198,22 @@ or
 By default, existing paths are not overwritten.
 .SH OUTPUT
 .SS Text
-Human output summarizes findings, evidence, qualifiers, and timing.
+Default human output is compact: a headline, one line per host resource with
+verdict, severity, and exact-interval PSI, the leading affected and suspect
+candidates, prominent scoped cgroup pressure, and any related-evidence
+relations.
+.B \-\-explain
+prints the full report with evidence, candidate lists, context and
+limitations, and timing.
 Partial collection is reported explicitly rather than failing silently.
 Sub-second hunts are telemetry smoke observations and do not receive healthy or
 pressure verdicts.
+.SS Terminal
+The watch TUI uses color to reinforce severity, but severity words are always
+printed, so color is never the only carrier of meaning.
+Setting
+.B NO_COLOR
+(any value) disables color.
 .SS JSON
 .B hunt
 and

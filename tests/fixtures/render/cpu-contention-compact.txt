@@ -1,0 +1,12 @@
+stallhunt · observed 10s · contention detected
+
+  CPU     contention           high      PSI some 20.00% · 2s stalled
+
+Affected (observed delay, not confirmed harm):
+  worker�next [21] — 500ms runnable delay (high)
+
+Suspects (same window only, not proven causal):
+  build�[31m [20] — 80.0% of one CPU (medium)
+  worker [21] — 30.0% of one CPU (medium)
+
+Details: --explain · Full evidence: --json

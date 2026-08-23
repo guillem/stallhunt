@@ -54,6 +54,7 @@ pub fn replay(
         &HuntOptions {
             duration_ms: recording.requested_duration_ms,
             output: options.output,
+            explain: options.explain,
         },
         |_| observation,
     )
@@ -143,6 +144,14 @@ pub fn capabilities(
 }
 
 fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
+    if options.explain {
+        hunt_text_detailed(options, result)
+    } else {
+        hunt_text_compact(options, result)
+    }
+}
+
+fn hunt_text_detailed(options: &HuntOptions, result: HuntObservation) -> String {
     let cpu_rank = analysis::analyze_cpu(result.psi.as_ref().ok(), result.cpu.as_ref().ok())
         .findings
         .first()
@@ -200,6 +209,428 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
         text.push_str(&chain_text);
     }
     text
+}
+
+/// Compact verdict-first projection (ADR-0014). It reuses the analyzer
+/// outputs without re-deriving anything and never adds claims the detailed
+/// renderer would not make.
+fn hunt_text_compact(options: &HuntOptions, result: HuntObservation) -> String {
+    let cpu_analysis = analysis::analyze_cpu(result.psi.as_ref().ok(), result.cpu.as_ref().ok());
+    let memory_analysis = result.memory.as_ref().map(|memory| {
+        analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok())
+    });
+    let io_analysis = result.io.as_ref().map(|io| {
+        analysis::analyze_io(
+            io.psi.as_ref().ok(),
+            io.diskstats.as_ref().ok(),
+            io.processes.as_ref().ok(),
+        )
+    });
+    let cgroup_analysis = result
+        .cgroup
+        .as_ref()
+        .and_then(|cgroup| cgroup.observation.as_ref().ok())
+        .map(|observation| analysis::analyze_cgroups(Some(observation)));
+
+    let mut rows: Vec<CompactRow> = Vec::new();
+    rows.push(compact_cpu_row(&result, cpu_analysis.findings.first()));
+    if let Some(memory) = result.memory.as_ref() {
+        rows.push(compact_memory_row(
+            memory,
+            memory_analysis
+                .as_ref()
+                .and_then(|analysis| analysis.findings.first()),
+        ));
+    }
+    if let Some(io) = result.io.as_ref() {
+        rows.push(compact_io_row(
+            io,
+            io_analysis
+                .as_ref()
+                .and_then(|analysis| analysis.findings.first()),
+        ));
+    }
+
+    let pressured = rows.iter().filter(|row| row.pressure).count();
+    let healthy = rows.iter().filter(|row| row.healthy).count();
+    let headline = if pressured > 0 {
+        "contention detected"
+    } else if healthy == rows.len() {
+        "no significant contention detected"
+    } else {
+        "assessment incomplete"
+    };
+
+    let mut output = format!(
+        "stallhunt · observed {} · {headline}\n\n",
+        human_duration(options.duration_ms)
+    );
+    for row in &rows {
+        output.push_str(&format!(
+            "  {:<7} {:<20} {:<9} {}\n",
+            row.label,
+            row.verdict,
+            row.severity.map(severity_name).unwrap_or("—"),
+            row.evidence,
+        ));
+    }
+
+    let cpu_finding = cpu_analysis.findings.first();
+    let cpu_contention =
+        cpu_finding.is_some_and(|finding| finding.kind == analysis::AssessmentKind::CpuContention);
+    if cpu_contention {
+        let finding = cpu_finding.expect("contention requires a finding");
+        if !finding.victims.is_empty() {
+            output.push_str("\nAffected (observed delay, not confirmed harm):\n");
+            for victim in finding.victims.iter().take(2) {
+                output.push_str(&format!(
+                    "  {} [{}] — {} runnable delay ({})\n",
+                    terminal_name(&victim.name),
+                    victim.key.pid,
+                    human_duration_from_duration(Duration::from_nanos(victim.runnable_wait_ns)),
+                    confidence_name(victim.confidence),
+                ));
+            }
+        }
+        if !finding.suspects.is_empty() {
+            output.push_str("\nSuspects (same window only, not proven causal):\n");
+            for suspect in finding.suspects.iter().take(2) {
+                output.push_str(&format!(
+                    "  {} [{}] — {:.1}% of one CPU ({})\n",
+                    terminal_name(&suspect.name),
+                    suspect.key.pid,
+                    suspect.cpu_fraction_of_one * 100.0,
+                    confidence_name(suspect.confidence),
+                ));
+            }
+        }
+    }
+
+    let io_pressure_finding = io_analysis.as_ref().and_then(|analysis| {
+        analysis
+            .findings
+            .first()
+            .filter(|finding| finding.kind == IoAssessmentKind::Pressure)
+    });
+    if let Some(finding) = io_pressure_finding {
+        output.push_str(
+            "\nI/O activity candidates (same window only; not causal or device-mapped):\n",
+        );
+        if finding.device_candidates.is_empty() && finding.process_suspects.is_empty() {
+            output.push_str("  no positive stable activity ranked\n");
+        } else {
+            for device in finding.device_candidates.iter().take(2) {
+                output.push_str(&format!(
+                    "  device {} ({}:{}) — read/write {} / {} sectors; I/O time {}\n",
+                    terminal_name(&device.name),
+                    device.key.major,
+                    device.key.minor,
+                    optional_counter(device.read_sectors_512),
+                    optional_counter(device.write_sectors_512),
+                    device.io_ticks_ms.map_or_else(
+                        || "unavailable".to_owned(),
+                        |value| human_duration_from_duration(Duration::from_millis(value))
+                    ),
+                ));
+            }
+            for process in finding.process_suspects.iter().take(2) {
+                output.push_str(&format!(
+                    "  process {} [{}] — {} read + {} charged write\n",
+                    terminal_name(&process.name),
+                    process.key.pid,
+                    optional_bytes(process.read_bytes),
+                    optional_bytes(process.write_bytes),
+                ));
+            }
+        }
+    }
+
+    if let Some(cgroup_analysis) = cgroup_analysis.as_ref() {
+        let pressured: Vec<_> = cgroup_analysis
+            .findings
+            .iter()
+            .filter(|finding| finding.kind == analysis::CgroupAssessmentKind::Pressure)
+            .collect();
+        if !pressured.is_empty() {
+            output.push_str("\nScoped cgroup pressure (scoped verdicts, not host causality):\n");
+            for finding in pressured.iter().take(3) {
+                let psi = finding.evidence.psi_some_fraction.map_or_else(
+                    || "unavailable".to_owned(),
+                    |fraction| format!("{:.2}%", fraction * 100.0),
+                );
+                output.push_str(&format!(
+                    "  {} ({}) — {} · severity {} · PSI {}\n",
+                    finding.path,
+                    cgroup_resource_label(finding.resource),
+                    cgroup_mechanism_phrase(finding.mechanism),
+                    severity_name(finding.severity),
+                    psi,
+                ));
+            }
+            if pressured.len() > 3 {
+                output.push_str(&format!(
+                    "  … {} more scoped finding(s); use --explain\n",
+                    pressured.len() - 3
+                ));
+            }
+        }
+    } else if let Some(error) = result
+        .cgroup
+        .as_ref()
+        .and_then(|cgroup| cgroup.observation.as_ref().err())
+    {
+        output.push_str(&format!(
+            "\nScoped cgroup assessment unavailable ({}).\n",
+            cgroup_error_short(*error)
+        ));
+    }
+
+    let chains = analysis::analyze_evidence_chains(
+        memory_analysis
+            .as_ref()
+            .and_then(|analysis| analysis.findings.first()),
+        io_analysis
+            .as_ref()
+            .and_then(|analysis| analysis.findings.first()),
+        &cgroup_analysis
+            .as_ref()
+            .map(|analysis| analysis.findings.clone())
+            .unwrap_or_default(),
+    );
+    if !chains.is_empty() {
+        output.push_str("\nRelated evidence (consistent with, not causal):\n");
+        for chain in chains {
+            output.push_str(&format!(
+                "  {} (confidence {})\n",
+                chain.summary,
+                confidence_name(chain.confidence)
+            ));
+        }
+    }
+
+    output.push_str("\nDetails: --explain · Full evidence: --json\n");
+    output
+}
+
+struct CompactRow {
+    label: &'static str,
+    verdict: &'static str,
+    severity: Option<analysis::Severity>,
+    evidence: String,
+    pressure: bool,
+    healthy: bool,
+}
+
+fn compact_cpu_row(result: &HuntObservation, finding: Option<&analysis::CpuFinding>) -> CompactRow {
+    match (result.psi.as_ref(), finding) {
+        (Ok(_), Some(finding)) => {
+            let (verdict, pressure, healthy) = match finding.kind {
+                analysis::AssessmentKind::CpuContention => ("contention", true, false),
+                analysis::AssessmentKind::CpuNoMeaningfulContention => ("healthy", false, true),
+                analysis::AssessmentKind::InsufficientObservation => ("insufficient", false, false),
+            };
+            CompactRow {
+                label: "CPU",
+                verdict,
+                severity: Some(finding.severity),
+                evidence: format!(
+                    "PSI some {:.2}% · {} stalled",
+                    finding.evidence.psi_some_fraction * 100.0,
+                    human_duration_from_duration(Duration::from_micros(
+                        finding.evidence.psi_total_delta_us
+                    )),
+                ),
+                pressure,
+                healthy,
+            }
+        }
+        (Err(error), _) => CompactRow {
+            label: "CPU",
+            verdict: "unavailable",
+            severity: None,
+            evidence: cpu_psi_error_short(*error).to_owned(),
+            pressure: false,
+            healthy: false,
+        },
+        (Ok(_), None) => CompactRow {
+            label: "CPU",
+            verdict: "unavailable",
+            severity: None,
+            evidence: "no CPU assessment produced".to_owned(),
+            pressure: false,
+            healthy: false,
+        },
+    }
+}
+
+fn compact_memory_row(
+    memory: &MemoryHuntObservation,
+    finding: Option<&analysis::MemoryFinding>,
+) -> CompactRow {
+    match (memory.psi.as_ref(), finding) {
+        (Ok(_), Some(finding)) => {
+            let (verdict, pressure, healthy) = match finding.kind {
+                analysis::MemoryAssessmentKind::NoHarmfulPressure => ("healthy", false, true),
+                analysis::MemoryAssessmentKind::Pressure => ("pressure", true, false),
+                analysis::MemoryAssessmentKind::ReclaimPressure => {
+                    ("reclaim pressure", true, false)
+                }
+                analysis::MemoryAssessmentKind::SwapPressure => ("swap pressure", true, false),
+                analysis::MemoryAssessmentKind::PossibleThrashing => {
+                    ("possible thrashing", true, false)
+                }
+                analysis::MemoryAssessmentKind::InsufficientObservation => {
+                    ("insufficient", false, false)
+                }
+            };
+            CompactRow {
+                label: "Memory",
+                verdict,
+                severity: Some(finding.severity),
+                evidence: format!(
+                    "PSI some {:.2}% · {} stalled",
+                    finding.evidence.psi_some_fraction * 100.0,
+                    human_duration_from_duration(Duration::from_micros(
+                        finding.evidence.psi_some_total_delta_us
+                    )),
+                ),
+                pressure,
+                healthy,
+            }
+        }
+        (Err(error), _) => CompactRow {
+            label: "Memory",
+            verdict: "unavailable",
+            severity: None,
+            evidence: memory_psi_error_short(*error).to_owned(),
+            pressure: false,
+            healthy: false,
+        },
+        (Ok(_), None) => CompactRow {
+            label: "Memory",
+            verdict: "unavailable",
+            severity: None,
+            evidence: "no memory assessment produced".to_owned(),
+            pressure: false,
+            healthy: false,
+        },
+    }
+}
+
+fn compact_io_row(result: &IoHuntObservation, finding: Option<&analysis::IoFinding>) -> CompactRow {
+    match (result.psi.as_ref(), finding) {
+        (Ok(_), Some(finding)) => {
+            let (verdict, pressure, healthy) = match finding.kind {
+                analysis::IoAssessmentKind::Pressure => ("pressure", true, false),
+                analysis::IoAssessmentKind::NoMeaningfulContention => ("healthy", false, true),
+                analysis::IoAssessmentKind::InsufficientObservation => {
+                    ("insufficient", false, false)
+                }
+            };
+            CompactRow {
+                label: "I/O",
+                verdict,
+                severity: Some(finding.severity),
+                evidence: format!(
+                    "PSI some {:.2}% · {} stalled",
+                    finding.evidence.psi_some_fraction * 100.0,
+                    human_duration_from_duration(Duration::from_micros(
+                        finding.evidence.psi_some_total_delta_us
+                    )),
+                ),
+                pressure,
+                healthy,
+            }
+        }
+        (Err(error), _) => CompactRow {
+            label: "I/O",
+            verdict: "unavailable",
+            severity: None,
+            evidence: io_psi_error_short(*error).to_owned(),
+            pressure: false,
+            healthy: false,
+        },
+        (Ok(_), None) => CompactRow {
+            label: "I/O",
+            verdict: "unavailable",
+            severity: None,
+            evidence: "no I/O assessment produced".to_owned(),
+            pressure: false,
+            healthy: false,
+        },
+    }
+}
+
+const fn cpu_psi_error_short(error: crate::psi::CpuPsiError) -> &'static str {
+    match error {
+        crate::psi::CpuPsiError::Unsupported => "CPU PSI unsupported",
+        crate::psi::CpuPsiError::PermissionDenied => "CPU PSI permission denied",
+        crate::psi::CpuPsiError::Unreadable | crate::psi::CpuPsiError::Malformed => {
+            "CPU PSI unreadable or malformed"
+        }
+        crate::psi::CpuPsiError::CounterRegressed
+        | crate::psi::CpuPsiError::EmptyInterval
+        | crate::psi::CpuPsiError::DeltaExceedsElapsed => "no exact CPU PSI interval",
+    }
+}
+
+const fn memory_psi_error_short(error: crate::psi::MemoryPsiError) -> &'static str {
+    match error {
+        crate::psi::MemoryPsiError::Unsupported => "memory PSI unsupported",
+        crate::psi::MemoryPsiError::PermissionDenied => "memory PSI permission denied",
+        crate::psi::MemoryPsiError::Unreadable | crate::psi::MemoryPsiError::Malformed => {
+            "memory PSI unreadable or malformed"
+        }
+        crate::psi::MemoryPsiError::CounterRegressed
+        | crate::psi::MemoryPsiError::EmptyInterval
+        | crate::psi::MemoryPsiError::DeltaExceedsElapsed
+        | crate::psi::MemoryPsiError::FullExceedsSome => "no exact memory PSI interval",
+    }
+}
+
+const fn io_psi_error_short(error: crate::psi::IoPsiError) -> &'static str {
+    match error {
+        crate::psi::IoPsiError::Unsupported => "I/O PSI unsupported",
+        crate::psi::IoPsiError::PermissionDenied => "I/O PSI permission denied",
+        crate::psi::IoPsiError::Unreadable | crate::psi::IoPsiError::Malformed => {
+            "I/O PSI unreadable or malformed"
+        }
+        crate::psi::IoPsiError::CounterRegressed
+        | crate::psi::IoPsiError::EmptyInterval
+        | crate::psi::IoPsiError::DeltaExceedsElapsed
+        | crate::psi::IoPsiError::FullExceedsSome => "no exact I/O PSI interval",
+    }
+}
+
+const fn cgroup_error_short(error: crate::cgroup::CgroupError) -> &'static str {
+    match error {
+        crate::cgroup::CgroupError::Unsupported => "cgroup v2 not mounted",
+        crate::cgroup::CgroupError::PermissionDenied => "cgroup permission denied",
+        crate::cgroup::CgroupError::Unreadable | crate::cgroup::CgroupError::Malformed => {
+            "cgroup telemetry unreadable or malformed"
+        }
+        crate::cgroup::CgroupError::AmbiguousMount => "cgroup v2 mount ambiguous",
+        crate::cgroup::CgroupError::EmptyInterval => "no measurable cgroup interval",
+        crate::cgroup::CgroupError::MountChanged => "cgroup mount changed during observation",
+    }
+}
+
+const fn cgroup_resource_label(resource: analysis::CgroupResourceKind) -> &'static str {
+    match resource {
+        analysis::CgroupResourceKind::Cpu => "cpu",
+        analysis::CgroupResourceKind::Memory => "memory",
+        analysis::CgroupResourceKind::Io => "io",
+    }
+}
+
+const fn cgroup_mechanism_phrase(mechanism: Option<analysis::CgroupMechanism>) -> &'static str {
+    match mechanism {
+        Some(analysis::CgroupMechanism::Reclaim) => "reclaim pressure",
+        Some(analysis::CgroupMechanism::Swap) => "swap pressure",
+        Some(analysis::CgroupMechanism::PossibleThrashing) => "possible thrashing",
+        Some(analysis::CgroupMechanism::CpuQuotaThrottle) => "quota-throttle pressure",
+        None => "pressure",
+    }
 }
 
 fn evidence_chain_hunt_text(result: &HuntObservation) -> Option<String> {
@@ -2080,6 +2511,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| observation,
         );
@@ -2095,6 +2527,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| observation,
         ))
@@ -2120,6 +2553,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| observation,
         );
@@ -2136,6 +2570,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| healthy,
         );
@@ -2155,6 +2590,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| observation,
         ))
@@ -2177,6 +2613,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| hunt_observation(),
         );
@@ -2199,6 +2636,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| hunt_observation(),
         ))
@@ -2218,6 +2656,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| HuntObservation {
                 psi: Ok(observation()),
@@ -2237,6 +2676,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| HuntObservation {
                 psi: Ok(observation()),
@@ -2259,6 +2699,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| hunt_observation(),
         );
@@ -2279,6 +2720,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| observation,
         );
@@ -2298,6 +2740,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| observation,
         ))
@@ -2317,6 +2760,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| partial,
         ))
@@ -2340,6 +2784,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| missing,
         ))
@@ -2378,6 +2823,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| chain_hunt_observation(true, true),
         );
@@ -2407,6 +2853,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| chain_hunt_observation(true, true),
         ))
@@ -2432,6 +2879,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| chain_hunt_observation(false, true),
         ))
@@ -2442,6 +2890,7 @@ mod tests {
                 &HuntOptions {
                     duration_ms: 10_000,
                     output: OutputFormat::Text,
+                    explain: true,
                 },
                 |_| chain_hunt_observation(false, true),
             )
@@ -2452,6 +2901,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| chain_hunt_observation(true, false),
         ))
@@ -2462,6 +2912,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| hunt_observation(),
         ))
@@ -2544,6 +2995,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| cgroup_chain_hunt_observation(),
         );
@@ -2568,6 +3020,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| cgroup_chain_hunt_observation(),
         ))
@@ -2599,6 +3052,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| coincident,
         ))
@@ -2617,6 +3071,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| combined,
         ))
@@ -2659,6 +3114,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| observation,
         ))
@@ -2686,6 +3142,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2730,6 +3187,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2789,6 +3247,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2836,6 +3295,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
             },
             |_| observation,
         ))
@@ -2861,6 +3321,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
@@ -2880,6 +3341,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
@@ -2905,6 +3367,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| complete,
         );
@@ -2922,6 +3385,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| retained_partial,
         );
@@ -2936,6 +3400,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| empty_partial,
         );
@@ -2961,6 +3426,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| retained_scheduler_partial,
         );
@@ -2993,6 +3459,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| no_contention,
         );
@@ -3009,6 +3476,7 @@ mod tests {
             &HuntOptions {
                 duration_ms: 100,
                 output: OutputFormat::Text,
+                explain: true,
             },
             |_| short,
         );
@@ -3041,8 +3509,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn concise_text_output_matches_the_fixed_contention_fixture() {
+    fn contention_golden_observation() -> HuntObservation {
         let observation = CpuPsiObservation {
             requested: Duration::from_secs(10),
             interval: CpuPsiInterval {
@@ -3120,18 +3587,24 @@ mod tests {
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
+        HuntObservation {
+            psi: Ok(observation),
+            cpu: Ok(cpu),
+            memory: None,
+            io: None,
+            cgroup: None,
+        }
+    }
+
+    #[test]
+    fn concise_text_output_matches_the_fixed_contention_fixture() {
         let output = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
             },
-            |_| HuntObservation {
-                psi: Ok(observation),
-                cpu: Ok(cpu),
-                memory: None,
-                io: None,
-                cgroup: None,
-            },
+            |_| contention_golden_observation(),
         );
         assert_eq!(
             output,
@@ -3139,6 +3612,124 @@ mod tests {
         );
         assert!(!output.contains('\u{1b}'));
         assert!(!output.contains("worker\nnext"));
+    }
+
+    #[test]
+    fn compact_text_output_matches_the_fixed_contention_fixture() {
+        let output = render_hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+                explain: false,
+            },
+            |_| contention_golden_observation(),
+        );
+        assert_eq!(
+            output,
+            include_str!("../tests/fixtures/render/cpu-contention-compact.txt")
+        );
+        assert!(output.contains("contention detected"));
+        assert!(output.contains("Details: --explain"));
+        assert!(!output.contains('\u{1b}'));
+        assert!(!output.contains("worker\nnext"));
+    }
+
+    #[test]
+    fn compact_text_output_distinguishes_healthy_unavailable_and_incomplete() {
+        let healthy = render_hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+                explain: false,
+            },
+            |_| {
+                let mut observation = hunt_observation();
+                observation.psi.as_mut().unwrap().interval.some_fraction = 0.001;
+                observation.psi.as_mut().unwrap().interval.total_delta_us = 12_500;
+                observation
+            },
+        );
+        assert!(
+            healthy.contains("no significant contention detected"),
+            "{healthy}"
+        );
+        assert!(healthy.contains("CPU     healthy"), "{healthy}");
+
+        let unavailable = render_hunt(
+            &HuntOptions {
+                duration_ms: 1_000,
+                output: OutputFormat::Text,
+                explain: false,
+            },
+            |_| HuntObservation {
+                psi: Err(crate::psi::CpuPsiError::PermissionDenied),
+                cpu: Err(crate::cpu::CpuError::Unreadable),
+                memory: None,
+                io: None,
+                cgroup: None,
+            },
+        );
+        assert!(
+            unavailable.contains("assessment incomplete"),
+            "{unavailable}"
+        );
+        assert!(unavailable.contains("CPU     unavailable"), "{unavailable}");
+        assert!(
+            unavailable.contains("CPU PSI permission denied"),
+            "{unavailable}"
+        );
+
+        let insufficient = render_hunt(
+            &HuntOptions {
+                duration_ms: 200,
+                output: OutputFormat::Text,
+                explain: false,
+            },
+            |_| {
+                let mut observation = hunt_observation();
+                observation.psi.as_mut().unwrap().requested = Duration::from_millis(200);
+                observation
+            },
+        );
+        assert!(
+            insufficient.contains("assessment incomplete"),
+            "{insufficient}"
+        );
+        assert!(
+            insufficient.contains("CPU     insufficient"),
+            "{insufficient}"
+        );
+    }
+
+    #[test]
+    fn compact_text_rendered_memory_io_cgroup_sections_keep_their_qualifiers() {
+        let mut observation = chain_hunt_observation(true, true);
+        observation.cgroup = Some(scoped_memory_io_cgroup_observation(
+            Some(reclaim_events()),
+            true,
+        ));
+        let output = render_hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+                explain: false,
+            },
+            |_| observation,
+        );
+        assert!(output.contains("Memory  reclaim pressure"), "{output}");
+        assert!(output.contains("I/O     pressure"), "{output}");
+        assert!(
+            output.contains("same window only; not causal or device-mapped"),
+            "{output}"
+        );
+        assert!(output.contains("Scoped cgroup pressure"), "{output}");
+        assert!(
+            output.contains("scoped verdicts, not host causality"),
+            "{output}"
+        );
+        assert!(output.contains("/workload.service (memory)"), "{output}");
+        assert!(output.contains("Related evidence"), "{output}");
+        assert!(output.contains("consistent with, not causal"), "{output}");
     }
 
     #[test]

@@ -20,6 +20,7 @@ pub enum OutputFormat {
 pub struct HuntOptions {
     pub duration_ms: u64,
     pub output: OutputFormat,
+    pub explain: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +40,7 @@ pub struct RecordOptions {
 pub struct ReplayOptions {
     pub input: PathBuf,
     pub output: OutputFormat,
+    pub explain: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +55,7 @@ pub struct WatchOptions {
     pub interval_ms: u64,
     pub count: Option<u32>,
     pub output: OutputFormat,
+    pub no_tui: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +135,9 @@ struct HuntArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Show the full evidence, qualifiers, and timing details
+    #[arg(long)]
+    explain: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -164,6 +170,9 @@ struct ReplayArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Show the full evidence, qualifiers, and timing details
+    #[arg(long)]
+    explain: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -189,6 +198,9 @@ struct WatchArgs {
     /// Emit one compact JSON object per window
     #[arg(long)]
     json: bool,
+    /// Render classic refreshing text instead of the full-screen TUI on a terminal
+    #[arg(long)]
+    no_tui: bool,
 }
 
 impl From<HuntArgs> for HuntOptions {
@@ -196,6 +208,7 @@ impl From<HuntArgs> for HuntOptions {
         Self {
             duration_ms: args.duration,
             output: output_format(args.json),
+            explain: args.explain,
         }
     }
 }
@@ -228,6 +241,7 @@ impl From<ReplayArgs> for ReplayOptions {
         Self {
             input: args.path,
             output: output_format(args.json),
+            explain: args.explain,
         }
     }
 }
@@ -248,6 +262,7 @@ impl From<WatchArgs> for WatchOptions {
             interval_ms: args.interval,
             count: args.count,
             output: output_format(args.json),
+            no_tui: args.no_tui,
         }
     }
 }
@@ -258,6 +273,7 @@ impl Cli {
             None => Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                explain: false,
             }),
             Some(Commands::Hunt(args)) => Command::Hunt(args.into()),
             Some(Commands::Watch(args)) => Command::Watch(args.into()),
@@ -404,6 +420,7 @@ mod tests {
             Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                explain: false,
             })
         );
     }
@@ -415,6 +432,7 @@ mod tests {
             Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                explain: false,
             })
         );
     }
@@ -432,6 +450,7 @@ mod tests {
                 Command::Hunt(HuntOptions {
                     duration_ms: expected_ms,
                     output: OutputFormat::Json,
+                    explain: false,
                 })
             );
         }
@@ -444,6 +463,7 @@ mod tests {
             Command::Hunt(HuntOptions {
                 duration_ms: 750,
                 output: OutputFormat::Text,
+                explain: false,
             })
         );
     }
@@ -478,6 +498,40 @@ mod tests {
     }
 
     #[test]
+    fn hunt_and_replay_accept_explain() {
+        assert_eq!(
+            expect_parse(["stallhunt", "hunt", "--explain"]),
+            Command::Hunt(HuntOptions {
+                duration_ms: DEFAULT_HUNT_DURATION_MS,
+                output: OutputFormat::Text,
+                explain: true,
+            })
+        );
+        assert_eq!(
+            expect_parse(["stallhunt", "replay", "--explain", "incident.json"]),
+            Command::Replay(ReplayOptions {
+                input: PathBuf::from("incident.json"),
+                output: OutputFormat::Text,
+                explain: true,
+            })
+        );
+        assert!(parse(["stallhunt", "hunt", "--explain", "--explain"]).is_err());
+    }
+
+    #[test]
+    fn watch_accepts_no_tui() {
+        assert_eq!(
+            expect_parse(["stallhunt", "watch", "--no-tui"]),
+            Command::Watch(WatchOptions {
+                interval_ms: DEFAULT_WATCH_INTERVAL_MS,
+                count: None,
+                output: OutputFormat::Text,
+                no_tui: true,
+            })
+        );
+    }
+
+    #[test]
     fn capabilities_supports_json() {
         assert_eq!(
             expect_parse(["stallhunt", "capabilities", "--json"]),
@@ -502,6 +556,7 @@ mod tests {
                 interval_ms: DEFAULT_WATCH_INTERVAL_MS,
                 count: None,
                 output: OutputFormat::Text,
+                no_tui: false,
             })
         );
         assert_eq!(
@@ -517,6 +572,7 @@ mod tests {
                 interval_ms: 1_000,
                 count: Some(3),
                 output: OutputFormat::Json,
+                no_tui: false,
             })
         );
         assert!(parse(["stallhunt", "watch", "--count", "0"]).is_err());
@@ -553,6 +609,7 @@ mod tests {
             Command::Replay(ReplayOptions {
                 input: PathBuf::from("incident.json"),
                 output: OutputFormat::Json,
+                explain: false,
             })
         );
         assert_eq!(

@@ -20,7 +20,28 @@ fn bare_invocation_runs_default_hunt() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("Verdict:") || stdout.contains("assessment"));
+    assert!(stdout.starts_with("stallhunt "), "{stdout}");
+    assert!(
+        stdout.contains("contention detected")
+            || stdout.contains("no significant contention detected")
+            || stdout.contains("assessment incomplete"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Details: --explain"), "{stdout}");
+}
+
+#[test]
+fn hunt_explain_restores_the_full_detail_report() {
+    let output = stallhunt(&["hunt", "--duration", "100ms", "--explain"]);
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(stdout.contains("Verdict:"), "{stdout}");
+    assert!(stdout.contains("Timing: requested 100ms"), "{stdout}");
+    assert!(!stdout.contains("Details: --explain"), "{stdout}");
 }
 
 #[test]
@@ -57,7 +78,7 @@ fn version_uses_the_binary_and_package_version() {
 
 #[test]
 fn hunt_handles_every_cpu_psi_capability_state() {
-    let output = stallhunt(&["hunt", "--duration", "100ms"]);
+    let output = stallhunt(&["hunt", "--duration", "100ms", "--explain"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
@@ -69,6 +90,19 @@ fn hunt_handles_every_cpu_psi_capability_state() {
         assert!(stdout.contains("CPU assessment unavailable"));
         assert!(stdout.contains("no exact CPU PSI interval"));
     }
+
+    let compact = stallhunt(&["hunt", "--duration", "100ms"]);
+    let compact_stdout = String::from_utf8(compact.stdout).expect("stdout should be UTF-8");
+    assert!(compact.status.success());
+    assert!(compact_stdout.contains("  CPU"), "{compact_stdout}");
+    assert!(
+        compact_stdout.contains("insufficient") || compact_stdout.contains("unavailable"),
+        "{compact_stdout}"
+    );
+    assert!(
+        compact_stdout.contains("Details: --explain"),
+        "{compact_stdout}"
+    );
 }
 
 #[test]
@@ -344,6 +378,22 @@ fn watch_emits_one_lifecycle_window_and_json_stream_object() {
     assert!(json["lifecycle"].is_array());
     assert!(json["current"]["cpu"]["status"].is_string());
     assert!(json["history"].is_array());
+}
+
+#[test]
+fn watch_no_tui_renders_classic_text() {
+    let output = stallhunt(&["watch", "--interval", "100ms", "--count", "1", "--no-tui"]);
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("WATCH  window 1/1  interval 100ms"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("Lifecycle"), "{stdout}");
 }
 
 #[test]

@@ -4,6 +4,22 @@ All notable user-facing changes to Stallhunt are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once public releases begin.
 
+## [0.2.0] - unreleased (Milestone 9 interface redesign, pending local user feedback)
+
+### Added
+
+- `hunt --explain` and `replay --explain` restore the full evidence, qualifiers, and timing report (ADR-0014).
+- `watch` renders a full-screen TUI on terminals (ratatui + crossterm): host pressure gauges, finding-lifecycle table, scoped cgroup pressure, severity history sparkline, a details pane (`e`), and a help overlay (`?`/`h`) (ADR-0013).
+- `watch --no-tui` forces the classic refreshing text renderer on a terminal.
+- The watch TUI honors `NO_COLOR`; severity words are always rendered so color never carries meaning alone.
+- Deterministic ratatui `TestBackend` render tests for the TUI and golden fixtures for both compact and explained text layouts.
+
+### Changed
+
+- Default `hunt`/`replay` text output is now compact and verdict-first: one headline, one line per host resource with verdict/severity/PSI, leading affected/suspect candidates, prominent scoped pressure, related-evidence lines, and a footer pointing at `--explain`/`--json` (ADR-0014). Scripts parsing the old default text should switch to `--explain` or `--json`.
+- `watch` automatically falls back to classic text when stdout is not a terminal, `TERM=dumb`, `--no-tui` is passed, or terminal setup fails.
+- ADR-0008's presentation clause is superseded by ADR-0013; its lifecycle, history, JSON-stream, and SIGINT contracts are unchanged.
+
 ## [0.1.2] - 2026-08-23
 
 ### Fixed

@@ -36,6 +36,8 @@ Options may include:
 --duration <DURATION>
 --interval <DURATION>
 --json
+--explain
+--no-tui
 --resource cpu|memory|io|all
 --pid <PID>
 --cgroup <PATH>
@@ -43,7 +45,10 @@ Options may include:
 --no-color
 ```
 
-Do not add flags before a real use case exists.
+Do not add flags before a real use case exists. Implemented today:
+`--duration`, `--interval`, `--json`, `--explain` (hunt/replay text detail),
+and `--no-tui` (watch). `NO_COLOR` is honored for watch TUI colors; hunt text
+output stays uncolored.
 
 ## Early command set
 
@@ -104,10 +109,14 @@ Implemented in Milestone 6:
 Follow rolling bottlenecks by finding lifecycle.
 
 ```bash
-stallhunt watch [--interval 2s] [--count N] [--json]
+stallhunt watch [--interval 2s] [--count N] [--json] [--no-tui]
 ```
 
-This is not a TUI and not a generic resource monitor.
+Watch renders a full-screen TUI on a terminal (ADR-0013) and falls back to
+classic refreshing text when piped, when `--no-tui` is passed, or when the
+terminal cannot host the TUI. It is a finding-lifecycle display, not a generic
+resource monitor: no process lists, no utilization dashboards, no interactive
+configuration.
 
 ## Current CPU diagnosis behavior
 
@@ -191,8 +200,7 @@ watch runs until interrupted. For an unlimited watch, the first SIGINT drains
 and writes the in-flight window; a second SIGINT terminates immediately with
 status 130. Bounded `--count` runs retain the default signal disposition. Each
 window reuses the previous endpoint snapshot. Text reports `new` / `persistent`
-/ `resolved` pressure findings plus a compact current-window summary. A TTY
-refreshes the screen with ANSI clear/home; piped text and `--json` append. JSON
+/ `resolved` pressure findings plus a compact current-window summary. JSON
 is one compact `stallhunt.watch_window` object per window. It is not hunt JSON
 and not a recording, and it omits full evidence. Host memory `kind` values
 already name reclaim, swap, or possible thrashing. Scoped cgroup `kind` values
@@ -201,7 +209,27 @@ name the resource and, when labeled, the mechanism
 `cgroup_memory_possible_thrashing`, `cgroup_cpu_quota_throttle_pressure`);
 identity remains path plus resource, so a mechanism change stays `persistent`. Use
 `hunt --json` or `record` when the full evidence payload is required. Invalid
-`--count` still exits 2.
+`--count` still exits 2. The classic text renderer (TTY refresh with ANSI
+clear/home; piped text appends) remains the fallback and the `--no-tui` mode.
+
+M9 redesigns the interface (ADR-0013, ADR-0014):
+
+- `hunt`/`replay` text becomes compact and verdict-first by default. The full
+  v0.1.x explanatory report moves behind `--explain`. JSON is unchanged.
+- `watch` renders a ratatui TUI on a terminal: host pressure gauges, the
+  finding-lifecycle table, scoped cgroup pressure, a severity history
+  sparkline, and a key footer. `e` toggles a details pane with the full
+  per-finding summaries; `?`/`h` toggles a help overlay explaining keys,
+  panels, and meaning limits; `q` quits. The TUI presents existing watch data
+  only — no new collectors, inference, or identities.
+- Automatic fallback to classic text when stdout is not a terminal, when
+  `TERM=dumb`, when `--no-tui` is passed, or when raw mode/alternate screen
+  setup fails.
+- Color reinforces severity in the TUI but never carries meaning alone;
+  `NO_COLOR` disables it. Hunt text output stays uncolored.
+- SIGINT semantics are unchanged: the first SIGINT or Ctrl-C drains the
+  in-flight window, the second terminates immediately with status 130. The TUI
+  restores the terminal on both paths (best-effort on the immediate path).
 
 Tracked watch pressure kinds are:
 
@@ -220,22 +248,57 @@ path-plus-resource identity.
 
 ## Human output structure
 
-Current `hunt` text output is concise and finding-first. It shows the CPU
-verdict, severity, and resource confidence; exact-interval PSI evidence;
-bounded ranked victim candidates (at most five) and suspect candidates (at
-most three), including role and confidence; relevant context and limitations;
-and requested and measured timings. Suspect output explicitly states that it
-is same-window correlation rather than proof of causality. Missing or partial
-attribution is rendered as unavailable or incomplete rather than as an observed
-empty result.
+Default `hunt`/`replay` text is compact and verdict-first (ADR-0014). It
+shows:
 
-Process names are terminal-safe and bounded in text output. The default text
-renderer does not dump raw host counters, rolling PSI averages, or a separate
-top-ten process list. `--json` remains the full structured-evidence interface:
-it retains the complete observation, typed evidence, ranked roles, capabilities,
-and collection qualifiers rather than mirroring the concise text summary.
+- a headline: observation duration plus contention detected / no significant
+  contention detected / assessment incomplete;
+- one line per host resource with verdict word, severity, and exact-interval
+  PSI `some` with cumulative stalled time;
+- for contention findings, the leading affected candidates (observed runnable
+  delay) and suspect candidates (same-window CPU consumers), each still
+  labeled with its caveat and confidence;
+- for I/O pressure, the leading same-window device and process activity
+  candidates, labeled as non-causal;
+- prominent scoped cgroup pressure, one line per scope, labeled as scoped
+  verdicts rather than host causality;
+- one line per evidence-chain relation, labeled consistent-with and carrying
+  its confidence;
+- a footer pointing at `--explain` and `--json`.
 
-Example:
+`--explain` prints the full explanatory report: the v0.1.x layout with the
+verdict/evidence lines, complete candidate lists, context and limitations,
+capability notes, and requested/measured timings. Nothing was deleted; the
+detail moved behind one flag. Suspect output still states that it is
+same-window correlation rather than proof of causality. Missing or partial
+attribution is rendered as unavailable or incomplete rather than as an
+observed empty result.
+
+Process names are terminal-safe and bounded in text output. Neither renderer
+dumps raw host counters, rolling PSI averages, or a separate top-ten process
+list. `--json` remains the full structured-evidence interface: it retains the
+complete observation, typed evidence, ranked roles, capabilities, and
+collection qualifiers rather than mirroring either text layout.
+
+Compact example (contention):
+
+```text
+stallhunt · observed 10s · contention detected
+
+  CPU     contention           high      PSI some 20.00% · 2s stalled
+  Memory  healthy              none      PSI some 0.10% · 0ms stalled
+  I/O     healthy              none      PSI some 0.05% · 0ms stalled
+
+Affected (observed delay, not confirmed harm):
+  worker [21] — 500ms runnable delay (high)
+
+Suspects (same window only, not proven causal):
+  build [20] — 80.0% of one CPU (medium)
+
+Details: --explain · Full evidence: --json
+```
+
+The same observation with `--explain` adds the full report:
 
 ```text
 CPU scheduling contention observed
@@ -252,22 +315,20 @@ Timing: requested 10s; PSI measured 10s; CPU/process measured 10s
 
 ## Negative results
 
-A healthy result should still be informative:
+A healthy result should still be informative, and compact by default:
 
 ```text
-Observed 10.0s · no significant resource contention detected.
+stallhunt · observed 10s · no significant contention detected
 
-CPU     healthy   PSI 0.2%
-Memory  healthy   PSI 0.0%
-I/O     healthy   PSI 0.4%
+  CPU     healthy              none      PSI some 0.20% · 0ms stalled
+  Memory  healthy              none      PSI some 0.00% · 0ms stalled
+  I/O     healthy              none      PSI some 0.40% · 0ms stalled
 
-Highest CPU consumer:
-  firefox [8121]  122% of one CPU
-
-No evidence indicates that it is materially delaying other work.
+Details: --explain · Full evidence: --json
 ```
 
-This distinguishes "busy" from "bottlenecked".
+This distinguishes "busy" from "bottlenecked": a high-PSI-free host can be
+busy without being bottlenecked, and the per-resource lines say so directly.
 
 ## Terminology
 
@@ -292,11 +353,12 @@ Color may communicate severity but must never be the only carrier of meaning.
 
 Support:
 
-- automatic TTY detection,
-- `--no-color`,
-- `NO_COLOR` convention if practical.
+- automatic TTY detection (the watch TUI only activates on a terminal),
+- `NO_COLOR` convention,
+- severity words are always rendered alongside color in the TUI.
 
-Do not overdesign terminal visuals before core output stabilizes.
+There is no `--no-color` flag; `NO_COLOR` covers the use case. Hunt/replay
+text output remains uncolored in both compact and `--explain` modes.
 
 ## Exit codes
 
@@ -429,7 +491,10 @@ Until then:
 
 ## Verbose/debug output
 
-`--verbose` should add diagnostic context, not turn the normal renderer into a raw `/proc` dump.
+`--explain` (hunt/replay) is the implemented detail flag: it switches the
+default compact verdict-first text to the full explanatory report. A future
+`--verbose` should add collector/diagnostic context, not turn the normal
+renderer into a raw `/proc` dump.
 
 A future `--debug-dump` can emit normalized observation data for bug reports.
 
@@ -457,9 +522,33 @@ Warn or reduce confidence for observation windows too short to support robust in
 
 ## TUI
 
-A TUI is explicitly not an early priority. M6 `watch` refreshes finding
-lifecycle on a TTY without introducing a TUI framework.
+M9 adds a watch TUI built on ratatui (ADR-0013). The differentiator remains
+diagnosis, so the TUI displays changing findings rather than reproducing
+`htop`. It is a presentation of the same `WatchWindow` data the classic text
+renderer prints: no new collectors, inference, or identities.
 
-The differentiator is diagnosis.
+Layout (top to bottom):
 
-If a TUI is added later, it should display changing findings rather than simply reproduce `htop`.
+- header line: tool, window index, interval, and drain state;
+- host pressure gauges for CPU, memory, and I/O (exact-window PSI `some`);
+- finding lifecycle table (new / persistent / resolved) with scope, kind,
+  severity, PSI, and window count;
+- scoped cgroup pressure panel and a severity history sparkline;
+- footer with key hints.
+
+Keys:
+
+- `q` quit;
+- `e` toggle the details pane (full per-finding summaries and current-window
+  signal summaries);
+- `?` / `h` toggle a help overlay explaining the panels and meaning limits;
+- `Esc` close the help overlay;
+- `Ctrl-C` first drains the in-flight window then exits, a second exits now
+  with status 130.
+
+The TUI activates only when stdout is a terminal, `TERM` is not `dumb`, a
+terminal size is available, and `--no-tui` is not passed. Otherwise watch
+falls back to the classic refreshing text renderer. `--json` and piped text
+are unchanged. Terminal restore (raw mode off, cursor visible, alternate
+screen left) happens on graceful exit and best-effort on the immediate
+second-SIGINT path.

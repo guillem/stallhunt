@@ -1,7 +1,12 @@
 # ADR-0008: Watch tracks finding lifecycle, not a live dashboard
 
-- Status: Accepted
+- Status: Accepted (presentation clauses superseded by ADR-0013 on 2026-08-23)
 - Date: 2026-08-17
+
+Note: ADR-0013 replaces the "no TUI crate, alternate screen, or interactive
+navigation" presentation clause with a ratatui-based watch TUI that activates
+on a TTY. The lifecycle model, identities, history bound, JSON stream, and
+SIGINT contract in this ADR remain in force unchanged.
 
 ## Context
 

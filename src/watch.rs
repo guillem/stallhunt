@@ -379,9 +379,31 @@ const fn state_rank(state: LifecycleState) -> u8 {
 
 pub fn run(options: &WatchOptions) -> io::Result<()> {
     let stdout = io::stdout();
-    let refresh = options.output == OutputFormat::Text && stdout.is_terminal();
+    if options.output == OutputFormat::Text && stdout.is_terminal() {
+        if tui_eligible(options) {
+            match crate::tui::run(options) {
+                Ok(true) => return Ok(()),
+                // The TUI could not start (no size, failed raw mode or
+                // alternate screen); fall back to the classic text renderer.
+                Ok(false) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let mut writer = stdout.lock();
+        return run_on(&mut writer, options, true);
+    }
     let mut writer = stdout.lock();
-    run_on(&mut writer, options, refresh)
+    run_on(&mut writer, options, false)
+}
+
+fn tui_eligible(options: &WatchOptions) -> bool {
+    if options.no_tui {
+        return false;
+    }
+    match std::env::var_os("TERM") {
+        Some(value) => value != "dumb",
+        None => true,
+    }
 }
 fn write_window(
     writer: &mut dyn Write,
@@ -400,7 +422,7 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
         return Ok(());
     }
 
-    let interrupt = InterruptFlag::install(options.count.is_none());
+    let interrupt = InterruptFlag::install(options.count.is_none(), || {});
     let mut start = read_start_endpoint();
     let mut tracker = WatchTracker::new();
     let mut completed = 0_u32;
@@ -434,12 +456,15 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
 /// replaced by a flag so an in-flight `watch` window can complete and be
 /// written before the loop exits. Without installation (bounded `--count`
 /// runs), SIGINT keeps its default terminating behavior.
-struct InterruptFlag {
+pub(crate) struct InterruptFlag {
     raised: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl InterruptFlag {
-    fn install(enabled: bool) -> Self {
+    /// Installs the cooperative SIGINT handler. `on_immediate_exit` runs
+    /// best-effort before the second-SIGINT immediate termination (the TUI
+    /// uses it to restore the terminal); text mode passes a no-op.
+    pub(crate) fn install(enabled: bool, on_immediate_exit: impl Fn() + Send + 'static) -> Self {
         let raised = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         if enabled {
             let handler_flag = std::sync::Arc::clone(&raised);
@@ -449,6 +474,7 @@ impl InterruptFlag {
                     // preserve the default shell-visible exit status when the
                     // operator interrupts a second time rather than waiting
                     // for a potentially five-minute window to drain.
+                    on_immediate_exit();
                     std::process::exit(130);
                 }
             });
@@ -456,7 +482,7 @@ impl InterruptFlag {
         Self { raised }
     }
 
-    fn raised(&self) -> bool {
+    pub(crate) fn raised(&self) -> bool {
         self.raised.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
@@ -650,7 +676,7 @@ fn window_index_label(window: &WatchWindow) -> String {
     }
 }
 
-fn state_label(state: LifecycleState) -> &'static str {
+pub(crate) fn state_label(state: LifecycleState) -> &'static str {
     match state {
         LifecycleState::New => "NEW",
         LifecycleState::Persistent => "PERSISTENT",
@@ -658,7 +684,7 @@ fn state_label(state: LifecycleState) -> &'static str {
     }
 }
 
-fn status_label(status: ObservationStatus) -> &'static str {
+pub(crate) fn status_label(status: ObservationStatus) -> &'static str {
     match status {
         ObservationStatus::Pressure => "pressure",
         ObservationStatus::Healthy => "healthy",
@@ -666,7 +692,7 @@ fn status_label(status: ObservationStatus) -> &'static str {
     }
 }
 
-fn id_label(id: &FindingId) -> String {
+pub(crate) fn id_label(id: &FindingId) -> String {
     match id {
         FindingId::Cpu => "CPU".into(),
         FindingId::Memory => "Memory".into(),
@@ -689,7 +715,7 @@ fn psi_suffix(fraction: Option<f64>) -> String {
     }
 }
 
-fn format_ms(duration_ms: u64) -> String {
+pub(crate) fn format_ms(duration_ms: u64) -> String {
     if duration_ms % 60_000 == 0 && duration_ms >= 60_000 {
         format!("{}m", duration_ms / 60_000)
     } else if duration_ms % 1_000 == 0 {
@@ -699,7 +725,7 @@ fn format_ms(duration_ms: u64) -> String {
     }
 }
 
-const fn severity_name(severity: Severity) -> &'static str {
+pub(crate) const fn severity_name(severity: Severity) -> &'static str {
     match severity {
         Severity::None => "none",
         Severity::Low => "low",
@@ -946,7 +972,7 @@ fn unconfirmed_signal(kind: &'static str, summary: &str) -> ResourceSignal {
     }
 }
 
-const fn severity_rank(severity: Severity) -> u8 {
+pub(crate) const fn severity_rank(severity: Severity) -> u8 {
     match severity {
         Severity::None => 0,
         Severity::Low => 1,
@@ -1244,6 +1270,7 @@ mod tests {
                 interval_ms: 2_000,
                 count: Some(3),
                 output: OutputFormat::Text,
+                no_tui: false,
             },
             &first,
             false,
@@ -1266,6 +1293,7 @@ mod tests {
                     interval_ms: 2_000,
                     count: Some(3),
                     output: OutputFormat::Json,
+                    no_tui: false,
                 },
                 &first,
                 false,

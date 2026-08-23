@@ -53,3 +53,6 @@ What credible options were rejected and why?
 - [`0009-evidence-chains.md`](0009-evidence-chains.md)
 - [`0010-same-cgroup-evidence-chains.md`](0010-same-cgroup-evidence-chains.md)
 - [`0011-cgroup-memory-stat-chains.md`](0011-cgroup-memory-stat-chains.md)
+- [`0012-stallhunt-identity.md`](0012-stallhunt-identity.md)
+- [`0013-terminal-stack-and-watch-tui.md`](0013-terminal-stack-and-watch-tui.md)
+- [`0014-compact-default-output.md`](0014-compact-default-output.md)

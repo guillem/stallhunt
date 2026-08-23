@@ -169,8 +169,9 @@ src/
   observe.rs    # sequential bounded multi-resource observation orchestration
   psi.rs        # CPU, memory, and I/O PSI parsing, capabilities, and intervals
   record.rs     # versioned normalized-observation recordings and redaction
-  render.rs     # concise finding-first text and full-evidence JSON rendering
-  watch.rs      # rolling finding lifecycle tracker and watch renderer
+  render.rs     # compact default + --explain text, and full-evidence JSON rendering
+  tui.rs        # ratatui watch presentation (ADR-0013); no collectors or inference
+  watch.rs      # rolling finding lifecycle tracker and classic watch renderer
 tests/
   cli.rs                # executable-level behavior tests
   cpu_acceptance.rs     # ignored bounded rootless live-pressure acceptance test
@@ -243,9 +244,9 @@ CPU/memory/I/O and a bounded set of cgroup pressure findings as new,
 persistent, or resolved. It keeps 16 compact history windows and does not
 retain full observations. Cgroup watch `kind` strings include the scoped
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
-identity remains path plus resource. TTY text refreshes by clearing the screen; JSON is
-one compact `stallhunt.watch_window` object per window, not a recording and
-not hunt JSON.
+identity remains path plus resource. Classic TTY text refreshes by clearing the
+screen; JSON is one compact `stallhunt.watch_window` object per window, not a
+recording and not hunt JSON.
 
 M8 adds `analyze_evidence_chains` in `analysis.rs` (ADR-0009, ADR-0010,
 ADR-0011). It consumes already-produced memory, I/O, and cgroup findings and
@@ -256,6 +257,16 @@ pressure, and an independent mechanism: `memory.events` high/max, or
 related-evidence section; hunt JSON adds `evidence_chains`. The relation is not
 ranked as a resource finding, does not join host findings to cgroup findings,
 and is not tracked by watch.
+
+M9 redesigns presentation without touching collection or inference (ADR-0013,
+ADR-0014). `render.rs` keeps the analyzer calls but now emits a compact
+verdict-first text by default and the full v0.1.x explanatory report behind
+`--explain`; JSON is unchanged. `tui.rs` is a new presentation-only module that
+renders the watch `WatchWindow` with ratatui/crossterm on a terminal and adds
+no collectors, inference, or identities. `watch.rs` retains the lifecycle
+tracker and the classic text/JSON renderers, which remain the non-TTY,
+`--no-tui`, and `TERM=dumb` fallbacks. Presentation stays a projection of the
+finding model: it never recalculates a diagnosis.
 
 ## Observation lifecycle
 

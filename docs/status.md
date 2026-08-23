@@ -4,25 +4,36 @@ Last updated: 2026-08-23
 
 ## Current milestone
 
-**Milestone 8 — corrective maintenance release v0.1.2 shipped**
+**Milestone 9 — interface redesign implemented, pending local user feedback**
 
-Milestones 1–6 remain functionally complete. Since the v0.1.0 productization,
-v0.1.1 landed the `BOTTLENECK_*` → `STALLHUNT_*` acceptance-variable rename
-(closing that ADR-0012 open decision), regression tests intended to cover four
-documented gaps (16-chain truncation order, schema-1 decode without
-`memory_stat`, host-memory watch kind transitions, invalid host `full` blocking
-possible-thrashing), and a graceful first-SIGINT drain for unlimited watch. The
-release workflow's Node-20-deprecated actions were bumped to
-`actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
-v0.1.2 corrective release makes the advertised second-SIGINT termination real
-and ensures the 16-chain regression actually reaches truncation with 18
-eligible candidates. The repository remains parked: no additional M8 chain or
-M7 probe is approved.
-Do not start M7 merely because eBPF is interesting; add a probe only for
-a concrete diagnostic gap. M5 recording and replay remain available for offline
-re-analysis. M4 remains implemented with opt-in live observational validation;
-that test still requires a caller-owned delegated subtree that already contains
-the test process and does not mutate the hierarchy.
+Field feedback on v0.1.x was that default `hunt` output reads like a wall of
+text and `watch` looks primitive next to `htop`/`btop`, while the explanatory
+lines themselves are valued. Milestone 9 redesigns presentation without
+touching collection or inference:
+
+- `hunt`/`replay` text is now compact and verdict-first by default; the full
+  v0.1.x explanatory report moved behind `--explain` (ADR-0014). JSON is
+  unchanged.
+- `watch` renders a ratatui/crossterm full-screen TUI on terminals: host
+  pressure gauges, finding-lifecycle table, scoped cgroup pressure, severity
+  history sparkline, a details pane (`e`), and a help overlay (`?`/`h`)
+  (ADR-0013). Classic refreshing text remains the fallback for pipes,
+  `--no-tui`, `TERM=dumb`, and failed terminal setup. Watch JSON, lifecycle
+  semantics, history bounds, and the SIGINT drain contract are unchanged
+  (ADR-0008 remains in force except for its superseded presentation clause).
+- `NO_COLOR` disables TUI colors; severity words are always rendered so color
+  never carries meaning alone.
+- Version is bumped to 0.2.0 in `Cargo.toml`; nothing is tagged or released
+  yet. Local users will test the redesign on this worktree and provide
+  feedback before the release decision.
+
+Milestones 1–6 remain functionally complete; M8's two chain slices and M5
+recording/replay are unchanged. The repository remains parked for additional
+M8 chains and M7 probes: do not start M7 merely because eBPF is interesting;
+add a probe only for a concrete diagnostic gap. M4 remains implemented with
+opt-in live observational validation; that test still requires a caller-owned
+delegated subtree that already contains the test process and does not mutate
+the hierarchy.
 
 ## Verified milestone assessment
 
@@ -53,9 +64,9 @@ the test process and does not mutate the hierarchy.
 - **M6 complete within its exit condition:** `watch` classifies host and
   bounded cgroup pressure findings as new, persistent, or resolved across
   contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
-  keeps 16 history windows. It is not a TUI and does not store full evidence.
-  A second SIGINT while draining terminates immediately with the conventional
-  exit status; `--count` bounds scripted runs.
+  keeps 16 history windows. A second SIGINT while draining terminates
+  immediately with the conventional exit status; `--count` bounds scripted
+  runs. Its presentation clause is superseded by M9/ADR-0013.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
   reclaim, swap, or possible-thrashing finding to host I/O pressure, and can
   relate same-cgroup memory plus I/O pressure when `memory.events` high/max or
@@ -63,6 +74,11 @@ the test process and does not mutate the hierarchy.
   Coincident PSI without that independent mechanism does not create a chain.
   Confidence is never high. Host findings are not linked to cgroup findings.
   Watch does not track chain identities.
+- **M9 implemented, unvalidated by users:** compact default text, `--explain`,
+  and the watch TUI are implemented with deterministic fixture and
+  `TestBackend` coverage and a pseudo-TTY smoke run. Real-user feedback and the
+  0.2.0 release decision are pending. The TUI is presentation-only: no new
+  collectors, inference, or identities.
 - **M7 not started; remaining M8 chains not started:** no eBPF probe exists,
   and no CPU–I/O, host–cgroup, or process-device chain exists.
 
@@ -247,6 +263,32 @@ the test process and does not mutate the hierarchy.
   `CgroupAssessmentKind` remains `Pressure`. Mechanism confidence is low.
   `nr_throttled` without throttled time does not label. Throttle counters
   without PSI do not create pressure. Watch still keys off `Pressure`.
+- M9 makes default `hunt`/`replay` text compact and verdict-first (headline,
+  one line per host resource with verdict/severity/exact-interval PSI and
+  cumulative stalled time, leading affected/suspect candidates with their
+  caveats, leading same-window I/O activity candidates under pressure,
+  prominent scoped cgroup pressure, one line per evidence-chain relation, and
+  a `--explain`/`--json` footer). `hunt --explain` and `replay --explain`
+  print the full v0.1.x explanatory report unchanged; `--explain` is ignored
+  with `--json`, which always carries the complete structured evidence. The
+  compact layout is a projection of analyzer output: it adds no claims,
+  thresholds, or categories. Golden fixtures cover compact contention and the
+  explained layout; structural tests cover healthy, unavailable, insufficient,
+  multi-resource, scoped, and chain cases.
+- M9 renders `watch` as a ratatui/crossterm full-screen TUI on terminals
+  (stdout is a TTY, `TERM` is not `dumb`, terminal size available, no
+  `--no-tui`): header with window/interval/drain state, host PSI gauges, the
+  finding-lifecycle table, scoped cgroup pressure, a max-severity history
+  sparkline over the retained 16 windows, and a key footer. `e` toggles a
+  details pane with full per-finding and current-window summaries; `?`/`h`
+  toggles a help overlay documenting keys, panels, and meaning limits; `Esc`
+  closes it; `q` quits immediately. The TUI presents existing `WatchWindow`
+  data only. It restores the terminal on graceful exit and best-effort before
+  the second-SIGINT immediate exit. `NO_COLOR` disables color; severity words
+  always accompany color. On setup failure watch falls back to the classic
+  text renderer; piped text and `--json` are unchanged. Deterministic
+  `TestBackend` tests cover the panels, overlays, empty/first-window states,
+  and too-small-terminal degradation.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -306,6 +348,14 @@ the test process and does not mutate the hierarchy.
   drains the current window after the first SIGINT; a second SIGINT exits
   immediately. Consecutive 100 ms windows remain smoke observations, same as
   hunt.
+- The watch TUI is presentation-only and has not been validated by real users
+  yet; the 0.2.0 release is deliberately not tagged. Table columns can
+  truncate long cgroup paths on narrow terminals (the details pane and
+  `hunt --explain` carry the full strings). Terminal restore on the immediate
+  second-SIGINT path is best-effort because the handler exits the process
+  directly. The TUI depends on ratatui 0.29/crossterm 0.28 because ratatui
+  0.30 requires Rust 1.88, above the 1.85 MSRV; upgrading the terminal stack
+  requires an MSRV decision first.
 - M8's chains are same-window correlation of independent PSI plus either host
   VM counters or same-cgroup `memory.events` high/max or `memory.stat`
   direct-reclaim/swap-in deltas. They do not prove reclaim or swap caused I/O
@@ -327,8 +377,16 @@ the test process and does not mutate the hierarchy.
 
 ## Pending work
 
-The repository is intentionally parked after the scoped possible-thrashing
-slice. No additional M8 chain or M7 probe is approved.
+The implementation is parked after the Milestone 9 interface redesign. No
+additional M8 chain or M7 probe is approved.
+
+Interface feedback loop (current priority):
+
+- local users test the redesigned interface on real hosts, comparing the TUI
+  against `--no-tui` classic text and v0.1.x behavior;
+- collect feedback on compact default density, `--explain` discoverability,
+  TUI panel layout, colors, and key bindings;
+- decide the 0.2.0 release (tag) after feedback is incorporated.
 
 Diagnostic and attribution gaps:
 
@@ -377,12 +435,14 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Write down one concrete diagnostic question and the independent evidence needed
-to answer it before selecting another feature. No such question is currently
-selected. Do not start Milestone 7 unless the question cannot be answered with
-current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain unless
-independent linking evidence already exists; do not treat coincident PSI as a
-path, and do not link host findings to cgroup findings.
+Run the local user feedback round for the Milestone 9 interface: have users
+compare `stallhunt`, `stallhunt hunt --explain`, `stallhunt watch`, and
+`stallhunt watch --no-tui` on real hosts, record what confuses or convinces
+them, and fold the results into the 0.2.0 release decision. Do not start
+Milestone 7 unless a concrete diagnostic question cannot be answered with
+current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain
+unless independent linking evidence already exists; do not treat coincident
+PSI as a path, and do not link host findings to cgroup findings.
 
 ## Current design risks
 
@@ -461,10 +521,20 @@ Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 Not yet decided:
 
 - serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
-- color/terminal crate,
 - eventual eBPF framework,
 - compatibility policy, additional targets, and signing/provenance for
-  pre-built release artifacts.
+  pre-built release artifacts,
+- MSRV policy for terminal-stack upgrades (ratatui 0.30+ needs Rust 1.88).
+
+Decided in ADR-0013 (2026-08-23, closes the open "color/terminal crate" item):
+
+- terminal stack: ratatui 0.29 + crossterm 0.28, watch-only TUI on a TTY,
+  `NO_COLOR` support, automatic text fallback.
+
+Decided in ADR-0014:
+
+- compact verdict-first default text for hunt/replay, full report behind
+  `--explain`, JSON unchanged.
 
 Decided in ADR-0012:
 
@@ -478,6 +548,27 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-23, the Milestone 9 interface redesign was implemented and
+validated. Default `hunt`/`replay` text became compact and verdict-first with
+the full report behind `--explain`; `watch` gained a ratatui/crossterm TUI on
+terminals with automatic classic-text fallback (`--no-tui`, non-TTY,
+`TERM=dumb`). Version is 0.2.0 in `Cargo.toml` (untagged). Formatting,
+locked-offline Clippy with `-D warnings`, and the full default test gates
+passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
+
+The gate ran 166 unit tests (all passed, one fixture writer ignored), 15 CLI
+tests, and three replay-fixture tests, plus the ignored opt-in Linux
+acceptance tests. Deterministic ratatui `TestBackend` tests cover TUI panels,
+overlays, empty/first-window states, and too-small-terminal degradation. The
+man page still renders with `groff`. Real-user feedback and the 0.2.0 release
+decision remain pending.
 
 Later on 2026-08-23, a documentation consistency audit reconciled the v0.1.1
 and v0.1.2 SIGINT/truncation history, current JSON examples, watch semantics,

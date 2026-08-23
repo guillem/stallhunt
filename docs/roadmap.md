@@ -219,9 +219,11 @@ Create ADR before promising format compatibility.
 ## Milestone 6 — Continuous watch mode
 
 Status: complete. Finding-lifecycle watch over contiguous rolling windows is
-implemented. It is not a TUI. ADR-0008 records the output and lifecycle
-contract. The first SIGINT drains the in-flight window before exit and a
-second SIGINT terminates immediately; there is still no multi-window recording.
+implemented. ADR-0008 records the output and lifecycle contract; ADR-0013
+supersedes its presentation clause in Milestone 9 with a ratatui TUI (classic
+text remains the fallback). The first SIGINT drains the in-flight window
+before exit and a second SIGINT terminates immediately; there is still no
+multi-window recording.
 
 Goal:
 
@@ -282,6 +284,50 @@ CPU-heavy build
 ```
 
 Avoid overclaiming causality.
+
+## Milestone 9 — Interface redesign
+
+Status: implementation complete on the `stallhunt-qwen` worktree; pending
+local user feedback before release. Not yet tagged or released.
+
+Goal:
+
+> Give sysadmins the same evidence-backed diagnosis in a much clearer package:
+> compact by default in one-shot mode, and a modern full-screen presentation in
+> watch mode, without becoming a utilization dashboard.
+
+Field feedback on v0.1.x: default `hunt` output read like a wall of text, and
+`watch` looked primitive next to `htop`/`btop`. The explanations themselves
+were considered valuable, so they move behind `--explain` rather than being
+deleted.
+
+Deliver:
+
+- compact verdict-first default text for `hunt`/`replay` (headline, one line
+  per resource, leading affected/suspect candidates, scoped pressure,
+  related-evidence lines),
+- `hunt --explain` / `replay --explain` restoring the full v0.1.x explanatory
+  report,
+- a ratatui/crossterm watch TUI on terminals: host pressure gauges, finding
+  lifecycle table, scoped cgroup pressure, severity history sparkline, details
+  pane (`e`), and help overlay (`?`/`h`),
+- automatic fallback to the classic refreshing text renderer when stdout is
+  not a TTY, `TERM=dumb`, `--no-tui` is passed, or terminal setup fails,
+- unchanged JSON, recordings, watch window stream, lifecycle semantics, and
+  SIGINT drain contract,
+- deterministic fixture tests for both text layouts and ratatui `TestBackend`
+  render tests for the TUI.
+
+Decisions: ADR-0013 (terminal stack and TUI scope), ADR-0014 (compact output
+policy). ADR-0008's lifecycle contract remains in force; only its presentation
+clause is superseded.
+
+Exit condition:
+
+Local users can run the redesigned interface on real hosts and compare it
+against `--no-tui`/v0.1.x behavior; feedback is collected before the 0.2.0
+release decision. No presentation change may alter findings, evidence, or
+lifecycle semantics.
 
 ## Future possibilities
 

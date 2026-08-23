@@ -5,20 +5,27 @@
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
 block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, and the
 first two Milestone 8 evidence-chain slices. Scoped cgroup findings can also
-carry reclaim, swap, possible-thrashing, or quota-throttle context labels. The
-repository is currently parked pending selection of another concrete diagnostic
-question; see `status.md`.
+carry reclaim, swap, possible-thrashing, or quota-throttle context labels.
+Milestone 9 redesigned the interface: compact default hunt/replay text with the
+full report behind `--explain`, and a ratatui watch TUI on terminals. The
+repository is pending local user feedback on that redesign before the 0.2.0
+release; see `status.md`.
 
 Build and run it from the repository root:
 
 ```bash
 cargo build --release --locked
 ./target/release/stallhunt hunt --duration 1s
+./target/release/stallhunt hunt --duration 1s --explain
 ./target/release/stallhunt capabilities --json
 ./target/release/stallhunt record --duration 1s --output /tmp/incident.json
 ./target/release/stallhunt replay /tmp/incident.json
 ./target/release/stallhunt watch --interval 1s --count 2
+./target/release/stallhunt watch --interval 1s --count 2 --no-tui
 ```
+
+`watch` renders a full-screen TUI when stdout is a terminal; `--no-tui`,
+piping, or `TERM=dumb` selects the classic refreshing text renderer.
 
 For installed use, see [`install.md`](install.md):
 

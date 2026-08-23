@@ -64,8 +64,27 @@ fn replay_fixtures_render_human_output() {
         );
         let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
         assert!(
-            stdout.contains("Verdict:"),
-            "{name} should render a verdict"
+            stdout.contains("contention detected")
+                || stdout.contains("no significant contention detected")
+                || stdout.contains("assessment incomplete"),
+            "{name} should render a compact headline: {stdout}"
+        );
+        assert!(
+            stdout.contains("Details: --explain"),
+            "{name} should point at the full report: {stdout}"
+        );
+
+        let explained = stallhunt(&["replay", "--explain", &path]);
+        assert!(
+            explained.status.success(),
+            "{}: {}",
+            name,
+            String::from_utf8_lossy(&explained.stderr)
+        );
+        let explained_stdout = String::from_utf8(explained.stdout).expect("utf-8 stdout");
+        assert!(
+            explained_stdout.contains("Verdict:"),
+            "{name} should render a verdict with --explain"
         );
     }
 }
