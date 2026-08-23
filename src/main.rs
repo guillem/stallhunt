@@ -10,6 +10,7 @@ mod psi;
 mod record;
 mod render;
 mod style;
+mod tui;
 mod view;
 mod watch;
 

@@ -1,6 +1,6 @@
 # ADR-0008: Watch tracks finding lifecycle, not a live dashboard
 
-- Status: Accepted
+- Status: Superseded by [ADR-0014](0014-watch-findings-tui.md)
 - Date: 2026-08-17
 
 ## Context

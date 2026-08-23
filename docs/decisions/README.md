@@ -55,3 +55,4 @@ What credible options were rejected and why?
 - [`0011-cgroup-memory-stat-chains.md`](0011-cgroup-memory-stat-chains.md)
 - [`0012-stallhunt-identity.md`](0012-stallhunt-identity.md)
 - [`0013-terminal-stack.md`](0013-terminal-stack.md)
+- [`0014-watch-findings-tui.md`](0014-watch-findings-tui.md)

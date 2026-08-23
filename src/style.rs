@@ -76,6 +76,16 @@ pub fn paint_severity(label: &str, severity: Severity, color: bool) -> String {
     }
 }
 
+pub fn ratatui_severity_color(severity: Severity) -> Option<ratatui::style::Color> {
+    match severity {
+        Severity::None => None,
+        Severity::Low => Some(ratatui::style::Color::Cyan),
+        Severity::Moderate => Some(ratatui::style::Color::Yellow),
+        Severity::High => Some(ratatui::style::Color::LightRed),
+        Severity::Severe => Some(ratatui::style::Color::Red),
+    }
+}
+
 pub fn human_duration(duration_ms: u64) -> String {
     human_duration_from_duration(Duration::from_millis(duration_ms))
 }

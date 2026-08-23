@@ -324,7 +324,7 @@ fn record_without_output_is_invalid_invocation() {
 
 #[test]
 fn watch_emits_one_lifecycle_window_and_json_stream_object() {
-    let text = stallhunt(&["watch", "--interval", "100ms", "--count", "1"]);
+    let text = stallhunt(&["watch", "--interval", "100ms", "--count", "1", "--plain"]);
     let stdout = String::from_utf8(text.stdout).expect("stdout should be UTF-8");
     assert!(
         text.status.success(),

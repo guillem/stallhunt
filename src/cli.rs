@@ -75,6 +75,8 @@ pub struct WatchOptions {
     pub interval_ms: u64,
     pub count: Option<u32>,
     pub output: OutputFormat,
+    pub plain: bool,
+    pub style: TextStyle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +209,9 @@ struct WatchArgs {
     /// Stop after N windows; omit to run until interrupted
     #[arg(long, value_name = "N", value_parser = parse_count_value)]
     count: Option<u32>,
+    /// Force compact text on a TTY instead of the findings TUI
+    #[arg(long)]
+    plain: bool,
 }
 
 impl From<RecordArgs> for RecordOptions {
@@ -257,6 +262,8 @@ impl Cli {
                 interval_ms: args.interval,
                 count: args.count,
                 output,
+                plain: args.plain,
+                style,
             }),
             Some(Commands::Capabilities(_)) => {
                 Command::Capabilities(CapabilitiesOptions { output })
@@ -511,6 +518,13 @@ mod tests {
             Command::Hunt(options) => assert!(options.style.explain),
             other => panic!("expected hunt, got {other:?}"),
         }
+        match expect_parse(["stallhunt", "watch", "--plain"]) {
+            Command::Watch(options) => {
+                assert!(options.plain);
+                assert_eq!(options.output, OutputFormat::Text);
+            }
+            other => panic!("expected watch, got {other:?}"),
+        }
     }
 
     #[test]
@@ -520,6 +534,7 @@ mod tests {
                 assert_eq!(options.interval_ms, DEFAULT_WATCH_INTERVAL_MS);
                 assert_eq!(options.count, None);
                 assert_eq!(options.output, OutputFormat::Text);
+                assert!(!options.plain);
             }
             other => panic!("expected watch, got {other:?}"),
         }

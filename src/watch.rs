@@ -379,11 +379,14 @@ const fn state_rank(state: LifecycleState) -> u8 {
 
 pub fn run(options: &WatchOptions) -> io::Result<()> {
     let stdout = io::stdout();
-    let refresh = options.output == OutputFormat::Text && stdout.is_terminal();
+    let tty = stdout.is_terminal();
+    if options.output == OutputFormat::Text && tty && !options.plain {
+        return crate::tui::run(options);
+    }
+    let refresh = options.output == OutputFormat::Text && tty;
     let mut writer = stdout.lock();
     run_on(&mut writer, options, refresh)
 }
-
 fn write_window(
     writer: &mut dyn Write,
     options: &WatchOptions,
@@ -1203,6 +1206,8 @@ mod tests {
                 interval_ms: 2_000,
                 count: Some(3),
                 output: OutputFormat::Text,
+                plain: true,
+                style: crate::cli::TextStyle::default(),
             },
             &first,
             false,
@@ -1224,6 +1229,8 @@ mod tests {
                     interval_ms: 2_000,
                     count: Some(3),
                     output: OutputFormat::Json,
+                    plain: false,
+                    style: crate::cli::TextStyle::default(),
                 },
                 &first,
                 false,
