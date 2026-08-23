@@ -98,9 +98,12 @@ impl std::error::Error for CliError {}
     name = "stallhunt",
     version,
     about = "Linux performance triage that reports evidence-backed bottlenecks",
+    args_conflicts_with_subcommands = true,
     after_help = "Run `stallhunt` with no subcommand for a default 10s hunt.\nUse `stallhunt completions <SHELL>` to generate shell completions."
 )]
 pub struct Cli {
+    #[command(flatten)]
+    implicit_hunt: ImplicitHuntArgs,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -134,6 +137,27 @@ struct HuntArgs {
     /// Observation duration from 100ms to 5m
     #[arg(long, value_name = "DURATION", default_value = "10s", value_parser = parse_duration_value)]
     duration: u64,
+    /// Emit machine-readable JSON
+    #[arg(long)]
+    json: bool,
+    /// Print full context and limitation messages instead of collapsed caveats
+    #[arg(long)]
+    verbose: bool,
+    /// Disable color; NO_COLOR is also honored
+    #[arg(long)]
+    no_color: bool,
+}
+
+/// Hunt options accepted at the command root when no subcommand is present.
+///
+/// These deliberately have no clap defaults: a missing root flag must remain
+/// distinguishable from an explicit subcommand so clap can reject ambiguous
+/// invocations such as `stallhunt --json capabilities`.
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+struct ImplicitHuntArgs {
+    /// Observation duration from 100ms to 5m
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration_value)]
+    duration: Option<u64>,
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
@@ -222,6 +246,17 @@ impl From<HuntArgs> for HuntOptions {
     }
 }
 
+impl From<ImplicitHuntArgs> for HuntOptions {
+    fn from(args: ImplicitHuntArgs) -> Self {
+        Self {
+            duration_ms: args.duration.unwrap_or(DEFAULT_HUNT_DURATION_MS),
+            output: output_format(args.json),
+            verbose: args.verbose,
+            no_color: args.no_color,
+        }
+    }
+}
+
 impl From<CapabilitiesArgs> for CapabilitiesOptions {
     fn from(args: CapabilitiesArgs) -> Self {
         Self {
@@ -280,12 +315,7 @@ impl From<WatchArgs> for WatchOptions {
 impl Cli {
     pub fn into_command(self) -> Command {
         match self.command {
-            None => Command::Hunt(HuntOptions {
-                duration_ms: DEFAULT_HUNT_DURATION_MS,
-                output: OutputFormat::Text,
-                verbose: false,
-                no_color: false,
-            }),
+            None => Command::Hunt(self.implicit_hunt.into()),
             Some(Commands::Hunt(args)) => Command::Hunt(args.into()),
             Some(Commands::Watch(args)) => Command::Watch(args.into()),
             Some(Commands::Capabilities(args)) => Command::Capabilities(args.into()),
@@ -448,6 +478,75 @@ mod tests {
                 no_color: false,
             })
         );
+    }
+
+    #[test]
+    fn root_hunt_options_match_explicit_hunt() {
+        let cases = [
+            (
+                vec!["stallhunt", "--duration", "1.5s"],
+                vec!["stallhunt", "hunt", "--duration", "1.5s"],
+            ),
+            (
+                vec!["stallhunt", "--json"],
+                vec!["stallhunt", "hunt", "--json"],
+            ),
+            (
+                vec!["stallhunt", "--verbose"],
+                vec!["stallhunt", "hunt", "--verbose"],
+            ),
+            (
+                vec!["stallhunt", "--no-color"],
+                vec!["stallhunt", "hunt", "--no-color"],
+            ),
+            (
+                vec![
+                    "stallhunt",
+                    "--duration=500ms",
+                    "--json",
+                    "--verbose",
+                    "--no-color",
+                ],
+                vec![
+                    "stallhunt",
+                    "hunt",
+                    "--duration=500ms",
+                    "--json",
+                    "--verbose",
+                    "--no-color",
+                ],
+            ),
+        ];
+
+        for (implicit, explicit) in cases {
+            assert_eq!(expect_parse(implicit), expect_parse(explicit));
+        }
+    }
+
+    #[test]
+    fn root_hunt_options_conflict_with_explicit_subcommands() {
+        let cases = [
+            vec!["stallhunt", "--duration", "100ms", "hunt"],
+            vec!["stallhunt", "--json", "capabilities"],
+            vec!["stallhunt", "--verbose", "record", "--output", "out.json"],
+            vec!["stallhunt", "--no-color", "replay", "recording.json"],
+            vec![
+                "stallhunt",
+                "--json",
+                "redact",
+                "recording.json",
+                "--output",
+                "out.json",
+            ],
+            vec!["stallhunt", "--verbose", "watch"],
+            vec!["stallhunt", "--no-color", "completions", "bash"],
+            vec!["stallhunt", "--duration", "100ms", "version"],
+        ];
+
+        for arguments in cases {
+            let error = parse(arguments).expect_err("root hunt flags must not be ignored");
+            assert_eq!(error.exit_code(), 2);
+        }
     }
 
     #[test]
@@ -672,6 +771,10 @@ mod tests {
     fn root_help_exposes_the_initial_command_set() {
         let mut command = command();
         let help = command.render_help().to_string();
+        assert!(help.contains("--duration <DURATION>"));
+        assert!(help.contains("--json"));
+        assert!(help.contains("--verbose"));
+        assert!(help.contains("--no-color"));
         assert!(help.contains("hunt"));
         assert!(help.contains("watch"));
         assert!(help.contains("capabilities"));

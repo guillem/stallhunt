@@ -29,6 +29,10 @@ fn completions_subcommand_prints_bash_script() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
     assert!(output.status.success());
     assert!(stdout.contains("_stallhunt"));
+    assert!(stdout.contains("--duration"));
+    assert!(stdout.contains("--json"));
+    assert!(stdout.contains("--verbose"));
+    assert!(stdout.contains("--no-color"));
 }
 
 #[test]
@@ -37,6 +41,10 @@ fn root_help_exposes_the_initial_command_set() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
+    assert!(stdout.contains("--duration <DURATION>"));
+    assert!(stdout.contains("--json"));
+    assert!(stdout.contains("--verbose"));
+    assert!(stdout.contains("--no-color"));
     assert!(stdout.contains("hunt"));
     assert!(stdout.contains("watch"));
     assert!(stdout.contains("capabilities"));
@@ -44,6 +52,33 @@ fn root_help_exposes_the_initial_command_set() {
     assert!(stdout.contains("replay"));
     assert!(stdout.contains("redact"));
     assert!(stdout.contains("version"));
+}
+
+#[test]
+fn root_hunt_options_execute_like_hunt() {
+    let output = stallhunt(&["--duration=100ms", "--json", "--verbose", "--no-color"]);
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("hunt JSON should parse");
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["requested_observation"]["duration_ms"], 100);
+}
+
+#[test]
+fn root_hunt_options_with_subcommands_fail_with_usage_exit_status() {
+    let output = stallhunt(&["--duration", "100ms", "version"]);
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be UTF-8");
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        stderr.contains("cannot be used with") || stderr.contains("Usage:"),
+        "{stderr}"
+    );
 }
 
 #[test]
