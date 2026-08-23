@@ -34,10 +34,14 @@ const DEFAULT_TERMINAL_WIDTH: usize = 80;
 const MIN_TERMINAL_WIDTH: usize = 60;
 
 /// Terminal width in columns, falling back to 80 when it cannot be
-/// determined. Reads `COLUMNS` if set; a later phase replaces this with a
-/// `crossterm::terminal::size()`-based implementation for real TTY queries.
+/// determined. Queries the real terminal size via `crossterm`; a `COLUMNS`
+/// environment variable (not exported to child processes by most shells,
+/// but honored by scripts/tests that set it explicitly) takes precedence
+/// when present, matching common CLI convention.
 pub fn terminal_width() -> usize {
-    parse_terminal_width(std::env::var("COLUMNS").ok().as_deref())
+    let columns_env = std::env::var("COLUMNS").ok();
+    let queried = crossterm::terminal::size().ok().map(|(width, _)| width);
+    parse_terminal_width(columns_env.as_deref(), queried)
 }
 
 /// Char-count truncation to at most `width` characters, appending `…` when
@@ -57,9 +61,10 @@ pub fn truncate_ellipsis(text: &str, width: usize) -> String {
     truncated
 }
 
-fn parse_terminal_width(columns_env: Option<&str>) -> usize {
+fn parse_terminal_width(columns_env: Option<&str>, queried: Option<u16>) -> usize {
     columns_env
         .and_then(|value| value.parse::<usize>().ok())
+        .or(queried.map(|width| width as usize))
         .map(|width| width.max(MIN_TERMINAL_WIDTH))
         .unwrap_or(DEFAULT_TERMINAL_WIDTH)
 }
@@ -201,9 +206,24 @@ mod tests {
 
     #[test]
     fn terminal_width_has_a_sane_default_and_minimum() {
-        assert_eq!(parse_terminal_width(None), 80);
-        assert_eq!(parse_terminal_width(Some("not a number")), 80);
-        assert_eq!(parse_terminal_width(Some("10")), 60);
-        assert_eq!(parse_terminal_width(Some("120")), 120);
+        assert_eq!(parse_terminal_width(None, None), 80);
+        assert_eq!(parse_terminal_width(Some("not a number"), None), 80);
+        assert_eq!(parse_terminal_width(Some("10"), None), 60);
+        assert_eq!(parse_terminal_width(Some("120"), None), 120);
+        assert_eq!(
+            parse_terminal_width(None, Some(200)),
+            200,
+            "a queried real terminal size is used when COLUMNS is unset"
+        );
+        assert_eq!(
+            parse_terminal_width(Some("100"), Some(200)),
+            100,
+            "COLUMNS still takes precedence over a queried size when both are present"
+        );
+        assert_eq!(
+            parse_terminal_width(None, Some(10)),
+            60,
+            "a queried size is still clamped to the minimum"
+        );
     }
 }
