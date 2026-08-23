@@ -162,15 +162,16 @@ M6 watch tests cover finding lifecycle (new, persistent, resolved, severity
 change, unconfirmed missing data), independent host/cgroup identities, bounded
 history, cgroup tracking caps, and a checked-in lifecycle text fixture plus
 structural JSON assertions. Executable CLI tests cover `watch --count 1` text
-and JSON on a 100 ms window. Live watch does not assert host contention.
+and JSON on a 100 ms window, plus prompt second-SIGINT termination during an
+unlimited five-minute window. Live watch does not assert host contention.
 
 M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus
 I/O pressure path gated by `memory.events` high/max or `memory.stat`
 direct-reclaim/swap-in, coincident PSI without a mechanism, scan-without-steal,
-cross-scope and CPU–I/O negatives, checked-in related-evidence text
-fixtures, and structural hunt JSON. Chains are not causal claims and are not
-watch identities.
+cross-scope and CPU–I/O negatives, 16-chain rank-then-truncate behavior from 18
+eligible candidates, checked-in related-evidence text fixtures, and structural
+hunt JSON. Chains are not causal claims and are not watch identities.
 
 Scoped cgroup memory findings may be labeled reclaim, swap, or possible
 thrashing from `memory.stat` page deltas. Tests cover reclaim, swap-wins,
@@ -187,9 +188,9 @@ stays `persistent`.
 
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 148 unit tests and ten CLI
-tests. Five Linux acceptance tests are ignored by default and run only when
-intentionally requested.
+The current normal deterministic gate contains 157 unit tests, 13 CLI tests,
+and three replay-fixture tests. Five Linux acceptance tests are ignored by
+default and run only when intentionally requested.
 
 ### 6. Synthetic load scenarios
 

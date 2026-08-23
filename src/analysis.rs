@@ -3792,17 +3792,17 @@ mod tests {
     #[test]
     fn evidence_chain_truncation_keeps_ranked_prefix_and_deterministic_order() {
         let elapsed = Duration::from_secs(10);
-        // 18 same-cgroup memory+I/O chain candidates. Groups 0..=15 share
-        // one PSI severity band (`some` 1.5%, low), groups 16..=17 fall to
-        // none (0.2%). Ranking is severity-descending then path-ascending,
-        // so the kept prefix is groups 00-15 in path order and the two
-        // lowest candidates truncate away.
+        // 18 eligible same-cgroup memory+I/O chain candidates. Groups 0..=15
+        // have moderate PSI (`some` 5%), while groups 16..=17 have low PSI
+        // (`some` 1.5%). Ranking is severity-descending then path-ascending,
+        // so the kept prefix is groups 00-15 in path order and the two lower
+        // ranked candidates truncate away.
         let mut groups = Vec::new();
         for index in 0..(MAX_CGROUP_EVIDENCE_CHAINS + 2) {
             let some_us = if index < MAX_CGROUP_EVIDENCE_CHAINS {
-                150_000
+                500_000
             } else {
-                20_000
+                150_000
             };
             groups.push(scoped_memory_io_group(
                 &format!("/slice/group-{index:02}.service"),
@@ -3814,7 +3814,16 @@ mod tests {
             ));
         }
         let observation = scoped_memory_io_observation(groups, elapsed);
-        let chains = cgroup_chains_from(&observation);
+        let findings = analyze_cgroups(Some(&observation)).findings;
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.kind == CgroupAssessmentKind::Pressure)
+                .count(),
+            2 * (MAX_CGROUP_EVIDENCE_CHAINS + 2),
+            "every fixture group must produce eligible memory and I/O pressure findings"
+        );
+        let chains = analyze_evidence_chains(None, None, &findings);
 
         assert_eq!(chains.len(), MAX_CGROUP_EVIDENCE_CHAINS);
         for (position, chain) in chains.iter().enumerate() {

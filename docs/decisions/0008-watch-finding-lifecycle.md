@@ -64,7 +64,8 @@ Costs:
 - cgroup findings resolve only when the scope is still observed and no longer
   ranked as pressure; a disappeared cgroup stays unconfirmed
 - unbounded `--count` can sample indefinitely on a stressed host
-- default interruption is not a graceful drain of the current window
+- the first interruption can take up to the configured interval to finish;
+  operators can interrupt a second time to terminate immediately
 
 ## Alternatives considered
 
