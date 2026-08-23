@@ -53,6 +53,7 @@ Accepted initial decisions:
 - ADR-0009: evidence chains require independent mechanism evidence and never claim causality
 - ADR-0010: same-cgroup memory plus I/O chains stay on one path and never join host findings
 - ADR-0011: same-cgroup chains may use memory.stat page deltas in addition to memory.events
+- ADR-0014: implicit hunt options and additive watch process attribution
 
 ## Documentation rules
 

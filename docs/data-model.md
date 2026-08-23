@@ -385,7 +385,14 @@ reclaim, swap, and possible-thrashing pressure while preserving the single host
 memory identity. The complete pressure-kind catalog is in `cli-ux.md`.
 
 Watch JSON `kind` is `stallhunt.watch_window`. It is not replayable as a
-recording and does not carry full evidence.
+recording and does not carry full finding evidence. It does carry additive,
+typed `process_candidates` on supported current signals and lifecycle findings:
+CPU runnable-delay victims, CPU-consumption suspects, and process-I/O suspects.
+Each candidate has a process key, name, role, confidence, label, and typed
+same-window evidence. A lifecycle candidate list is marked stale when it is
+retained from the last confirmed pressure window. Memory, cgroup, and I/O-victim
+process roles remain unsupported. `schema_version` remains 1 because these are
+additive pre-1.0 fields.
 
 ## Evidence chains
 

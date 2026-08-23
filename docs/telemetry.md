@@ -408,7 +408,7 @@ Each addition requires a diagnostic use case and an ADR if it materially changes
 The tool should eventually offer a diagnostics command such as:
 
 ```bash
-bottleneck capabilities
+stallhunt capabilities
 ```
 
 Example:
