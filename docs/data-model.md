@@ -346,7 +346,7 @@ Current recording envelope:
 {
   "kind": "stallhunt.recording",
   "schema_version": 1,
-  "tool_version": "0.1.2",
+  "tool_version": "0.2.0",
   "recorded_at_unix_ms": 0,
   "redaction": "none",
   "requested_duration_ms": 10000,

@@ -54,7 +54,7 @@ install -m 0755 stallhunt-<version>-x86_64-unknown-linux-gnu/stallhunt ~/.local/
 
 Verify the published SHA-256 checksum before use. Download release tarballs
 from the [GitHub Releases](https://github.com/guillem/stallhunt/releases) page;
-the current corrective release is `v0.1.2`.
+the current release is `v0.2.0`.
 
 ## Shell completions
 

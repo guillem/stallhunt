@@ -648,7 +648,7 @@ checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 
 [[package]]
 name = "stallhunt"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "clap",
  "clap_complete",

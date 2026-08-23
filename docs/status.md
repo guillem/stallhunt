@@ -4,7 +4,7 @@ Last updated: 2026-08-23
 
 ## Current milestone
 
-**Milestone 8 — corrective maintenance release v0.1.2 shipped**
+**Post-Milestone 8 — interface redesign release v0.2.0**
 
 Milestones 1–6 remain functionally complete. Since the v0.1.0 productization,
 v0.1.1 landed the `BOTTLENECK_*` → `STALLHUNT_*` acceptance-variable rename
@@ -16,13 +16,13 @@ release workflow's Node-20-deprecated actions were bumped to
 `actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
 v0.1.2 corrective release makes the advertised second-SIGINT termination real
 and ensures the 16-chain regression actually reaches truncation with 18
-eligible candidates. Since v0.1.2, ADR-0013 redesigned the interface on user
-feedback that default `hunt` output was a wall of text and `watch` was too
-primitive: `hunt`/`replay` gained a compact styled report and `--verbose`,
-and `watch` gained an interactive TUI, both TTY-only and both leaving piped
-text/JSON unchanged. This is presentation only; no analyzer, finding kind, or
-telemetry source changed, and the repository remains parked otherwise: no
-additional M8 chain or M7 probe is approved.
+eligible candidates. Release v0.2.0 ships the ADR-0013 interface redesign in
+response to user feedback that default `hunt` output was a wall of text and
+`watch` was too primitive: `hunt`/`replay` gain a compact styled report and
+`--verbose`, and `watch` gains an interactive TUI, both TTY-only and both
+leaving piped text/JSON unchanged. This is presentation only; no analyzer,
+finding kind, or telemetry source changed, and the repository remains parked
+otherwise: no additional M8 chain or M7 probe is approved.
 Do not start M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -504,6 +504,27 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-23, the v0.2.0 release preparation updated the package, lockfile,
+manual, current JSON examples, installation guide, changelog, and project
+status after PR #6 merged the ADR-0013 interface redesign. Formatting,
+locked-offline Clippy, the full default test suite, a locked-offline release
+build, the release binary version check, and the man-page render all passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+cargo build --release --locked --offline
+./target/release/stallhunt version
+groff -man -Tascii docs/stallhunt.1
+```
+
+The binary reported `stallhunt 0.2.0`. The gate ran 183 unit tests (one fixture
+writer ignored), 13 CLI tests, three replay-fixture tests, and five ignored
+Linux acceptance tests. Before the version update, PR #6 passed the GitHub
+Actions Rust 1.85 and stable jobs. The pressure-generating acceptance tests
+remain opt-in because they require explicit host or delegated-cgroup setup.
 
 Later still on 2026-08-23, the ADR-0013 interface redesign (compact
 hunt/replay report, watch TUI, `--verbose`/`--no-color`/`NO_COLOR`) landed in

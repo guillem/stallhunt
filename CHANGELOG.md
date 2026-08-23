@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-23
+
 ### Added
 
 - Compact, color-coded, width-aware `hunt`/`replay` report on a TTY (ADR-0013), alongside — never instead of — the unchanged plain-text output on a pipe.
