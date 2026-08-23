@@ -10,6 +10,7 @@ use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::style::{self, ColorMode};
 use crate::watch::{
@@ -60,7 +61,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 fn draw_processes(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Processes · same-window attribution ");
+        .title(" Processes · current / last observed candidates ");
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let columns = Layout::horizontal([
@@ -153,7 +154,9 @@ fn draw_process_column<'a>(
                 .unwrap_or(ProcessCandidateAvailability::NotAssessed)
             {
                 ProcessCandidateAvailability::Available => "(no candidates observed)",
-                ProcessCandidateAvailability::Unavailable => "(unavailable: telemetry)",
+                ProcessCandidateAvailability::UnavailableOrIncomplete => {
+                    "(unavailable/incomplete telemetry)"
+                }
                 ProcessCandidateAvailability::NotAssessed => "(unavailable: no pressure)",
             },
         };
@@ -162,21 +165,19 @@ fn draw_process_column<'a>(
             Style::default().add_modifier(Modifier::DIM),
         )]
     } else {
-        let mut lines = stale
-            .then(|| {
-                Line::styled(
-                    "(last observed)",
-                    Style::default().add_modifier(Modifier::DIM),
-                )
-            })
+        candidates
             .into_iter()
-            .collect::<Vec<_>>();
-        lines.extend(
-            candidates
-                .into_iter()
-                .map(|candidate| Line::from(compact_candidate(candidate, area.width))),
-        );
-        lines
+            .map(|candidate| Line::from(compact_candidate(candidate, area.width.saturating_sub(1))))
+            .collect()
+    };
+    let title = if stale {
+        match role {
+            ProcessRole::CpuVictim => "CPU vic. (last observed)".to_owned(),
+            ProcessRole::CpuSuspect => "CPU sus. (last observed)".to_owned(),
+            ProcessRole::IoSuspect => "I/O sus. (last observed)".to_owned(),
+        }
+    } else {
+        title.to_owned()
     };
     frame.render_widget(
         Paragraph::new(lines)
@@ -199,58 +200,54 @@ fn role_availability(
 
 fn compact_candidate(candidate: &ProcessCandidate, width: u16) -> String {
     let evidence = compact_evidence(candidate);
-    let confidence = style::confidence_name(candidate.confidence);
-    terminal_safe_truncate(
-        &format!(
-            "{} {} · {} · {confidence}",
-            candidate.key.pid,
-            terminal_safe_name(&candidate.name),
-            evidence,
-        ),
-        usize::from(width.saturating_sub(2)),
-    )
+    let confidence = short_confidence(candidate.confidence);
+    let prefix = candidate.key.pid.to_string();
+    let suffix = format!(" {evidence} {confidence}");
+    let width = usize::from(width);
+    let name_width = width.saturating_sub(prefix.width() + suffix.width() + 1);
+    let name = terminal_safe_truncate(&terminal_safe_name(&candidate.name), name_width);
+    if name.is_empty() {
+        format!("{prefix}{suffix}")
+    } else {
+        format!("{prefix} {name}{suffix}")
+    }
 }
 
 fn compact_evidence(candidate: &ProcessCandidate) -> String {
     match &candidate.evidence {
         ProcessCandidateEvidence::RunnableDelay {
-            runnable_wait_ns,
-            stable_task_count,
-            ..
-        } => format!(
-            "wait {} · {stable_task_count} tasks",
-            format_ns(*runnable_wait_ns)
-        ),
+            runnable_wait_ns, ..
+        } => format_ns(*runnable_wait_ns),
         ProcessCandidateEvidence::CpuConsumption {
             cpu_fraction_of_one,
             ..
-        } => format!("CPU {:.0}%", cpu_fraction_of_one * 100.0),
+        } => format_percent(*cpu_fraction_of_one * 100.0, 0),
         ProcessCandidateEvidence::IoActivity {
             known_accounted_bytes,
             ..
-        } => format!("I/O {}", format_bytes(*known_accounted_bytes)),
+        } => format_bytes(*known_accounted_bytes),
     }
 }
 
-fn detail_candidate(candidate: &ProcessCandidate) -> String {
-    let name = terminal_safe_name(&candidate.name);
-    let confidence = style::confidence_name(candidate.confidence);
+fn detail_candidate(candidate: &ProcessCandidate, width: u16) -> String {
+    let confidence = short_confidence(candidate.confidence);
     let evidence = match &candidate.evidence {
         ProcessCandidateEvidence::RunnableDelay {
             runnable_wait_ns,
             runnable_delay_fraction,
             stable_task_count,
         } => format!(
-            "delay {}; {:.2}% of the observation window; {stable_task_count} tasks",
+            "wait {} · window {} · {stable_task_count} tasks",
             format_ns(*runnable_wait_ns),
-            runnable_delay_fraction * 100.0
+            format_percent(runnable_delay_fraction * 100.0, 2)
         ),
         ProcessCandidateEvidence::CpuConsumption {
             cpu_fraction_of_one,
             cpu_ticks,
         } => format!(
-            "CPU {:.2}% of one CPU; {cpu_ticks} ticks",
-            cpu_fraction_of_one * 100.0
+            "CPU {} · {} ticks",
+            format_percent(cpu_fraction_of_one * 100.0, 2),
+            format_count(u128::from(*cpu_ticks))
         ),
         ProcessCandidateEvidence::IoActivity {
             read_bytes,
@@ -258,34 +255,45 @@ fn detail_candidate(candidate: &ProcessCandidate) -> String {
             cancelled_write_bytes,
             known_accounted_bytes,
         } => format!(
-            "known I/O {}; read {}; charged write {}; cancelled write {}",
+            "Σ{} r{} w{} c{}",
             format_bytes(*known_accounted_bytes),
-            read_bytes.map_or_else(
-                || "unavailable".into(),
-                |value| format_bytes(u128::from(value))
-            ),
-            write_bytes.map_or_else(
-                || "unavailable".into(),
-                |value| format_bytes(u128::from(value))
-            ),
-            cancelled_write_bytes.map_or_else(
-                || "unavailable".into(),
-                |value| format_bytes(u128::from(value))
-            ),
+            read_bytes.map_or_else(|| "n/a".into(), |value| format_bytes(u128::from(value))),
+            write_bytes.map_or_else(|| "n/a".into(), |value| format_bytes(u128::from(value))),
+            cancelled_write_bytes
+                .map_or_else(|| "n/a".into(), |value| format_bytes(u128::from(value))),
         ),
     };
-    format!(
-        "  PID {} {name} · {} · {evidence} ({confidence})",
-        candidate.key.pid,
-        role_label(candidate.role),
-    )
+    let prefix = format!("PID {} ", candidate.key.pid);
+    let suffix = format!(
+        " · {} · {evidence} · {confidence}",
+        role_label(candidate.role)
+    );
+    let name_width = usize::from(width).saturating_sub(prefix.width() + suffix.width());
+    let name = terminal_safe_truncate(&terminal_safe_name(&candidate.name), name_width);
+    format!("{prefix}{name}{suffix}")
+}
+
+const fn short_confidence(confidence: crate::analysis::Confidence) -> &'static str {
+    match confidence {
+        crate::analysis::Confidence::Low => "low",
+        crate::analysis::Confidence::Medium => "med",
+        crate::analysis::Confidence::High => "high",
+    }
+}
+
+fn format_percent(value: f64, precision: usize) -> String {
+    if value.abs() < 10_000.0 {
+        format!("{value:.precision$}%")
+    } else {
+        format!("{value:.2e}%")
+    }
 }
 
 const fn role_label(role: ProcessRole) -> &'static str {
     match role {
         ProcessRole::CpuVictim => "victim",
         ProcessRole::CpuSuspect => "suspect",
-        ProcessRole::IoSuspect => "I/O suspect",
+        ProcessRole::IoSuspect => "I/O",
     }
 }
 
@@ -305,18 +313,42 @@ fn terminal_safe_truncate(value: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
-    let mut chars = value.chars();
-    let truncated: String = chars.by_ref().take(width).collect();
-    if chars.next().is_some() && width >= 2 {
-        let prefix: String = truncated.chars().take(width - 1).collect();
-        format!("{prefix}…")
-    } else {
-        truncated
+    if value.width() <= width {
+        return value.to_owned();
     }
+
+    let content_width = width.saturating_sub('…'.width().unwrap_or(1));
+    let mut used = 0;
+    let prefix: String = value
+        .chars()
+        .take_while(|character| {
+            let character_width = character.width().unwrap_or(0);
+            if used + character_width > content_width {
+                false
+            } else {
+                used += character_width;
+                true
+            }
+        })
+        .collect();
+    format!("{prefix}…")
 }
 
 fn format_ns(nanoseconds: u64) -> String {
-    if nanoseconds >= 1_000_000_000 {
+    const SECOND: u64 = 1_000_000_000;
+    const MINUTE: u64 = SECOND * 60;
+    const HOUR: u64 = MINUTE * 60;
+    const DAY: u64 = HOUR * 24;
+    const YEAR: u64 = DAY * 365;
+    if nanoseconds >= YEAR {
+        format!("{:.1}y", nanoseconds as f64 / YEAR as f64)
+    } else if nanoseconds >= DAY {
+        format!("{:.1}d", nanoseconds as f64 / DAY as f64)
+    } else if nanoseconds >= HOUR {
+        format!("{:.1}h", nanoseconds as f64 / HOUR as f64)
+    } else if nanoseconds >= MINUTE {
+        format!("{:.1}m", nanoseconds as f64 / MINUTE as f64)
+    } else if nanoseconds >= SECOND {
         format!("{:.1}s", nanoseconds as f64 / 1_000_000_000.0)
     } else if nanoseconds >= 1_000_000 {
         format!("{:.1}ms", nanoseconds as f64 / 1_000_000.0)
@@ -325,11 +357,28 @@ fn format_ns(nanoseconds: u64) -> String {
     }
 }
 
+fn format_count(value: u128) -> String {
+    if value < 1_000_000_000 {
+        value.to_string()
+    } else {
+        format!("{:.2e}", value as f64)
+    }
+}
+
 fn format_bytes(bytes: u128) -> String {
     const KIB: u128 = 1024;
     const MIB: u128 = KIB * 1024;
     const GIB: u128 = MIB * 1024;
-    if bytes >= GIB {
+    const TIB: u128 = GIB * 1024;
+    const PIB: u128 = TIB * 1024;
+    const EIB: u128 = PIB * 1024;
+    if bytes >= EIB {
+        format!("{:.1}EiB", bytes as f64 / EIB as f64)
+    } else if bytes >= PIB {
+        format!("{:.1}PiB", bytes as f64 / PIB as f64)
+    } else if bytes >= TIB {
+        format!("{:.1}TiB", bytes as f64 / TIB as f64)
+    } else if bytes >= GIB {
         format!("{:.1}GiB", bytes as f64 / GIB as f64)
     } else if bytes >= MIB {
         format!("{:.1}MiB", bytes as f64 / MIB as f64)
@@ -508,6 +557,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
         None => " Detail ".to_owned(),
     };
     let block = Block::default().borders(Borders::ALL).title(title);
+    let detail_width = block.inner(area).width;
     let Some(finding) = app.selected_finding() else {
         frame.render_widget(Paragraph::new("(no finding selected)").block(block), area);
         return;
@@ -520,7 +570,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
         ));
     } else {
         let heading = if finding.process_candidates_stale {
-            "Last observed process candidates (the current finding is unconfirmed or resolved):"
+            "Last observed candidates (finding unconfirmed or resolved):"
         } else {
             "Process candidates from this confirmed window:"
         };
@@ -532,7 +582,7 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
             finding
                 .process_candidates
                 .iter()
-                .map(|candidate| Line::from(detail_candidate(candidate))),
+                .map(|candidate| Line::from(detail_candidate(candidate, detail_width))),
         );
     }
     if finding.qualifiers.is_empty() {
@@ -655,9 +705,11 @@ mod tests {
         assert!(joined.contains("CPU victims"));
         assert!(joined.contains("CPU suspects"));
         assert!(joined.contains("I/O suspects"));
-        assert!(joined.contains("4812 postgres�worker"));
-        assert!(joined.contains("9231 rustc"));
-        assert!(joined.contains("7712 restic"));
+        assert!(joined.contains("4812"));
+        assert!(joined.contains("500.0ms high"));
+        assert!(joined.contains("9231 rustc 125% med"));
+        assert!(joined.contains("7712"));
+        assert!(joined.contains("6.0KiB med"));
         assert!(
             !joined.contains("Context and limitations"),
             "detail pane must be collapsed by default"
@@ -672,7 +724,8 @@ mod tests {
         let lines = draw_to_lines(&app);
         let joined = lines.join("\n");
         assert!(joined.contains("Process candidates from this confirmed window:"));
-        assert!(joined.contains("PID 4812 postgres�worker · victim"));
+        assert!(joined.contains("PID 4812"));
+        assert!(joined.contains("wait 500.0ms · window 5.00% · 2 tasks · high"));
         assert!(joined.contains("PID 9231 rustc · suspect"));
         assert!(joined.contains("Context and limitations"), "{joined}");
         assert!(
@@ -701,8 +754,8 @@ mod tests {
 
         let joined = draw_to_lines(&app).join("\n");
         assert!(joined.contains("last observed"));
-        assert!(joined.contains("4812 postgres�worker"));
-        assert!(joined.contains("9231 rustc"));
+        assert!(joined.contains("4812"));
+        assert!(joined.contains("9231 rustc 125% med"));
     }
 
     #[test]
@@ -713,27 +766,141 @@ mod tests {
         window.current.cpu.process_candidate_availability = vec![
             crate::watch::ProcessRoleAvailability {
                 role: ProcessRole::CpuVictim,
-                availability: ProcessCandidateAvailability::Unavailable,
+                availability: ProcessCandidateAvailability::UnavailableOrIncomplete,
             },
             crate::watch::ProcessRoleAvailability {
                 role: ProcessRole::CpuSuspect,
-                availability: ProcessCandidateAvailability::Unavailable,
+                availability: ProcessCandidateAvailability::UnavailableOrIncomplete,
             },
         ];
         app.on_window(window);
 
         let joined = draw_to_lines(&app).join("\n");
-        assert!(joined.contains("unavailable: telemetry"));
+        assert!(joined.contains("unavailable/incomplete"));
     }
 
     #[test]
     fn terminal_safe_compact_candidates_truncate_to_the_column_width() {
         let candidate = &sample_window().current.cpu.process_candidates[0];
-        let line = compact_candidate(candidate, 18);
-        assert_eq!(line.chars().count(), 16);
-        assert!(line.ends_with('…'));
+        let line = compact_candidate(candidate, 24);
+        assert!(line.width() <= 24);
+        assert!(line.contains('…'));
+        assert!(line.contains("500.0ms"));
+        assert!(line.ends_with("high"));
         assert!(!line.contains('\n'));
         assert!(!line.contains('\x1b'));
+    }
+
+    #[test]
+    fn wide_process_names_yield_to_evidence_and_confidence() {
+        let mut candidate = sample_window().current.cpu.process_candidates[0].clone();
+        candidate.name = "界".repeat(20);
+
+        let compact = compact_candidate(&candidate, 24);
+        assert!(compact.width() <= 24, "{compact}");
+        assert!(compact.contains("500.0ms"), "{compact}");
+        assert!(compact.ends_with("high"), "{compact}");
+
+        let detail = detail_candidate(&candidate, 78);
+        assert!(detail.width() <= 78, "{detail}");
+        assert!(detail.contains("wait 500.0ms"), "{detail}");
+        assert!(detail.ends_with("high"), "{detail}");
+    }
+
+    #[test]
+    fn detail_candidates_preserve_bounded_evidence_with_extreme_counters() {
+        let mut candidates = sample_window().current.cpu.process_candidates;
+        candidates.push(sample_window().current.io.process_candidates[0].clone());
+        for candidate in &mut candidates {
+            candidate.key.pid = u32::MAX;
+            candidate.name = "very-long\nprocess-name-that-must-yield-to-evidence".repeat(3);
+            match &mut candidate.evidence {
+                ProcessCandidateEvidence::RunnableDelay {
+                    runnable_wait_ns,
+                    runnable_delay_fraction,
+                    stable_task_count,
+                } => {
+                    *runnable_wait_ns = u64::MAX;
+                    *runnable_delay_fraction = f64::MAX;
+                    *stable_task_count = u32::MAX;
+                }
+                ProcessCandidateEvidence::CpuConsumption {
+                    cpu_fraction_of_one,
+                    cpu_ticks,
+                } => {
+                    *cpu_fraction_of_one = f64::MAX;
+                    *cpu_ticks = u64::MAX;
+                }
+                ProcessCandidateEvidence::IoActivity {
+                    read_bytes,
+                    write_bytes,
+                    cancelled_write_bytes,
+                    known_accounted_bytes,
+                } => {
+                    *read_bytes = Some(u64::MAX);
+                    *write_bytes = Some(u64::MAX);
+                    *cancelled_write_bytes = Some(u64::MAX);
+                    *known_accounted_bytes = u128::from(u64::MAX) * 2;
+                }
+            }
+            let line = detail_candidate(candidate, 78);
+            assert!(line.chars().count() <= 78, "{line}");
+            assert!(
+                line.ends_with(short_confidence(candidate.confidence)),
+                "{line}"
+            );
+            assert!(!line.contains('\n'));
+        }
+    }
+
+    #[test]
+    fn expanded_detail_keeps_all_eight_bounded_cpu_candidates_visible_at_80x24() {
+        let mut app = new_app();
+        let mut window = sample_window();
+        let victim = window.current.cpu.process_candidates[0].clone();
+        let suspect = window.current.cpu.process_candidates[1].clone();
+        let mut candidates = Vec::new();
+        for offset in 0..5 {
+            let mut candidate = victim.clone();
+            candidate.key.pid = 4_800 + offset;
+            candidates.push(candidate);
+        }
+        for offset in 0..3 {
+            let mut candidate = suspect.clone();
+            candidate.key.pid = 9_200 + offset;
+            candidates.push(candidate);
+        }
+        window.lifecycle[0].process_candidates = candidates;
+        window.lifecycle[0].qualifiers.clear();
+        app.on_window(window);
+        app.expanded = true;
+
+        let joined = draw_to_lines(&app).join("\n");
+        assert!(joined.contains("PID 4800"));
+        assert!(joined.contains("PID 9202"), "{joined}");
+        assert!(joined.contains("125 ticks · med"), "{joined}");
+    }
+
+    #[test]
+    fn expanded_stale_detail_keeps_all_eight_candidates_visible_at_80x24() {
+        let mut app = new_app();
+        let mut window = sample_window();
+        let victim = window.current.cpu.process_candidates[0].clone();
+        window.lifecycle[0].process_candidates = (0..8)
+            .map(|offset| {
+                let mut candidate = victim.clone();
+                candidate.key.pid = 5_000 + offset;
+                candidate
+            })
+            .collect();
+        window.lifecycle[0].process_candidates_stale = true;
+        window.lifecycle[0].qualifiers.clear();
+        app.on_window(window);
+        app.expanded = true;
+
+        let joined = draw_to_lines(&app).join("\n");
+        assert!(joined.contains("Last observed candidates"), "{joined}");
+        assert!(joined.contains("PID 5007"), "{joined}");
     }
 
     #[test]

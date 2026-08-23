@@ -1,6 +1,6 @@
 # ADR-0008: Watch tracks finding lifecycle, not a live dashboard
 
-- Status: Accepted; presentation superseded in part by ADR-0013
+- Status: Accepted; presentation superseded in part by ADR-0013; watch attribution contract superseded in part by ADR-0014
 - Date: 2026-08-17
 
 ## Context

@@ -256,17 +256,20 @@ stays `persistent`.
 
 Mark environment-dependent tests clearly.
 
-`tests/documentation.rs` scans tracked Markdown and the manual page for concrete
-`stallhunt` invocations. It normalizes prompts, release-binary paths, roff
-escaping, and output redirection, then validates the argv through the CLI's
-safe `--help` parse path; failures include source path and line. Synopsis and
-placeholder forms are maintained in a separate explicit inventory. Historical
-schema prose such as `bottleneck.recording` is not executable syntax, but a
-concrete `bottleneck ...` command is rejected.
+`tests/documentation.rs` scans every Git-tracked Markdown file and the manual
+page for concrete `stallhunt`, Cargo, and repository-tool invocations. It
+normalizes prompts, release-binary paths, roff escaping, and output redirection,
+then validates Stallhunt argv through the CLI's safe `--help` parse path and
+checks documented Cargo/repository subcommands through their help paths;
+failures include source path and line. Synopsis and placeholder forms are
+maintained in a separate explicit inventory. Historical schema prose such as
+`bottleneck.recording` is not executable syntax, but a concrete `bottleneck
+...` command is rejected.
 
-The current normal deterministic gate contains 157 unit tests, 13 CLI tests,
-and three replay-fixture tests. Five Linux acceptance tests are ignored by
-default and run only when intentionally requested.
+The current normal deterministic gate contains 196 unit tests, 15 CLI tests,
+three documentation-command tests, and three replay-fixture tests. Five Linux
+acceptance tests are ignored by default and run only when intentionally
+requested.
 
 ### 6. Synthetic load scenarios
 

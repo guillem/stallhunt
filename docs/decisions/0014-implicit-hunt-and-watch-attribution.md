@@ -36,6 +36,10 @@ Candidates carry the stable process key, name, role, confidence, analyzer
 label, and typed evidence. I/O victims, and process roles for memory or cgroup
 findings, remain explicitly unsupported. Every watch renderer contains an
 attribution area with clear empty or unavailable states.
+Process names are measured in terminal display columns, not Unicode scalar
+values, so wide names cannot displace evidence or confidence. The existing
+transitive `unicode-width` crate becomes a direct dependency for that bounded
+rendering calculation.
 
 Confirmed persistent findings replace their candidates with the current
 window's candidates. Unconfirmed persistent and resolved findings retain the

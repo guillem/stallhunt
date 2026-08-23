@@ -1,6 +1,6 @@
 # ADR-0013: Watch becomes a finding-lifecycle TUI; hunt gains a styled report
 
-- Status: Accepted
+- Status: Accepted; watch stream compatibility superseded in part by ADR-0014
 - Date: 2026-08-23
 
 ## Context

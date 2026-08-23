@@ -91,7 +91,7 @@ stallhunt record --output incident.json [--duration 10s] [--redact] [--force]
 Re-analyze a recording with the current inference engine.
 
 ```bash
-stallhunt replay incident.json [--json]
+stallhunt replay incident.json [--json] [--verbose] [--no-color]
 ```
 
 ### `redact`
@@ -109,7 +109,7 @@ Implemented in Milestone 6:
 Follow rolling bottlenecks by finding lifecycle.
 
 ```bash
-stallhunt watch [--interval 2s] [--count N] [--json]
+stallhunt watch [--interval 2s] [--count N] [--json] [--no-color]
 ```
 
 This is a finding-lifecycle TUI on a terminal, not a generic resource monitor.
@@ -119,7 +119,7 @@ This is a finding-lifecycle TUI on a terminal, not a generic resource monitor.
 Milestone 1 implements:
 
 ```text
-stallhunt hunt [--duration <DURATION>] [--json]
+stallhunt hunt [--duration <DURATION>] [--json] [--verbose] [--no-color]
 stallhunt capabilities [--json]
 stallhunt version
 ```
@@ -387,7 +387,7 @@ Representative Milestone 1 finding shape (optional context fields are omitted he
 ```json
 {
   "schema_version": 1,
-  "tool_version": "0.2.0",
+  "tool_version": "0.3.0",
   "requested_observation": {
     "duration_ms": 10000
   },

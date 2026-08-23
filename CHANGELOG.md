@@ -6,6 +6,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-24
+
+### Added
+
+- Typed, bounded CPU-victim, CPU-suspect, and I/O-suspect attribution across watch's piped text, JSON, lifecycle findings, and terminal UI. Retained candidates on unconfirmed or resolved findings are explicitly labeled last observed.
+- An always-visible three-column Processes panel in the watch TUI, with complete candidate evidence in expanded finding detail and explicit empty/unavailable states.
+- Parser-level regression coverage for executable documentation examples and ADR-0014 for the implicit-hunt and watch-attribution contracts.
+
+### Fixed
+
+- Bare `stallhunt` now accepts `--duration`, `--json`, `--verbose`, and `--no-color` with explicit-`hunt` parity; mixing root hunt flags with a subcommand is rejected with usage status 2.
+
+### Changed
+
+- Watch JSON additively exposes process candidates and candidate availability while retaining `schema_version: 1`.
+- The README now points to the authoritative status and roadmap documents instead of duplicating milestone state.
+
 ## [0.2.0] - 2026-08-23
 
 ### Added

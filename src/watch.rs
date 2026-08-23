@@ -122,7 +122,7 @@ pub enum ProcessRole {
 #[serde(rename_all = "snake_case")]
 pub enum ProcessCandidateAvailability {
     Available,
-    Unavailable,
+    UnavailableOrIncomplete,
     NotAssessed,
 }
 
@@ -666,6 +666,9 @@ fn watch_text(window: &WatchWindow) -> String {
     output
         .push_str("  I/O victims: unavailable (process I/O does not identify stalled workloads)\n");
     output.push_str("  Memory and cgroup process roles: unavailable\n");
+    output.push_str(
+        "  Qualification: CPU and I/O suspects are same-window correlation; this does not prove causality. CPU victims are runnable-delay candidates, not confirmed harm.\n",
+    );
     for finding in window.lifecycle.iter().filter(|finding| {
         finding.process_candidates_stale && !finding.process_candidates.is_empty()
     }) {
@@ -737,7 +740,7 @@ fn process_role_text(
             .unwrap_or_else(|| role_availability(signal.status, role, &signal.qualifiers));
         let state = match availability {
             ProcessCandidateAvailability::Available => "no positive candidates ranked",
-            ProcessCandidateAvailability::Unavailable => "unavailable or incomplete",
+            ProcessCandidateAvailability::UnavailableOrIncomplete => "unavailable or incomplete",
             ProcessCandidateAvailability::NotAssessed => {
                 "not assessed (no current pressure finding)"
             }
@@ -1134,7 +1137,7 @@ fn role_availability(
         return ProcessCandidateAvailability::NotAssessed;
     }
     if attribution_incomplete(role, qualifiers) {
-        ProcessCandidateAvailability::Unavailable
+        ProcessCandidateAvailability::UnavailableOrIncomplete
     } else {
         ProcessCandidateAvailability::Available
     }
@@ -1700,6 +1703,7 @@ mod tests {
         assert!(text.contains("WATCH  window 1/3  interval 2s"));
         assert!(text.contains("NEW         CPU  cpu_scheduling_contention  high  PSI 20.00%"));
         assert!(text.contains("Current window"));
+        assert!(text.contains("this does not prove causality"));
         assert!(text.contains("CPU      pressure     high  PSI 20.00%"));
         assert!(text.contains("Memory   healthy      none  PSI 0.10%"));
         assert!(!text.contains("Top process CPU consumers"));
