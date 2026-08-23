@@ -266,7 +266,13 @@ the test process and does not mutate the hierarchy.
   with 370 visible PIDs and ~1,587--2,099 stable tasks: about 6 MiB RSS and
   110--210 ms PSI-window skew on a one-second hunt. The 4,096-PID and 16,384-task
   caps were not reached.
-- CI workflow or release tarball packaging is not yet wired; validation is local.
+- GitHub Actions runs locked tests on Rust 1.85 and formatting, Clippy, and
+  locked tests on stable Rust. The five environment-dependent Linux acceptance
+  tests remain opt-in rather than CI workloads.
+- Tagged releases publish one `x86_64-unknown-linux-gnu` tarball and a SHA-256
+  sidecar. The binary is built on GitHub's current Ubuntu runner; compatibility
+  with older glibc userspaces is not yet defined by the Linux 4.20 kernel
+  baseline.
 - Product identity, license (MIT OR Apache-2.0), MSRV (1.85), Linux baseline
   (4.20+), and clap-based CLI are decided (ADR-0012, [`install.md`](install.md)).
 - M2's live harmful-pressure run used a delegated 128/256 MiB child and an
@@ -355,7 +361,11 @@ Operational and delivery gaps:
 - unlimited watch drains gracefully: the first SIGINT installs a flag so the
   in-flight window completes and is written before exit;
 - recordings are single-window, pre-1.0, and have no compatibility promise;
-- CI and release tarball automation remain open.
+- the five Linux acceptance scenarios remain intentionally opt-in rather than
+  automated CI jobs;
+- release automation publishes only one dynamically linked x86_64 GNU/Linux
+  artifact with a checksum; additional targets, an explicit glibc baseline,
+  signatures, and provenance remain open.
 
 ## Known bugs
 
@@ -453,7 +463,8 @@ Not yet decided:
 - serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
 - color/terminal crate,
 - eventual eBPF framework,
-- CI provider/configuration and release tarball automation.
+- compatibility policy, additional targets, and signing/provenance for
+  pre-built release artifacts.
 
 Decided in ADR-0012:
 
@@ -468,6 +479,13 @@ concrete, not all at once.
 
 ## Last meaningful validation
 
+Later on 2026-08-23, a documentation consistency audit reconciled the v0.1.1
+and v0.1.2 SIGINT/truncation history, current JSON examples, watch semantics,
+published tarball contents, and the implemented CI/release workflows. It also
+recorded that the published GNU/Linux binary has no defined old-glibc
+compatibility baseline. The formatting, locked-offline Clippy, and full default
+test gates below passed again; the man page rendered successfully with `groff`.
+
 On 2026-08-23, the v0.1.2 corrective release restored prompt second-SIGINT
 termination for unlimited watch and made the evidence-chain truncation fixture
 exercise 18 eligible candidates before retaining 16. Formatting, locked-offline
@@ -481,6 +499,9 @@ cargo test --locked --offline --workspace --all-features
 
 The gate ran 157 unit tests (156 passed, one fixture writer ignored), 13 CLI
 tests, three replay-fixture tests, and five ignored Linux acceptance tests.
+PR #4 also passed the GitHub Actions Rust 1.85 and stable jobs. Tag `v0.1.2`
+then completed the release workflow, which published the GNU/Linux tarball and
+SHA-256 sidecar; the downloaded tarball matched that checksum.
 
 On 2026-08-18, Stallhunt v0.1.0 productization landed: binary/package name
 `stallhunt`, clap CLI with default hunt and completions, JSON kinds

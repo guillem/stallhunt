@@ -34,11 +34,16 @@ For day-to-day development, use the same locked build and test commands document
 
 ## Release tarballs
 
-Pre-built release tarballs, when published, contain:
+Published release tarballs currently contain:
 
 - the `stallhunt` binary for a specific `x86_64-unknown-linux-gnu` target,
 - `LICENSE-MIT` and `LICENSE-APACHE`,
-- a short README with version and checksum.
+- the project `README.md`,
+- the `stallhunt.1` manual page.
+
+Each tarball has a separate `.sha256` checksum asset. The binary is built on a
+GitHub-hosted Ubuntu runner; the Linux 4.20 kernel baseline does not by itself
+guarantee compatibility with older glibc userspaces.
 
 Extract and place the binary on your `PATH`:
 
@@ -47,7 +52,9 @@ tar xzf stallhunt-<version>-x86_64-unknown-linux-gnu.tar.gz
 install -m 0755 stallhunt-<version>-x86_64-unknown-linux-gnu/stallhunt ~/.local/bin/stallhunt
 ```
 
-Verify the published SHA-256 checksum before use. Download release tarballs from the [GitHub Releases](https://github.com/guillem/stallhunt/releases) page for tagged versions such as `v0.1.0`.
+Verify the published SHA-256 checksum before use. Download release tarballs
+from the [GitHub Releases](https://github.com/guillem/stallhunt/releases) page;
+the current corrective release is `v0.1.2`.
 
 ## Shell completions
 
@@ -70,7 +77,7 @@ Reload the shell or follow your distribution's completion install conventions.
 | Non-Linux | out of scope |
 | Rust 1.85+ | required for source builds |
 | Rust < 1.85 | unsupported |
-| `x86_64-unknown-linux-gnu` | primary target |
+| `x86_64-unknown-linux-gnu` | published tarball; older-glibc compatibility is undefined |
 | Other Linux architectures | best-effort source builds; not CI-gated yet |
 | Root / sudo | not required for baseline collection |
 | eBPF | not required |

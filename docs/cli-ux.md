@@ -187,17 +187,19 @@ overwritten unless `--force` is passed.
 
 M6 adds `watch`. `--interval` uses the same 100 ms–5 m duration parser as
 `hunt` and defaults to 2 seconds. `--count` stops after N windows; without it,
-watch runs until interrupted. Each window reuses the previous endpoint
-snapshot. Text reports `new` / `persistent` / `resolved` pressure findings plus
-a compact current-window summary. A TTY refreshes the screen with ANSI
-clear/home; piped text and `--json` append. JSON is one compact
-`stallhunt.watch_window` object per window. It is not hunt JSON and not a
-recording, and it omits full evidence. Host memory `kind` values already name
-reclaim, swap, or possible thrashing. Scoped cgroup `kind` values name the
-resource and, when labeled, the mechanism (`cgroup_memory_reclaim_pressure`,
-`cgroup_memory_swap_pressure`, `cgroup_memory_possible_thrashing`,
-`cgroup_cpu_quota_throttle_pressure`); identity remains path plus resource, so
-a mechanism change stays `persistent`. Use
+watch runs until interrupted. For an unlimited watch, the first SIGINT drains
+and writes the in-flight window; a second SIGINT terminates immediately with
+status 130. Bounded `--count` runs retain the default signal disposition. Each
+window reuses the previous endpoint snapshot. Text reports `new` / `persistent`
+/ `resolved` pressure findings plus a compact current-window summary. A TTY
+refreshes the screen with ANSI clear/home; piped text and `--json` append. JSON
+is one compact `stallhunt.watch_window` object per window. It is not hunt JSON
+and not a recording, and it omits full evidence. Host memory `kind` values
+already name reclaim, swap, or possible thrashing. Scoped cgroup `kind` values
+name the resource and, when labeled, the mechanism
+(`cgroup_memory_reclaim_pressure`, `cgroup_memory_swap_pressure`,
+`cgroup_memory_possible_thrashing`, `cgroup_cpu_quota_throttle_pressure`);
+identity remains path plus resource, so a mechanism change stays `persistent`. Use
 `hunt --json` or `record` when the full evidence payload is required. Invalid
 `--count` still exits 2.
 
@@ -347,7 +349,7 @@ Representative Milestone 1 finding shape (optional context fields are omitted he
 ```json
 {
   "schema_version": 1,
-  "tool_version": "0.1.0",
+  "tool_version": "0.1.2",
   "requested_observation": {
     "duration_ms": 10000
   },
