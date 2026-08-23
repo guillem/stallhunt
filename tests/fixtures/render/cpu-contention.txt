@@ -1,13 +1,14 @@
-CPU scheduling contention observed
-Verdict: contention · severity high · CPU confidence high
-Evidence: CPU PSI some 20.00% over exact 10s interval (2s cumulative stalled time)
-Victim candidates (observed runnable delay; not confirmed harm):
-  1. worker�next [21] — 500ms delay (high; observed runnable-delay candidate)
-Suspect candidates (same window only; not proven causal):
-  1. build�[31m [20] — 80.0% of one CPU (medium; leading concurrent CPU consumer)
-  2. worker [21] — 30.0% of one CPU (medium; concurrent CPU consumer)
-Context and limitations:
-  Host CPU utilization was at least 90%; this is supporting context, not the contention verdict.
-  Runnable tasks exceeded logical CPU count; this is supporting context, not the contention verdict.
-  Suspects consumed CPU in the same window; this correlation does not prove causality.
-Timing: requested 10s; PSI measured 10s; CPU/process measured 10s
+STALLHUNT  observed 10s  DEGRADED
+
+RESOURCE  STATE          SEVERITY   CONFIDENCE  PRESSURE
+CPU       pressure       high       high        20.00% PSI
+Memory    unavailable    none       low         —
+I/O       unavailable    none       low         —
+
+FINDINGS
+1. CPU scheduling contention observed (20.00% CPU PSI some).  high · confidence high
+   Evidence: CPU PSI some 20.00% (2.00s stalled)
+   Affected: worker�next [21] (500.0ms runnable delay)
+   Candidates: build�[31m [20] (80.0% of one CPU); worker [21] (30.0% of one CPU)
+
+LIMITATIONS  5 qualifier(s); use --details for full evidence and explanations.

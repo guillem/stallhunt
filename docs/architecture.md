@@ -168,9 +168,11 @@ src/
   memory.rs     # bounded host meminfo/vmstat snapshots and intervals
   observe.rs    # sequential bounded multi-resource observation orchestration
   psi.rs        # CPU, memory, and I/O PSI parsing, capabilities, and intervals
+  presentation.rs # analyzer-to-human view model; no inference
   record.rs     # versioned normalized-observation recordings and redaction
-  render.rs     # concise finding-first text and full-evidence JSON rendering
-  watch.rs      # rolling finding lifecycle tracker and watch renderer
+  render.rs     # compact/detailed text and full-evidence JSON rendering
+  tui.rs        # interactive diagnosis-first watch renderer and input loop
+  watch.rs      # rolling finding lifecycle tracker and stream renderer
 tests/
   cli.rs                # executable-level behavior tests
   cpu_acceptance.rs     # ignored bounded rootless live-pressure acceptance test
@@ -237,15 +239,18 @@ durations, typed observed/unavailable resource slots, and optional identifier
 redaction. `replay` reconstructs `HuntObservation` and reuses the existing
 analyzer and renderers. Unknown `kind` or `schema_version` values are rejected.
 
-M6 adds `watch` (ADR-0008). `observe.rs` exposes start/end endpoints so the
+M6 adds `watch` (ADR-0008, superseded in presentation by ADR-0013). `observe.rs` exposes start/end endpoints so the
 next window can reuse the previous end snapshot. `watch.rs` classifies host
 CPU/memory/I/O and a bounded set of cgroup pressure findings as new,
 persistent, or resolved. It keeps 16 compact history windows and does not
 retain full observations. Cgroup watch `kind` strings include the scoped
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
-identity remains path plus resource. TTY text refreshes by clearing the screen; JSON is
-one compact `stallhunt.watch_window` object per window, not a recording and
-not hunt JSON.
+identity remains path plus resource. `presentation.rs` flattens analyzer
+results without making new inferences. Interactive watch uses `tui.rs` with an
+input-aware sampling deadline, retains only the current diagnosis plus 16 PSI
+trend points, and restores terminal state through an owning guard. Redirected
+or `--plain` output appends compact windows. JSON remains one compact
+`stallhunt.watch_window` object per window, not a recording or hunt JSON.
 
 M8 adds `analyze_evidence_chains` in `analysis.rs` (ADR-0009, ADR-0010,
 ADR-0011). It consumes already-produced memory, I/O, and cgroup findings and

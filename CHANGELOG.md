@@ -4,6 +4,20 @@ All notable user-facing changes to Stallhunt are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once public releases begin.
 
+## [Unreleased]
+
+### Added
+
+- Diagnosis-first interactive `watch` TUI with bounded PSI trends, finding navigation, selected attribution, full-evidence and help overlays, responsive layouts, and terminal restoration.
+- `hunt --details` and `replay --details` for the complete explanatory text renderer.
+- `watch --plain`, global `--no-color`, and `NO_COLOR` support.
+
+### Changed
+
+- Default hunt/replay text is now a compact resource table with bounded ranked findings and consolidated limitations.
+- Redirected and explicitly plain watch text emits compact per-window changes instead of repeating its retained history.
+- Unlimited watch retains first-SIGINT drain and second-SIGINT status 130 without bypassing terminal cleanup.
+
 ## [0.1.2] - 2026-08-23
 
 ### Fixed

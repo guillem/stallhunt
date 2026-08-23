@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use crossterm::style::{Color, Stylize};
 use serde::Serialize;
 
 use crate::analysis::{
@@ -18,6 +19,10 @@ use crate::memory::{
 };
 use crate::observe::{
     CgroupHuntObservation, HuntObservation, IoHuntObservation, MemoryHuntObservation,
+};
+use crate::presentation::{
+    DiagnosisView, OverallStatus, confidence_name as compact_confidence_name,
+    severity_name as compact_severity_name,
 };
 use crate::psi::{
     CpuPsiCapability, CpuPsiObservation, IoPsiCapability, IoPsiFullInterval, IoPsiObservation,
@@ -70,7 +75,8 @@ where
 {
     let result = observe(Duration::from_millis(options.duration_ms));
     match options.output {
-        OutputFormat::Text => Ok(hunt_text(options, result)),
+        OutputFormat::Text | OutputFormat::PlainText => Ok(compact_hunt_text(options, &result)),
+        OutputFormat::DetailedText => Ok(detailed_hunt_text(options, result)),
         OutputFormat::Json => hunt_json(options, result),
     }
 }
@@ -87,7 +93,7 @@ pub fn capabilities(
     cgroup: CgroupCapability,
 ) -> Result<String, serde_json::Error> {
     match options.output {
-        OutputFormat::Text => Ok(format!(
+        OutputFormat::Text | OutputFormat::DetailedText | OutputFormat::PlainText => Ok(format!(
             "Telemetry capabilities\n\nCPU PSI: {}\n{}\nHost /proc/stat: {}\nProcess /proc/<pid>/stat: {}\nTask /proc/<tgid>/task/<tid>/schedstat: {}\n{}\nMemory PSI: {}\n{}\nHost /proc/meminfo: {}\nHost /proc/vmstat: {}\nI/O PSI: {}\n{}\nHost /proc/diskstats: {}\nProcess /proc/<pid>/io: {}\nCgroup v2: {}\n{}\n",
             cpu_psi.as_str(),
             cpu_psi.explanation(),
@@ -142,7 +148,137 @@ pub fn capabilities(
     }
 }
 
-fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
+fn compact_hunt_text(options: &HuntOptions, result: &HuntObservation) -> String {
+    const MAX_FINDINGS: usize = 5;
+    const MAX_CANDIDATES: usize = 2;
+    let diagnosis = DiagnosisView::from_observation(result, options.duration_ms);
+    let color = crate::cli::colors_enabled();
+    let status_color = match diagnosis.status {
+        OverallStatus::Healthy => Color::Green,
+        OverallStatus::Degraded => Color::Red,
+        OverallStatus::Incomplete => Color::Yellow,
+    };
+    let mut output = format!(
+        "STALLHUNT  observed {}  {}\n\n",
+        human_duration(options.duration_ms),
+        painted(diagnosis.status.label(), status_color, color),
+    );
+    output.push_str("RESOURCE  STATE          SEVERITY   CONFIDENCE  PRESSURE\n");
+    for resource in &diagnosis.resources {
+        let state_color = match resource.state {
+            crate::presentation::ResourceState::Healthy => Color::Green,
+            crate::presentation::ResourceState::Pressure => severity_color(resource.severity),
+            crate::presentation::ResourceState::Inconclusive
+            | crate::presentation::ResourceState::Unavailable => Color::Yellow,
+        };
+        let state = format!("{:<13}", resource.state.label());
+        output.push_str(&format!(
+            "{:<8}  {}  {:<9}  {:<10}  {}\n",
+            resource.name,
+            painted(&state, state_color, color),
+            compact_severity_name(resource.severity),
+            compact_confidence_name(resource.confidence),
+            resource.psi_some_fraction.map_or_else(
+                || "—".into(),
+                |fraction| format!("{:.2}% PSI", fraction * 100.0),
+            ),
+        ));
+    }
+
+    if diagnosis.findings.is_empty() {
+        output.push_str("\nNo significant resource contention detected.\n");
+    } else {
+        output.push_str("\nFINDINGS\n");
+        for (index, finding) in diagnosis.findings.iter().take(MAX_FINDINGS).enumerate() {
+            output.push_str(&format!(
+                "{}. {}  {} · confidence {}\n",
+                index + 1,
+                finding.title,
+                painted(
+                    compact_severity_name(finding.severity),
+                    severity_color(finding.severity),
+                    color,
+                ),
+                compact_confidence_name(finding.confidence),
+            ));
+            if finding.scope != "host" {
+                output.push_str(&format!("   Scope: {}\n", finding.scope));
+            }
+            if let Some(evidence) = finding.evidence.first() {
+                output.push_str(&format!("   Evidence: {evidence}\n"));
+            }
+            if !finding.affected.is_empty() {
+                output.push_str(&format!(
+                    "   Affected: {}\n",
+                    finding
+                        .affected
+                        .iter()
+                        .take(MAX_CANDIDATES)
+                        .map(|candidate| format!("{} ({})", candidate.name, candidate.metric))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ));
+            }
+            if !finding.contributors.is_empty() {
+                output.push_str(&format!(
+                    "   Candidates: {}\n",
+                    finding
+                        .contributors
+                        .iter()
+                        .take(MAX_CANDIDATES)
+                        .map(|candidate| format!("{} ({})", candidate.name, candidate.metric))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ));
+            }
+        }
+        if diagnosis.findings.len() > MAX_FINDINGS {
+            output.push_str(&format!(
+                "   … {} additional scoped finding(s) omitted\n",
+                diagnosis.findings.len() - MAX_FINDINGS
+            ));
+        }
+    }
+    if !diagnosis.chains.is_empty() {
+        output.push_str("\nRELATED EVIDENCE\n");
+        for chain in diagnosis.chains.iter().take(3) {
+            output.push_str(&format!(
+                "- {} (confidence {})\n",
+                chain.summary,
+                compact_confidence_name(chain.confidence)
+            ));
+        }
+    }
+    if !diagnosis.limitations.is_empty() {
+        output.push_str(&format!(
+            "\nLIMITATIONS  {} qualifier(s); use --details for full evidence and explanations.\n",
+            diagnosis.limitations.len()
+        ));
+    } else {
+        output.push_str("\nUse --details for full evidence and explanations.\n");
+    }
+    output
+}
+
+fn painted(value: &str, color: Color, enabled: bool) -> String {
+    if enabled {
+        format!("{}", value.with(color).bold())
+    } else {
+        value.to_owned()
+    }
+}
+
+const fn severity_color(severity: crate::analysis::Severity) -> Color {
+    match severity {
+        crate::analysis::Severity::None => Color::Green,
+        crate::analysis::Severity::Low => Color::Cyan,
+        crate::analysis::Severity::Moderate => Color::Yellow,
+        crate::analysis::Severity::High => Color::DarkRed,
+        crate::analysis::Severity::Severe => Color::Red,
+    }
+}
+
+fn detailed_hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
     let cpu_rank = analysis::analyze_cpu(result.psi.as_ref().ok(), result.cpu.as_ref().ok())
         .findings
         .first()
@@ -1788,7 +1924,11 @@ mod tests {
     where
         F: FnOnce(Duration) -> HuntObservation,
     {
-        super::hunt(options, observe).expect("hunt render")
+        let mut options = *options;
+        if options.output == OutputFormat::Text {
+            options.output = OutputFormat::DetailedText;
+        }
+        super::hunt(&options, observe).expect("hunt render")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3120,7 +3260,7 @@ mod tests {
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
-        let output = render_hunt(
+        let output = super::hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
@@ -3132,7 +3272,8 @@ mod tests {
                 io: None,
                 cgroup: None,
             },
-        );
+        )
+        .expect("compact hunt render");
         assert_eq!(
             output,
             include_str!("../tests/fixtures/render/cpu-contention.txt")

@@ -81,7 +81,9 @@ Memory PSI, CPU PSI, CPU/process, and memory context are collected
 sequentially, so each pair has an independent measured interval rather than an
 atomic shared snapshot. M6 `watch` reuses the previous end endpoint as the next
 window start so rolling PSI totals stay contiguous and collection is not
-doubled.
+doubled. ADR-0013 replaces the watch sleep with an input-aware monotonic
+deadline; it does not add collector passes. Terminal input can be delayed
+briefly while the already-bounded endpoint collection is executing.
 
 ## `/proc/stat`
 

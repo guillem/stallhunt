@@ -159,6 +159,12 @@ Process names and command lines are untrusted text.
 
 Sanitize control characters before terminal rendering.
 
+ADR-0013 applies the same rule to compact text, TUI rows, details, cgroup paths,
+and process/device names. Interactive watch owns raw mode, cursor visibility,
+and alternate-screen entry through a terminal guard and restores them on
+success, error, signal-driven return, or unwinding panic. JSON and recordings
+never contain terminal escape styling.
+
 ### Symlink/path races
 
 Be cautious when traversing procfs/sysfs/cgroupfs.

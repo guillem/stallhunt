@@ -5,9 +5,9 @@
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
 block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, and the
 first two Milestone 8 evidence-chain slices. Scoped cgroup findings can also
-carry reclaim, swap, possible-thrashing, or quota-throttle context labels. The
-repository is currently parked pending selection of another concrete diagnostic
-question; see `status.md`.
+carry reclaim, swap, possible-thrashing, or quota-throttle context labels.
+Milestone 9's compact text and interactive watch implementation is awaiting the
+local operator trial matrix in EXP-0009; see `status.md`.
 
 Build and run it from the repository root:
 
@@ -154,6 +154,11 @@ Likely useful categories:
 - duration parsing.
 
 Clap covers CLI parsing. Do not preselect other crates in documentation before implementation evaluates current ecosystem choices.
+
+ADR-0013 selects Ratatui 0.29 with Crossterm 0.28.1 for interactive watch.
+Ratatui 0.30 requires Rust 1.88, so dependency updates must not cross that line
+while the project MSRV remains 1.85. Terminal rendering stays downstream of
+analysis and must be deterministic under Ratatui's test backend.
 
 For small parsers under procfs/sysfs, custom parsing may be clearer and safer than a broad abstraction crate.
 

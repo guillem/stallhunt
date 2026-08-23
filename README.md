@@ -33,6 +33,14 @@ stallhunt --json
 stallhunt hunt --duration 30s
 ```
 
+Default text is a compact diagnosis. Expand the same observation's evidence,
+attribution, timing, and limitations with:
+
+```bash
+stallhunt hunt --details
+stallhunt replay --details incident.json
+```
+
 Capture and replay a normalized observation:
 
 ```bash
@@ -46,6 +54,12 @@ Follow finding lifecycle for a bounded number of rolling windows:
 ```bash
 stallhunt watch --interval 2s --count 3
 ```
+
+On an interactive terminal, `watch` opens a diagnosis-first TUI. Use arrow
+keys or `j`/`k` to select findings, Enter or `d` for full evidence, `?` for
+help, and `q` to quit. Redirected output is append-only text; `--plain` forces
+that mode on a terminal. `--json` remains the compact machine-readable stream.
+Use `--no-color` or `NO_COLOR` for monochrome human output.
 
 Generate shell completions:
 
@@ -154,9 +168,11 @@ Later releases may add:
 │   ├── main.rs
 │   ├── memory.rs
 │   ├── observe.rs
+│   ├── presentation.rs
 │   ├── psi.rs
 │   ├── record.rs
 │   ├── render.rs
+│   ├── tui.rs
 │   └── watch.rs
 ├── tests/
 │   ├── cgroup_acceptance.rs
@@ -276,11 +292,13 @@ M6 adds `watch`. Rolling windows reuse the previous endpoint snapshot. The
 command tracks host CPU/memory/I/O and a bounded set of cgroup pressure
 findings as new, persistent, or resolved. Scoped cgroup `kind` values name the
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label.
-TTY text refreshes the screen; JSON emits one compact
-`stallhunt.watch_window` object per window. Watch is not a TUI and is not a
-recording. On an unlimited watch, the first SIGINT drains and writes the
-in-flight window; a second SIGINT terminates immediately. Full evidence remains
-on `hunt --json` and `record`.
+ADR-0013 adds a diagnosis-first TUI on interactive terminals without changing
+that lifecycle model. It retains the current diagnosis plus 16 compact PSI
+trend points, supports selected attribution and on-demand full evidence, and
+falls back to append-only text for redirected/`--plain` use. JSON still emits
+one compact `stallhunt.watch_window` object per window and is not a recording.
+On an unlimited watch, the first SIGINT drains the in-flight window; a second
+exits with status 130 after terminal cleanup.
 
 M8 adds a conservative evidence chain: when memory reclaim, swap, or possible
 thrashing coexists with I/O pressure, hunt text and JSON may report that the

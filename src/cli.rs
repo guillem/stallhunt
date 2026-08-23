@@ -1,5 +1,7 @@
 use std::fmt;
+use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
@@ -13,7 +15,18 @@ pub const MAX_HUNT_DURATION_MS: u64 = 300_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
     Text,
+    DetailedText,
+    PlainText,
     Json,
+}
+
+static NO_COLOR_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+pub fn colors_enabled() -> bool {
+    !NO_COLOR_REQUESTED.load(Ordering::Relaxed)
+        && std::env::var_os("NO_COLOR").is_none()
+        && std::env::var_os("TERM").is_none_or(|term| term != "dumb")
+        && std::io::stdout().is_terminal()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +109,9 @@ impl std::error::Error for CliError {}
     after_help = "Run `stallhunt` with no subcommand for a default 10s hunt.\nUse `stallhunt completions <SHELL>` to generate shell completions."
 )]
 pub struct Cli {
+    /// Disable colored human output
+    #[arg(long, global = true)]
+    no_color: bool,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -132,6 +148,9 @@ struct HuntArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Show complete evidence, attribution, timing, and limitations
+    #[arg(long, conflicts_with = "json")]
+    details: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -164,6 +183,9 @@ struct ReplayArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Show complete evidence, attribution, timing, and limitations
+    #[arg(long, conflicts_with = "json")]
+    details: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -189,13 +211,16 @@ struct WatchArgs {
     /// Emit one compact JSON object per window
     #[arg(long)]
     json: bool,
+    /// Force append-only text instead of the interactive terminal UI
+    #[arg(long, conflicts_with = "json")]
+    plain: bool,
 }
 
 impl From<HuntArgs> for HuntOptions {
     fn from(args: HuntArgs) -> Self {
         Self {
             duration_ms: args.duration,
-            output: output_format(args.json),
+            output: text_output_format(args.json, args.details),
         }
     }
 }
@@ -227,7 +252,7 @@ impl From<ReplayArgs> for ReplayOptions {
     fn from(args: ReplayArgs) -> Self {
         Self {
             input: args.path,
-            output: output_format(args.json),
+            output: text_output_format(args.json, args.details),
         }
     }
 }
@@ -247,13 +272,20 @@ impl From<WatchArgs> for WatchOptions {
         Self {
             interval_ms: args.interval,
             count: args.count,
-            output: output_format(args.json),
+            output: if args.json {
+                OutputFormat::Json
+            } else if args.plain {
+                OutputFormat::PlainText
+            } else {
+                OutputFormat::Text
+            },
         }
     }
 }
 
 impl Cli {
     pub fn into_command(self) -> Command {
+        NO_COLOR_REQUESTED.store(self.no_color, Ordering::Relaxed);
         match self.command {
             None => Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
@@ -274,6 +306,16 @@ impl Cli {
 const fn output_format(json: bool) -> OutputFormat {
     if json {
         OutputFormat::Json
+    } else {
+        OutputFormat::Text
+    }
+}
+
+const fn text_output_format(json: bool, details: bool) -> OutputFormat {
+    if json {
+        OutputFormat::Json
+    } else if details {
+        OutputFormat::DetailedText
     } else {
         OutputFormat::Text
     }
@@ -475,6 +517,28 @@ mod tests {
     fn options_cannot_be_repeated() {
         assert!(parse(["stallhunt", "hunt", "--json", "--json"]).is_err());
         assert!(parse(["stallhunt", "hunt", "--duration", "1s", "--duration=2s"]).is_err());
+    }
+
+    #[test]
+    fn details_plain_and_color_controls_have_explicit_contracts() {
+        assert_eq!(
+            expect_parse(["stallhunt", "hunt", "--details"]),
+            Command::Hunt(HuntOptions {
+                duration_ms: DEFAULT_HUNT_DURATION_MS,
+                output: OutputFormat::DetailedText,
+            })
+        );
+        assert_eq!(
+            expect_parse(["stallhunt", "watch", "--plain"]),
+            Command::Watch(WatchOptions {
+                interval_ms: DEFAULT_WATCH_INTERVAL_MS,
+                count: None,
+                output: OutputFormat::PlainText,
+            })
+        );
+        assert!(parse(["stallhunt", "hunt", "--details", "--json"]).is_err());
+        assert!(parse(["stallhunt", "watch", "--plain", "--json"]).is_err());
+        assert!(parse(["stallhunt", "--no-color", "hunt"]).is_ok());
     }
 
     #[test]

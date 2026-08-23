@@ -64,8 +64,17 @@ fn replay_fixtures_render_human_output() {
         );
         let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
         assert!(
-            stdout.contains("Verdict:"),
-            "{name} should render a verdict"
+            stdout.contains("STALLHUNT") && stdout.contains("RESOURCE  STATE"),
+            "{name} should render a compact diagnosis"
+        );
+
+        let detailed = stallhunt(&["replay", "--details", &path]);
+        assert!(detailed.status.success(), "{name} detailed replay");
+        assert!(
+            String::from_utf8(detailed.stdout)
+                .expect("utf-8 detailed stdout")
+                .contains("Verdict:"),
+            "{name} should retain the complete explanatory renderer"
         );
     }
 }

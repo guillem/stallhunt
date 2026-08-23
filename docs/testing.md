@@ -165,6 +165,14 @@ structural JSON assertions. Executable CLI tests cover `watch --count 1` text
 and JSON on a 100 ms window, plus prompt second-SIGINT termination during an
 unlimited five-minute window. Live watch does not assert host contention.
 
+ADR-0013 adds compact/detailed CLI contract tests and Ratatui `TestBackend`
+coverage for the full and undersized layouts, selected attribution, details and
+help overlays, navigation, monochrome rendering, and the 16-sample trend bound.
+Non-TTY CLI tests cover append-only `--plain`, JSON conflicts, and prompt
+second-SIGINT status 130. Manual user trials must record terminal and size,
+task, time-to-answer, missed information, navigation friction, and the decision
+that follows; visual preference alone is not an acceptance result.
+
 M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus
 I/O pressure path gated by `memory.events` high/max or `memory.stat`

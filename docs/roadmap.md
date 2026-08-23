@@ -219,9 +219,10 @@ Create ADR before promising format compatibility.
 ## Milestone 6 — Continuous watch mode
 
 Status: complete. Finding-lifecycle watch over contiguous rolling windows is
-implemented. It is not a TUI. ADR-0008 records the output and lifecycle
-contract. The first SIGINT drains the in-flight window before exit and a
-second SIGINT terminates immediately; there is still no multi-window recording.
+implemented. ADR-0008 records the lifecycle contract; ADR-0013 later
+supersedes its deferred-TUI presentation decision. The first SIGINT drains the
+in-flight window before exit and a second exits with status 130; there is still
+no multi-window recording.
 
 Goal:
 
@@ -282,6 +283,31 @@ CPU-heavy build
 ```
 
 Avoid overclaiming causality.
+
+## Milestone 9 — Diagnosis-first terminal interface
+
+Status: implementation complete; local operator feedback pending.
+
+Goal:
+
+Make existing evidence faster to understand without changing telemetry,
+inference, or machine-readable contracts.
+
+Delivered:
+
+- compact default hunt/replay diagnosis and opt-in `--details`;
+- interactive watch TUI with resource trends, lifecycle navigation, selected
+  attribution, and on-demand explanations;
+- append-only `--plain` and unchanged JSON fallbacks;
+- color opt-out, responsive layouts, terminal cleanup, deterministic backend
+  tests, and an operator-trial protocol.
+
+Exit condition:
+
+At least one healthy-host and one active-pressure local trial are recorded with
+terminal size, task, time-to-answer, missed information, navigation friction,
+and a concrete keep/change decision. No TUI acceptance claim is made before
+those trials.
 
 ## Future possibilities
 

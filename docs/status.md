@@ -4,7 +4,7 @@ Last updated: 2026-08-23
 
 ## Current milestone
 
-**Milestone 8 — corrective maintenance release v0.1.2 shipped**
+**Milestone 9 — diagnosis-first interface implemented; local operator trials pending**
 
 Milestones 1–6 remain functionally complete. Since the v0.1.0 productization,
 v0.1.1 landed the `BOTTLENECK_*` → `STALLHUNT_*` acceptance-variable rename
@@ -16,8 +16,11 @@ release workflow's Node-20-deprecated actions were bumped to
 `actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
 v0.1.2 corrective release makes the advertised second-SIGINT termination real
 and ensures the 16-chain regression actually reaches truncation with 18
-eligible candidates. The repository remains parked: no additional M8 chain or
-M7 probe is approved.
+eligible candidates. M9 now provides compact hunt/replay text plus `--details`
+and a diagnosis-first interactive watch TUI with bounded PSI trends, finding
+navigation, selected attribution, and on-demand explanation. Redirected,
+`--plain`, and JSON paths remain noninteractive. Local operator trials are the
+remaining M9 exit gate; no additional M8 chain or M7 probe is approved.
 Do not start M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -52,8 +55,10 @@ the test process and does not mutate the hierarchy.
   recording.
 - **M6 complete within its exit condition:** `watch` classifies host and
   bounded cgroup pressure findings as new, persistent, or resolved across
-  contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
-  keeps 16 history windows. It is not a TUI and does not store full evidence.
+  contiguous rolling windows, appends piped text/JSON, and keeps 16 history
+  windows. ADR-0013 adds a TUI while retaining only the current detailed
+  diagnosis and 16 compact PSI trend points; historical full evidence is not
+  stored.
   A second SIGINT while draining terminates immediately with the conventional
   exit status; `--count` bounds scripted runs.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
@@ -65,6 +70,10 @@ the test process and does not mutate the hierarchy.
   Watch does not track chain identities.
 - **M7 not started; remaining M8 chains not started:** no eBPF probe exists,
   and no CPU–I/O, host–cgroup, or process-device chain exists.
+- **M9 implementation complete, field acceptance pending:** compact/detailed
+  text, TUI/plain/JSON watch selection, responsive layouts, terminal cleanup,
+  color controls, deterministic TUI tests, and ADR-0013 are implemented. No
+  local operator trial is recorded yet.
 
 ## Implemented
 
@@ -74,7 +83,10 @@ the test process and does not mutate the hierarchy.
   version command structure exists.
 - `hunt` accepts `--duration` values from 100 ms through 5 minutes, including
   exact-millisecond decimal values, and defaults to 10 seconds.
-- `hunt` and `capabilities` support separate text and JSON render paths.
+- `hunt` and `replay` default to a compact diagnosis table with at most five
+  findings and two candidates per role. `--details` retains complete evidence,
+  attribution, timing, controller context, and limitations. JSON is unchanged.
+  Global `--no-color` and `NO_COLOR` disable styling.
 - CPU PSI `some` parsing retains rolling averages and the raw cumulative
   microsecond total. The parser validates required fields and ranges, tolerates
   unknown future fields, rejects duplicates/malformed input, and treats CPU
@@ -218,9 +230,12 @@ the test process and does not mutate the hierarchy.
   windows. Host CPU, memory, and I/O pressure plus at most 16 cgroup pressure
   identities are classified as new, persistent, or resolved. Healthy results do
   not create findings; missing or short-window data does not resolve an active
-  finding. History is capped at 16 compact windows. TTY text clears the screen;
-  JSON emits one `stallhunt.watch_window` object per window. Watch JSON is not
-  hunt JSON and not a recording. Scoped cgroup lifecycle `kind` values name the
+  finding. History is capped at 16 compact windows. Interactive stdin/stdout
+  uses an alternate-screen Ratatui TUI; `--plain`, redirection, or `TERM=dumb`
+  appends compact text. JSON emits one `stallhunt.watch_window` object per
+  window and is not hunt JSON or a recording. The TUI adds no collector pass or
+  new inference rule and falls back to plain output if initialization fails.
+  Scoped cgroup lifecycle `kind` values name the
   resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
   identity remains path plus resource.
 - M8 relates a memory reclaim, swap, or possible-thrashing finding to host I/O
@@ -306,6 +321,10 @@ the test process and does not mutate the hierarchy.
   drains the current window after the first SIGINT; a second SIGINT exits
   immediately. Consecutive 100 ms windows remain smoke observations, same as
   hunt.
+- TUI PSI sparklines are presentation history, not inference. Only the current
+  full diagnosis is available interactively; older full observations are
+  discarded. Input can pause briefly during bounded endpoint collection.
+  Mouse input, filtering, sorting, and pause are not implemented in M9.
 - M8's chains are same-window correlation of independent PSI plus either host
   VM counters or same-cgroup `memory.events` high/max or `memory.stat`
   direct-reclaim/swap-in deltas. They do not prove reclaim or swap caused I/O
@@ -327,8 +346,8 @@ the test process and does not mutate the hierarchy.
 
 ## Pending work
 
-The repository is intentionally parked after the scoped possible-thrashing
-slice. No additional M8 chain or M7 probe is approved.
+M9 code is ready for local operator trials. No additional M8 chain or M7 probe
+is approved while interface feedback is collected.
 
 Diagnostic and attribution gaps:
 
@@ -377,12 +396,11 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Write down one concrete diagnostic question and the independent evidence needed
-to answer it before selecting another feature. No such question is currently
-selected. Do not start Milestone 7 unless the question cannot be answered with
-current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain unless
-independent linking evidence already exists; do not treat coincident PSI as a
-path, and do not link host findings to cgroup findings.
+Run and record EXP-0009's M9 local trial matrix: at minimum one healthy host and
+one controlled active-pressure session, each in wide and stacked terminal
+layouts. Record task, time-to-answer, missed information, navigation friction,
+and a keep/change decision. Iterate this one baseline locally and do not open a
+PR yet. Do not start M7 or another M8 chain as part of UI feedback.
 
 ## Current design risks
 
@@ -461,7 +479,6 @@ Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 Not yet decided:
 
 - serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
-- color/terminal crate,
 - eventual eBPF framework,
 - compatibility policy, additional targets, and signing/provenance for
   pre-built release artifacts.
@@ -474,10 +491,28 @@ Decided in ADR-0012:
 - minimum Linux baseline: 4.20+,
 - CLI: clap 4 with derive; bare `stallhunt` defaults to 10s hunt; `stallhunt completions <shell>`.
 
+Decided in ADR-0013:
+
+- diagnosis-first interactive watch and compact default hunt/replay text;
+- Ratatui 0.29 plus Crossterm 0.28.1 without raising Rust 1.85;
+- `--details`, `--plain`, `--no-color`, `NO_COLOR`, and terminal fallback rules.
+
 These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-23, M9's diagnosis-first interface passed formatting, locked-offline
+Clippy with warnings denied, and the complete default test gate: 160 unit tests
+(159 passed, one fixture writer ignored), 14 executable CLI tests, three
+replay-fixture tests, and five environment-dependent Linux acceptance tests
+ignored by default. Deterministic TUI coverage exercised wide and undersized
+layouts, navigation, attribution, help/details overlays, monochrome styling,
+and the 16-sample trend bound. A 120×32 pseudo-terminal smoke exercised
+alternate-screen entry, initial sampling, a completed 100 ms watch window, and
+terminal restoration. Local human usability trials remain pending in EXP-0009.
+The locked dependency graph also passed `cargo +1.85.0 check --offline`,
+including Ratatui 0.29 and Crossterm 0.28.1.
 
 Later on 2026-08-23, a documentation consistency audit reconciled the v0.1.1
 and v0.1.2 SIGINT/truncation history, current JSON examples, watch semantics,
@@ -524,7 +559,7 @@ cross-references, and experiment state. The documented quickstart CLI syntax
 was checked against the current binary. Formatting, locked-offline Clippy, and
 all default tests passed.
 
-Default-gate coverage is 157 unit tests, 13 CLI tests, three replay-fixture
+Default-gate coverage is 160 unit tests, 14 CLI tests, three replay-fixture
 tests, and five ignored Linux acceptance tests.
 
 Earlier the same day, scoped cgroup possible-thrashing labels were validated with

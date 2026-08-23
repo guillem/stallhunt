@@ -1,16 +1,13 @@
 --- window 1 ---
 WATCH  window 1/3  interval 2s
 
-Lifecycle
+CHANGES
   NEW         CPU  cpu_scheduling_contention  high  PSI 20.00%
 
-Current window
+RESOURCE  STATE         SEVERITY  PRESSURE
   CPU      pressure     high  PSI 20.00%
   Memory   healthy      none  PSI 0.10%
   I/O      healthy      none  PSI 0.10%
   Cgroup   no scoped pressure ranked this window
 
-Recent history (oldest first)
-  #1   CPU new high
-
-Lifecycle tracks pressure findings only. Healthy windows resolve a previous finding; missing data does not.
+Lifecycle: healthy resolves; missing data leaves an active finding unconfirmed.

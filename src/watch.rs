@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{self, IsTerminal, Write};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
@@ -21,6 +21,7 @@ use crate::cli::{OutputFormat, WatchOptions};
 use crate::observe::{
     HuntObservation, observation_from_endpoints, read_end_endpoint, read_start_endpoint,
 };
+use crate::presentation::DiagnosisView;
 
 pub const MAX_HISTORY_WINDOWS: usize = 16;
 pub const MAX_TRACKED_CGROUPS: usize = 16;
@@ -162,6 +163,8 @@ pub struct WatchWindow {
     pub lifecycle: Vec<TrackedFinding>,
     pub current: WindowSignals,
     pub history: Vec<HistoryEntry>,
+    #[serde(skip)]
+    pub diagnosis: Option<DiagnosisView>,
 }
 
 #[derive(Debug, Clone)]
@@ -187,7 +190,9 @@ impl WatchTracker {
     }
 
     pub fn ingest(&mut self, observation: &HuntObservation) -> WatchWindow {
-        self.ingest_signals(signals_from_observation(observation))
+        let mut window = self.ingest_signals(signals_from_observation(observation));
+        window.diagnosis = Some(DiagnosisView::from_observation(observation, 0));
+        window
     }
 
     pub fn ingest_signals(&mut self, signals: WindowSignals) -> WatchWindow {
@@ -345,6 +350,7 @@ impl WatchTracker {
             lifecycle,
             current,
             history: self.history.iter().cloned().collect(),
+            diagnosis: None,
         }
     }
 }
@@ -377,27 +383,44 @@ const fn state_rank(state: LifecycleState) -> u8 {
     }
 }
 
-pub fn run(options: &WatchOptions) -> io::Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchExit {
+    Completed,
+    Interrupted,
+}
+
+pub fn run(options: &WatchOptions) -> io::Result<WatchExit> {
+    let interactive = options.output == OutputFormat::Text
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal()
+        && std::env::var_os("TERM").is_none_or(|term| term != "dumb");
+    if interactive {
+        match crate::tui::run(options) {
+            Ok(exit) => return Ok(exit),
+            Err(error) if error.is_init() => {
+                eprintln!("warning: interactive watch unavailable ({error}); using plain output");
+            }
+            Err(error) => return Err(error.into_inner()),
+        }
+    }
     let stdout = io::stdout();
-    let refresh = options.output == OutputFormat::Text && stdout.is_terminal();
     let mut writer = stdout.lock();
-    run_on(&mut writer, options, refresh)
+    run_on(&mut writer, options)
 }
 fn write_window(
     writer: &mut dyn Write,
     options: &WatchOptions,
     window: &WatchWindow,
-    refresh: bool,
 ) -> io::Result<()> {
-    write!(writer, "{}", render_window(options, window, refresh)?)?;
+    write!(writer, "{}", render_window(options, window, false)?)?;
     writer.flush()?;
     Ok(())
 }
 
-fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::Result<()> {
+fn run_on(writer: &mut dyn Write, options: &WatchOptions) -> io::Result<WatchExit> {
     let requested = Duration::from_millis(options.interval_ms);
     if requested.is_zero() {
-        return Ok(());
+        return Ok(WatchExit::Completed);
     }
 
     let interrupt = InterruptFlag::install(options.count.is_none());
@@ -405,10 +428,16 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
     let mut tracker = WatchTracker::new();
     let mut completed = 0_u32;
     loop {
-        if options.count == Some(completed) || interrupt.raised() {
+        if options.count == Some(completed) {
             break;
         }
-        thread::sleep(requested);
+        if interrupt.aborting() {
+            return Ok(WatchExit::Interrupted);
+        }
+        wait_until(Instant::now() + requested, &interrupt);
+        if interrupt.aborting() {
+            return Ok(WatchExit::Interrupted);
+        }
         let end = read_end_endpoint();
         let observation = observation_from_endpoints(&start, &end, requested);
         start = end;
@@ -416,7 +445,7 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
         let mut window = tracker.ingest(&observation);
         window.count = options.count;
         window.interval_ms = options.interval_ms;
-        write_window(writer, options, &window, refresh).or_else(|error| {
+        write_window(writer, options, &window).or_else(|error| {
             if error.kind() == io::ErrorKind::BrokenPipe {
                 Ok(())
             } else {
@@ -426,38 +455,53 @@ fn run_on(writer: &mut dyn Write, options: &WatchOptions, refresh: bool) -> io::
         if options.count == Some(completed) {
             break;
         }
+        if interrupt.draining() {
+            break;
+        }
     }
-    Ok(())
+    Ok(WatchExit::Completed)
 }
 
-/// Cooperative SIGINT flag. When installed, the default SIGINT termination is
-/// replaced by a flag so an in-flight `watch` window can complete and be
-/// written before the loop exits. Without installation (bounded `--count`
-/// runs), SIGINT keeps its default terminating behavior.
-struct InterruptFlag {
-    raised: std::sync::Arc<std::sync::atomic::AtomicBool>,
+fn wait_until(deadline: Instant, interrupt: &InterruptFlag) {
+    while Instant::now() < deadline && !interrupt.aborting() {
+        thread::sleep(
+            deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_millis(50)),
+        );
+    }
+}
+
+/// Cooperative SIGINT counter. Unlimited plain watch uses it to drain once and
+/// abort on the second signal. Interactive watch also installs it so terminal
+/// state can be restored before returning; bounded plain runs retain the
+/// default signal disposition.
+pub(crate) struct InterruptFlag {
+    count: std::sync::Arc<std::sync::atomic::AtomicU8>,
 }
 
 impl InterruptFlag {
-    fn install(enabled: bool) -> Self {
-        let raised = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    pub(crate) fn install(enabled: bool) -> Self {
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(0));
         if enabled {
-            let handler_flag = std::sync::Arc::clone(&raised);
+            let handler_count = std::sync::Arc::clone(&count);
             let _ = ctrlc::set_handler(move || {
-                if handler_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                    // `ctrlc` keeps this handler installed, so explicitly
-                    // preserve the default shell-visible exit status when the
-                    // operator interrupts a second time rather than waiting
-                    // for a potentially five-minute window to drain.
-                    std::process::exit(130);
-                }
+                handler_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             });
         }
-        Self { raised }
+        Self { count }
     }
 
-    fn raised(&self) -> bool {
-        self.raised.load(std::sync::atomic::Ordering::SeqCst)
+    pub(crate) fn draining(&self) -> bool {
+        self.count.load(std::sync::atomic::Ordering::SeqCst) >= 1
+    }
+
+    pub(crate) fn aborting(&self) -> bool {
+        self.count.load(std::sync::atomic::Ordering::SeqCst) >= 2
+    }
+
+    pub(crate) fn request_drain(&self) {
+        self.count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -468,7 +512,9 @@ pub fn render_window(
 ) -> Result<String, serde_json::Error> {
     match options.output {
         OutputFormat::Json => watch_json(window),
-        OutputFormat::Text => Ok(watch_text(window, refresh)),
+        OutputFormat::Text | OutputFormat::PlainText | OutputFormat::DetailedText => {
+            Ok(watch_text(window, refresh))
+        }
     }
 }
 
@@ -484,7 +530,7 @@ fn watch_text(window: &WatchWindow, refresh: bool) -> String {
         window_index_label(window),
         format_ms(window.interval_ms)
     ));
-    output.push_str("Lifecycle\n");
+    output.push_str("CHANGES\n");
     if window.lifecycle.is_empty() {
         output.push_str("  (no pressure findings this window)\n");
     } else {
@@ -517,7 +563,7 @@ fn watch_text(window: &WatchWindow, refresh: bool) -> String {
             "  Cgroup tracking is capped; additional scoped pressure was not added to lifecycle.\n",
         );
     }
-    output.push_str("\nCurrent window\n");
+    output.push_str("\nRESOURCE  STATE         SEVERITY  PRESSURE\n");
     output.push_str(&current_line("CPU", &window.current.cpu));
     output.push_str(&current_line("Memory", &window.current.memory));
     output.push_str(&current_line("I/O", &window.current.io));
@@ -542,36 +588,8 @@ fn watch_text(window: &WatchWindow, refresh: bool) -> String {
             ));
         }
     }
-    output.push_str("\nRecent history (oldest first)\n");
-    if window.history.is_empty() {
-        output.push_str("  (none)\n");
-    } else {
-        for entry in &window.history {
-            if entry.events.is_empty() {
-                output.push_str(&format!(
-                    "  #{:<3} (no pressure findings)\n",
-                    entry.window_index
-                ));
-            } else {
-                let events = entry
-                    .events
-                    .iter()
-                    .map(|event| {
-                        format!(
-                            "{} {} {}",
-                            id_label(&event.id),
-                            state_label(event.state).to_ascii_lowercase(),
-                            severity_name(event.severity)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                output.push_str(&format!("  #{:<3} {events}\n", entry.window_index));
-            }
-        }
-    }
     output.push_str(
-        "\nLifecycle tracks pressure findings only. Healthy windows resolve a previous finding; missing data does not.\n",
+        "\nLifecycle: healthy resolves; missing data leaves an active finding unconfirmed.\n",
     );
     output
 }
@@ -1251,7 +1269,7 @@ mod tests {
         .expect("watch text render");
         assert!(text.contains("WATCH  window 1/3  interval 2s"));
         assert!(text.contains("NEW         CPU  cpu_scheduling_contention  high  PSI 20.00%"));
-        assert!(text.contains("Current window"));
+        assert!(text.contains("RESOURCE  STATE"));
         assert!(text.contains("CPU      pressure     high  PSI 20.00%"));
         assert!(text.contains("Memory   healthy      none  PSI 0.10%"));
         assert!(!text.contains("Top process CPU consumers"));

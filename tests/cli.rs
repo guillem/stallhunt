@@ -20,7 +20,8 @@ fn bare_invocation_runs_default_hunt() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("Verdict:") || stdout.contains("assessment"));
+    assert!(stdout.contains("STALLHUNT  observed 10s"));
+    assert!(stdout.contains("RESOURCE  STATE"));
 }
 
 #[test]
@@ -61,13 +62,12 @@ fn hunt_handles_every_cpu_psi_capability_state() {
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
-    if stdout.contains("Verdict: insufficient observation") {
-        assert!(stdout.contains("Verdict: insufficient observation"));
-        assert!(stdout.contains("CPU PSI some"));
-        assert!(stdout.contains("Timing: requested 100ms; PSI measured"));
+    if stdout.contains("inconclusive") {
+        assert!(stdout.contains("CPU"));
+        assert!(stdout.contains("PSI"));
     } else {
-        assert!(stdout.contains("CPU assessment unavailable"));
-        assert!(stdout.contains("no exact CPU PSI interval"));
+        assert!(stdout.contains("CPU"));
+        assert!(stdout.contains("unavailable"));
     }
 }
 
@@ -323,8 +323,8 @@ fn watch_emits_one_lifecycle_window_and_json_stream_object() {
         String::from_utf8_lossy(&text.stderr)
     );
     assert!(stdout.contains("WATCH  window 1/1  interval 100ms"));
-    assert!(stdout.contains("Lifecycle"));
-    assert!(stdout.contains("Current window"));
+    assert!(stdout.contains("CHANGES"));
+    assert!(stdout.contains("RESOURCE  STATE"));
     assert!(stdout.contains("NEW") || stdout.contains("no pressure findings this window"));
 
     let json_out = stallhunt(&["watch", "--interval=100ms", "--count=1", "--json"]);
@@ -344,6 +344,28 @@ fn watch_emits_one_lifecycle_window_and_json_stream_object() {
     assert!(json["lifecycle"].is_array());
     assert!(json["current"]["cpu"]["status"].is_string());
     assert!(json["history"].is_array());
+}
+
+#[test]
+fn details_and_plain_modes_are_explicit_and_conflict_with_json() {
+    let detailed = stallhunt(&["hunt", "--duration", "100ms", "--details"]);
+    let stdout = String::from_utf8(detailed.stdout).expect("stdout should be UTF-8");
+    assert!(detailed.status.success());
+    assert!(stdout.contains("Verdict:") || stdout.contains("assessment unavailable"));
+
+    let plain = stallhunt(&["watch", "--interval", "100ms", "--count", "1", "--plain"]);
+    let stdout = String::from_utf8(plain.stdout).expect("stdout should be UTF-8");
+    assert!(plain.status.success());
+    assert!(stdout.starts_with("--- window 1 ---"));
+
+    for arguments in [
+        &["hunt", "--details", "--json"][..],
+        &["watch", "--plain", "--json"][..],
+    ] {
+        let output = stallhunt(arguments);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+    }
 }
 
 #[test]

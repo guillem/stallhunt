@@ -6,13 +6,13 @@ stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 [\fIcommand\fR] [\fIoptions\fR]
 .PP
 .B stallhunt
-[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-details\fR | \fB\-\-json\fR]
 .PP
 .B stallhunt hunt
-[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+[\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-details\fR | \fB\-\-json\fR]
 .PP
 .B stallhunt watch
-[\fB\-\-interval\fR \fIDURATION\fR] [\fB\-\-count\fR \fIN\fR] [\fB\-\-json\fR]
+[\fB\-\-interval\fR \fIDURATION\fR] [\fB\-\-count\fR \fIN\fR] [\fB\-\-plain\fR | \fB\-\-json\fR]
 .PP
 .B stallhunt capabilities
 [\fB\-\-json\fR]
@@ -23,7 +23,7 @@ stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 [\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-redact\fR] [\fB\-\-force\fR]
 .PP
 .B stallhunt replay
-[\fB\-\-json\fR]
+[\fB\-\-details\fR | \fB\-\-json\fR]
 .I PATH
 .PP
 .B stallhunt redact
@@ -46,7 +46,10 @@ Running
 .B stallhunt
 with no subcommand is equivalent to
 .BR "stallhunt hunt" .
-Default human output is finding-first and concise.
+Default human output is a compact resource summary with bounded ranked findings.
+Use
+.B \-\-details
+for complete evidence, attribution, timing, and limitations.
 Use
 .B \-\-json
 wherever supported to emit the full structured report.
@@ -59,10 +62,15 @@ The default duration is 10 seconds.
 .B watch
 Track rolling finding lifecycle across repeated observation windows.
 The default interval is 2 seconds.
-On a TTY, text output refreshes the screen; with
+With interactive input and output, watch opens a diagnosis-first TUI with
+resource trends, finding navigation, selected attribution, and on-demand
+explanation. Arrow keys or j/k select, Enter or d opens details, ? opens help,
+and q quits cleanly. Redirected output and
+.B \-\-plain
+append compact windows. With
 .BR \-\-json ,
 one compact JSON object is printed per window.
-Watch is not a TUI and does not write recordings.
+Watch does not write recordings.
 For an unlimited watch, the first SIGINT drains and writes the in-flight
 window; a second SIGINT terminates immediately.
 .TP
@@ -142,6 +150,25 @@ Supported by
 and
 .BR replay .
 .TP
+.B \-\-details
+Render complete explanatory human text for
+.B hunt
+or
+.BR replay .
+Conflicts with
+.BR \-\-json .
+.TP
+.B \-\-plain
+Force append-only human text for
+.BR watch .
+Conflicts with
+.BR \-\-json .
+.TP
+.B \-\-no-color
+Disable color in human output. The
+.B NO_COLOR
+environment convention is also honored.
+.TP
 .BR \-\-output " " \fIPATH\fR
 Output path for
 .B record
@@ -162,6 +189,9 @@ By default, existing paths are not overwritten.
 .SH OUTPUT
 .SS Text
 Human output summarizes findings, evidence, qualifiers, and timing.
+The compact default bounds displayed findings and candidates; use
+.B \-\-details
+for the complete explanation.
 Partial collection is reported explicitly rather than failing silently.
 Sub-second hunts are telemetry smoke observations and do not receive healthy or
 pressure verdicts.
@@ -203,6 +233,10 @@ refused overwrites, or stdout write failures other than a broken pipe.
 .TP
 .B 2
 Usage error, including unknown commands/options and invalid argument values.
+.TP
+.B 130
+An interactive or unlimited watch was aborted by a second SIGINT, or a bounded
+interactive watch was interrupted.
 .SH FILES
 .SS Kernel and pseudo-filesystems read at runtime
 .TP

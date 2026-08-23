@@ -1,6 +1,6 @@
 # ADR-0008: Watch tracks finding lifecycle, not a live dashboard
 
-- Status: Accepted
+- Status: Superseded in part by ADR-0013
 - Date: 2026-08-17
 
 ## Context
@@ -15,6 +15,11 @@ report. Recordings are normalized observations for later replay (ADR-0007).
 Neither is a rolling lifecycle document.
 
 ## Decision
+
+ADR-0013 supersedes the terminal-rendering decision below: interactive watch
+is now a diagnosis-first TUI. The lifecycle identities, contiguous windows,
+bounded history, resolution rules, JSON stream, and interruption contract in
+this ADR remain accepted.
 
 `watch` is a **finding-lifecycle** command.
 

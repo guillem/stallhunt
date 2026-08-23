@@ -6,9 +6,11 @@ mod duration_us;
 mod io;
 mod memory;
 mod observe;
+mod presentation;
 mod psi;
 mod record;
 mod render;
+mod tui;
 mod watch;
 
 use std::io::Write;
@@ -31,6 +33,7 @@ fn main() -> ExitCode {
 
     match execute(cli.into_command()) {
         Ok(output) => write_stdout(&output),
+        Err(error) if error.downcast_ref::<InterruptedWatch>().is_some() => ExitCode::from(130),
         Err(error) => {
             eprintln!("error: {error}");
             ExitCode::from(1)
@@ -82,10 +85,10 @@ fn execute(command: Command) -> Result<String, Box<dyn std::error::Error>> {
             write_recording(&options.output, &recording, options.force)?;
             Ok(render::redact_written(&options, &recording))
         }
-        Command::Watch(options) => {
-            watch::run(&options)?;
-            Ok(String::new())
-        }
+        Command::Watch(options) => match watch::run(&options)? {
+            watch::WatchExit::Completed => Ok(String::new()),
+            watch::WatchExit::Interrupted => Err(Box::new(InterruptedWatch)),
+        },
         Command::Completions(shell) => {
             let mut command = cli::command();
             generate(shell, &mut command, "stallhunt", &mut std::io::stdout());
@@ -94,6 +97,17 @@ fn execute(command: Command) -> Result<String, Box<dyn std::error::Error>> {
         Command::Version => Ok(render::version()),
     }
 }
+
+#[derive(Debug)]
+struct InterruptedWatch;
+
+impl std::fmt::Display for InterruptedWatch {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("watch interrupted")
+    }
+}
+
+impl std::error::Error for InterruptedWatch {}
 
 #[cfg(test)]
 mod main_tests {

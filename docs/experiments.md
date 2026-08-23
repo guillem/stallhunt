@@ -467,6 +467,59 @@ No controlled live scoped-thrashing result exists. Do not substitute
 unconstrained host pressure; any live follow-up requires a caller-owned,
 bounded delegated cgroup setup.
 
+## EXP-0009: Diagnosis-first interface baseline and operator-trial protocol
+
+Date: 2026-08-23. Commit: this interface milestone.
+
+### Question
+
+Can operators reach the existing resource verdict, affected/contributor
+candidates, and evidence limitations faster through compact hunt text and an
+interactive watch without changing inference or losing automation paths?
+
+### Implemented baseline
+
+- compact default hunt/replay resource table and at most five findings;
+- complete `--details` text from the existing explanatory renderer;
+- diagnosis-first TUI with 16 PSI trend samples, lifecycle navigation,
+  selected attribution, details/help overlays, and responsive layouts;
+- append-only `--plain`, redirected text, and unchanged schema-1 JSON;
+- monochrome mode and terminal cleanup on normal, error, and signal returns.
+
+Ratatui `TestBackend` validates the wide and undersized views, selected
+candidate content, help/details overlays, and trend bound. Executable tests
+validate the compact/detailed/plain/JSON contracts and prompt second-SIGINT
+status 130. These deterministic results prove mechanics, not usability.
+
+### Required local trial matrix
+
+Record at least these four sessions before calling M9 accepted:
+
+| Host state | Layout | Operator question |
+|---|---|---|
+| healthy | at least 100×28 | Is any resource meaningfully constrained? |
+| healthy | 70–99 columns or 18–27 rows | Can the answer still be found without horizontal loss? |
+| controlled pressure | at least 100×28 | What is constrained, who is affected, and who is a candidate contributor? |
+| controlled pressure | stacked layout | Can full evidence and causal limits be reached and understood? |
+
+For each session record terminal/emulator and size, command, task start/end or
+time-to-answer, answer given, missed information, navigation friction, whether
+compact text or `--details` was needed, and one concrete keep/change decision.
+Use only the repository's bounded acceptance workloads; do not manufacture
+unconstrained host pressure.
+
+### Current result
+
+Implementation and deterministic mechanics pass. Operator trials are pending;
+there is no usability acceptance claim yet. Test one baseline and iterate it in
+this worktree rather than adding runtime layout variants or opening a PR.
+
+### Follow-up
+
+After the matrix, update this entry with observations and decide whether to
+keep the hierarchy, alter information density/key bindings, or revert any
+piece. Do not use interface feedback to silently change inference.
+
 ## Deterministic negative coverage
 
 Busy-but-not-pressured avoidance is deterministic normalized analyzer coverage,
@@ -474,6 +527,16 @@ not a host experiment: high utilization/runnable context cannot independently
 create a CPU contention finding when exact-interval PSI remains below threshold.
 
 ## Current experimental conclusions
+
+EXP-0009 establishes the single diagnosis-first interface baseline and the
+required operator-trial matrix. Formatting, Clippy with warnings denied, 160
+unit tests (159 passed and one fixture writer ignored), 14 CLI tests, and three
+replay-fixture tests pass. Five environment-dependent Linux acceptance tests
+remain ignored by default. A pseudo-terminal smoke at 120×32 exercised
+alternate-screen entry, initial sampling, a completed 100 ms window, and clean
+terminal exit. Usability acceptance remains pending the recorded local trials.
+The locked graph also passed `cargo +1.85.0 check --offline` on the declared
+MSRV.
 
 M1.6 validates the concise renderer, serialized bounded rootless acceptance
 path, and controlled collector-overhead scenarios. The controlled runs exercise

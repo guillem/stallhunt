@@ -387,6 +387,12 @@ memory identity. The complete pressure-kind catalog is in `cli-ux.md`.
 Watch JSON `kind` is `stallhunt.watch_window`. It is not replayable as a
 recording and does not carry full evidence.
 
+ADR-0013 adds presentation-only state outside this serialized model: the
+current `DiagnosisView` and at most 16 host-resource PSI samples. The TUI does
+not retain earlier full observations or serialize its selection, scroll, help,
+or color state. The presentation view is derived from typed findings and
+cannot create a verdict.
+
 ## Evidence chains
 
 M8 adds an optional relation between already-produced findings (ADR-0009,

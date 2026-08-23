@@ -378,6 +378,11 @@ M6 watch compares consecutive windows only to classify finding lifecycle. It
 does not introduce a historical baseline, and a resolved finding is not proof
 that the machine is healthy beyond the current window.
 
+ADR-0013's compact renderer and TUI consume the same analyzer outputs. PSI
+sparklines are presentation history, not a trend-based inference rule. Selecting
+or expanding a finding cannot change severity, confidence, attribution, or
+causal language.
+
 Core findings should remain grounded in absolute contention/stall evidence where possible.
 
 ## Rule implementation style

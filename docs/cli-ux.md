@@ -86,7 +86,7 @@ stallhunt record --output incident.json [--duration 10s] [--redact] [--force]
 Re-analyze a recording with the current inference engine.
 
 ```bash
-stallhunt replay incident.json [--json]
+stallhunt replay incident.json [--details | --json]
 ```
 
 ### `redact`
@@ -104,17 +104,19 @@ Implemented in Milestone 6:
 Follow rolling bottlenecks by finding lifecycle.
 
 ```bash
-stallhunt watch [--interval 2s] [--count N] [--json]
+stallhunt watch [--interval 2s] [--count N] [--plain | --json]
 ```
 
-This is not a TUI and not a generic resource monitor.
+Interactive stdin/stdout opens a diagnosis-first TUI. `--plain`, redirected
+input/output, or `TERM=dumb` selects append-only compact text. This remains a
+triage interface, not a generic resource monitor.
 
 ## Current CPU diagnosis behavior
 
 Milestone 1 implements:
 
 ```text
-stallhunt hunt [--duration <DURATION>] [--json]
+stallhunt hunt [--duration <DURATION>] [--details | --json]
 stallhunt capabilities [--json]
 stallhunt version
 ```
@@ -185,22 +187,24 @@ duration. Invalid recordings exit 1. Missing `--output` or an invalid invocation
 still exits 2. New recording files are created mode 0600 and are not
 overwritten unless `--force` is passed.
 
-M6 adds `watch`. `--interval` uses the same 100 ms–5 m duration parser as
+M6 adds lifecycle watch; ADR-0013 adds its interactive renderer. `--interval` uses the same 100 ms–5 m duration parser as
 `hunt` and defaults to 2 seconds. `--count` stops after N windows; without it,
 watch runs until interrupted. For an unlimited watch, the first SIGINT drains
 and writes the in-flight window; a second SIGINT terminates immediately with
 status 130. Bounded `--count` runs retain the default signal disposition. Each
 window reuses the previous endpoint snapshot. Text reports `new` / `persistent`
-/ `resolved` pressure findings plus a compact current-window summary. A TTY
-refreshes the screen with ANSI clear/home; piped text and `--json` append. JSON
+/ `resolved` pressure findings plus a compact current-window summary. An
+interactive TTY uses an alternate-screen TUI; `--plain` and piped text append. JSON
 is one compact `stallhunt.watch_window` object per window. It is not hunt JSON
 and not a recording, and it omits full evidence. Host memory `kind` values
 already name reclaim, swap, or possible thrashing. Scoped cgroup `kind` values
 name the resource and, when labeled, the mechanism
 (`cgroup_memory_reclaim_pressure`, `cgroup_memory_swap_pressure`,
 `cgroup_memory_possible_thrashing`, `cgroup_cpu_quota_throttle_pressure`);
-identity remains path plus resource, so a mechanism change stays `persistent`. Use
-`hunt --json` or `record` when the full evidence payload is required. Invalid
+identity remains path plus resource, so a mechanism change stays `persistent`.
+The TUI retains the current full diagnosis for its selected-finding pane but
+does not retain older full observations. Use `hunt --json` or `record` when the
+full evidence payload must be stored. Invalid
 `--count` still exits 2.
 
 Tracked watch pressure kinds are:
@@ -220,14 +224,13 @@ path-plus-resource identity.
 
 ## Human output structure
 
-Current `hunt` text output is concise and finding-first. It shows the CPU
-verdict, severity, and resource confidence; exact-interval PSI evidence;
-bounded ranked victim candidates (at most five) and suspect candidates (at
-most three), including role and confidence; relevant context and limitations;
-and requested and measured timings. Suspect output explicitly states that it
-is same-window correlation rather than proof of causality. Missing or partial
-attribution is rendered as unavailable or incomplete rather than as an observed
-empty result.
+Default `hunt` and `replay` text is a bounded diagnosis view: overall state; a
+CPU/memory/I/O table with state, severity, confidence, and exact-window PSI;
+at most five ranked active/inconclusive findings; at most two affected and two
+contributor/activity candidates per displayed finding; compact related-evidence
+chains; and one consolidated limitations footer. Healthy resources remain
+visible. `--details` renders complete per-resource evidence, attribution,
+controller context, qualifiers, and timings.
 
 Process names are terminal-safe and bounded in text output. The default text
 renderer does not dump raw host counters, rolling PSI averages, or a separate
@@ -294,7 +297,7 @@ Support:
 
 - automatic TTY detection,
 - `--no-color`,
-- `NO_COLOR` convention if practical.
+- the `NO_COLOR` convention.
 
 Do not overdesign terminal visuals before core output stabilizes.
 
@@ -457,9 +460,16 @@ Warn or reduce confidence for observation windows too short to support robust in
 
 ## TUI
 
-A TUI is explicitly not an early priority. M6 `watch` refreshes finding
-lifecycle on a TTY without introducing a TUI framework.
+ADR-0013 implements a diagnosis-first TUI for interactive `watch`:
 
-The differentiator is diagnosis.
+- header: health, window, interval, and drain state;
+- resource cards: typed verdict plus the last 16 PSI samples;
+- findings: ranked host/cgroup diagnoses with lifecycle state;
+- selected diagnosis: evidence and bounded attribution/activity candidates;
+- Enter or `d`: scrollable full explanation; `?`: help;
+- arrows or `j`/`k`: navigation; Escape: close overlay; `q`: clean exit.
 
-If a TUI is added later, it should display changing findings rather than simply reproduce `htop`.
+At 100×28 or larger the body is side by side; from 70×18 it stacks. Smaller
+terminals show a resize notice while sampling and quit/help remain available.
+Color reinforces but never replaces words. The TUI does not add utilization
+verdicts, process sorting/filtering, pause, mouse input, or a second analyzer.
