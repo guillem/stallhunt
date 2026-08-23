@@ -51,8 +51,8 @@ the test process and does not mutate the hierarchy.
   bounded cgroup pressure findings as new, persistent, or resolved across
   contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
   keeps 16 history windows. It is not a TUI and does not store full evidence.
-  A second SIGINT while draining terminates via the restored default
-  disposition; `--count` bounds scripted runs.
+  A second SIGINT while draining terminates immediately with the conventional
+  exit status; `--count` bounds scripted runs.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
   reclaim, swap, or possible-thrashing finding to host I/O pressure, and can
   relate same-cgroup memory plus I/O pressure when `memory.events` high/max or
@@ -294,8 +294,9 @@ the test process and does not mutate the hierarchy.
 - Watch JSON omits victims, suspects, and raw evidence. A disappeared cgroup
   finding stays unconfirmed until that scope is observed without ranked
   pressure. Unlimited `watch` without `--count` samples until interrupted and
-  does not drain the current window on SIGINT. Consecutive 100 ms windows remain
-  smoke observations, same as hunt.
+  drains the current window after the first SIGINT; a second SIGINT exits
+  immediately. Consecutive 100 ms windows remain smoke observations, same as
+  hunt.
 - M8's chains are same-window correlation of independent PSI plus either host
   VM counters or same-cgroup `memory.events` high/max or `memory.stat`
   direct-reclaim/swap-in deltas. They do not prove reclaim or swap caused I/O

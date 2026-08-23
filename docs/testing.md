@@ -162,7 +162,8 @@ M6 watch tests cover finding lifecycle (new, persistent, resolved, severity
 change, unconfirmed missing data), independent host/cgroup identities, bounded
 history, cgroup tracking caps, and a checked-in lifecycle text fixture plus
 structural JSON assertions. Executable CLI tests cover `watch --count 1` text
-and JSON on a 100 ms window. Live watch does not assert host contention.
+and JSON on a 100 ms window, plus prompt second-SIGINT termination during an
+unlimited five-minute window. Live watch does not assert host contention.
 
 M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus

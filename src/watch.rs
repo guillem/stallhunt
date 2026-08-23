@@ -443,11 +443,14 @@ impl InterruptFlag {
         let raised = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         if enabled {
             let handler_flag = std::sync::Arc::clone(&raised);
-            // A second SIGINT while draining still terminates via the default
-            // handler being replaced only once; repeated installs are ignored
-            // through the Result.
             let _ = ctrlc::set_handler(move || {
-                handler_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                if handler_flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    // `ctrlc` keeps this handler installed, so explicitly
+                    // preserve the default shell-visible exit status when the
+                    // operator interrupts a second time rather than waiting
+                    // for a potentially five-minute window to drain.
+                    std::process::exit(130);
+                }
             });
         }
         Self { raised }

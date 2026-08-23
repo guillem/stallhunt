@@ -1,7 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn stallhunt(arguments: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_stallhunt"))
@@ -343,6 +344,45 @@ fn watch_emits_one_lifecycle_window_and_json_stream_object() {
     assert!(json["lifecycle"].is_array());
     assert!(json["current"]["cpu"]["status"].is_string());
     assert!(json["history"].is_array());
+}
+
+#[test]
+fn second_sigint_terminates_unlimited_watch_immediately() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_stallhunt"))
+        .args(["watch", "--interval", "5m"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("unlimited watch should start");
+
+    // Give watch time to install its cooperative handler before interrupting
+    // the deliberately long in-flight window.
+    thread::sleep(Duration::from_millis(250));
+    send_sigint(child.id());
+    thread::sleep(Duration::from_millis(100));
+    send_sigint(child.id());
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if let Some(status) = child.try_wait().expect("watch status should be readable") {
+            assert_eq!(status.code(), Some(130));
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("timed-out watch should be killed");
+            let _ = child.wait();
+            panic!("second SIGINT did not terminate unlimited watch promptly");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn send_sigint(pid: u32) {
+    let status = Command::new("kill")
+        .args(["-INT", &pid.to_string()])
+        .status()
+        .expect("kill command should send SIGINT");
+    assert!(status.success(), "kill command should succeed");
 }
 
 #[test]
