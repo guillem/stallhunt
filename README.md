@@ -26,11 +26,17 @@ cargo install --path .
 stallhunt
 ```
 
-Bare `stallhunt` runs a default 10-second hunt. Use `--json` for the full structured evidence:
+Bare `stallhunt` runs a default 10-second hunt. On a terminal it renders a
+compact, color-coded report; piped or redirected output (`stallhunt | cat`,
+`>file`, CI) is unchanged plain text. Use `--json` for the full structured
+evidence, `--verbose` to expand the compact report's collapsed caveats back
+to full text, or `--no-color` (also `NO_COLOR=1`) to disable color without
+changing the layout:
 
 ```bash
 stallhunt --json
 stallhunt hunt --duration 30s
+stallhunt hunt --verbose
 ```
 
 Capture and replay a normalized observation:

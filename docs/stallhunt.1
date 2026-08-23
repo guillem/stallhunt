@@ -142,6 +142,24 @@ Supported by
 and
 .BR replay .
 .TP
+.B \-\-verbose
+Print full context and limitation messages instead of collapsed caveats.
+Supported by
+.B hunt
+and
+.BR replay .
+Only affects the compact terminal report (see OUTPUT below); JSON output
+always includes full qualifier messages regardless of this flag.
+.TP
+.B \-\-no-color
+Disable color in terminal output.
+Supported by
+.BR hunt " and " replay .
+The
+.B NO_COLOR
+environment variable has the same effect (see ENVIRONMENT below).
+Only affects color; it does not change which text layout is used.
+.TP
 .BR \-\-output " " \fIPATH\fR
 Output path for
 .B record
@@ -161,7 +179,22 @@ or
 By default, existing paths are not overwritten.
 .SH OUTPUT
 .SS Text
-Human output summarizes findings, evidence, qualifiers, and timing.
+.B hunt
+and
+.B replay
+render two text surfaces, selected by whether standard output is a
+terminal.
+When standard output is not a terminal (piped, redirected to a file, CI),
+the human output summarizes findings, evidence, qualifiers, and timing in
+full, unchanged from earlier releases.
+When standard output is a terminal, a compact, color-coded report is
+rendered instead: a header verdict, one row per resource, victim/suspect
+candidates for pressured resources, and a collapsed caveat count in place
+of full qualifier text (restore full text with
+.BR \-\-verbose ).
+Piping is the way to obtain the full non-compact text on a terminal, for
+example
+.BR "stallhunt | cat" .
 Partial collection is reported explicitly rather than failing silently.
 Sub-second hunts are telemetry smoke observations and do not receive healthy or
 pressure verdicts.
@@ -192,6 +225,14 @@ Hunt JSON is a report, not a recording, and is rejected by
 .BR replay .
 .B record
 prints a short confirmation to standard output after a successful write.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+Any non-empty value disables color in terminal output, equivalent to
+.BR \-\-no-color .
+Supported by
+.BR hunt " and " replay .
+See https://no-color.org.
 .SH EXIT STATUS
 .TP
 .B 0

@@ -55,6 +55,8 @@ pub fn replay(
         &HuntOptions {
             duration_ms: recording.requested_duration_ms,
             output: options.output,
+            verbose: false,
+            no_color: false,
         },
         |_| observation,
     )
@@ -260,7 +262,9 @@ fn evidence_chain_hunt_text(analyses: &HuntAnalyses) -> Option<String> {
     Some(output)
 }
 
-fn evidence_chains_from_analyses(analyses: &HuntAnalyses) -> Vec<crate::analysis::EvidenceChain> {
+pub(crate) fn evidence_chains_from_analyses(
+    analyses: &HuntAnalyses,
+) -> Vec<crate::analysis::EvidenceChain> {
     let memory = analyses
         .memory
         .as_ref()
@@ -274,7 +278,7 @@ fn evidence_chains_from_analyses(analyses: &HuntAnalyses) -> Vec<crate::analysis
     analysis::analyze_evidence_chains(memory, io, cgroup_findings)
 }
 
-fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
+pub(crate) fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
     let mut parts = Vec::new();
     if let Some(path) = &evidence.path {
         parts.push(format!("cgroup {path}"));
@@ -482,7 +486,7 @@ fn cpu_hunt_text(
     }
 }
 
-fn text_finding_rank(
+pub(crate) fn text_finding_rank(
     severity: crate::analysis::Severity,
     confidence: crate::analysis::Confidence,
 ) -> (u8, u8) {
@@ -867,7 +871,7 @@ fn optional_bytes(value: Option<u64>) -> String {
     value.map_or_else(|| "unavailable".to_owned(), human_bytes)
 }
 
-fn human_bytes(bytes: u64) -> String {
+pub(crate) fn human_bytes(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
     const GIB: f64 = MIB * 1024.0;
@@ -997,14 +1001,14 @@ fn finding_text(
     output
 }
 
-fn suspect_role(label: &str) -> &'static str {
+pub(crate) fn suspect_role(label: &str) -> &'static str {
     match label {
         "leading_concurrent_cpu_consumer" => "leading concurrent CPU consumer",
         _ => "concurrent CPU consumer",
     }
 }
 
-fn terminal_name(name: &str) -> String {
+pub(crate) fn terminal_name(name: &str) -> String {
     const MAX_CHARS: usize = 48;
     let mut rendered = String::new();
     for character in name.chars().take(MAX_CHARS) {
@@ -1718,11 +1722,11 @@ struct QualifierJson<'a> {
     message: &'a str,
 }
 
-fn human_duration(duration_ms: u64) -> String {
+pub(crate) fn human_duration(duration_ms: u64) -> String {
     human_duration_from_duration(Duration::from_millis(duration_ms))
 }
 
-fn human_duration_from_duration(duration: Duration) -> String {
+pub(crate) fn human_duration_from_duration(duration: Duration) -> String {
     if duration.is_zero() {
         return "0ms".to_owned();
     }
@@ -1766,7 +1770,7 @@ fn decimal_duration(whole: u128, fractional: u128, unit: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::cgroup::{
         CgroupCollectionIssues, CgroupCpuInterval, CgroupFileState, CgroupInterval,
@@ -2083,6 +2087,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         );
@@ -2098,6 +2104,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2123,6 +2131,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         );
@@ -2139,6 +2149,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| healthy,
         );
@@ -2158,6 +2170,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2180,6 +2194,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         );
@@ -2202,6 +2218,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         ))
@@ -2221,6 +2239,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Ok(observation()),
@@ -2240,6 +2260,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Ok(observation()),
@@ -2262,6 +2284,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         );
@@ -2282,6 +2306,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         );
@@ -2301,6 +2327,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2320,6 +2348,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| partial,
         ))
@@ -2343,6 +2373,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| missing,
         ))
@@ -2381,6 +2413,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(true, true),
         );
@@ -2410,6 +2444,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(true, true),
         ))
@@ -2435,6 +2471,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(false, true),
         ))
@@ -2445,6 +2483,8 @@ mod tests {
                 &HuntOptions {
                     duration_ms: 10_000,
                     output: OutputFormat::Text,
+                    verbose: false,
+                    no_color: false,
                 },
                 |_| chain_hunt_observation(false, true),
             )
@@ -2455,6 +2495,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(true, false),
         ))
@@ -2465,6 +2507,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         ))
@@ -2547,6 +2591,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| cgroup_chain_hunt_observation(),
         );
@@ -2571,6 +2617,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| cgroup_chain_hunt_observation(),
         ))
@@ -2602,6 +2650,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| coincident,
         ))
@@ -2620,6 +2670,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| combined,
         ))
@@ -2662,6 +2714,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2689,6 +2743,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2733,6 +2789,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2792,6 +2850,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2839,6 +2899,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2864,6 +2926,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
@@ -2883,6 +2947,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
@@ -2908,6 +2974,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| complete,
         );
@@ -2925,6 +2993,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| retained_partial,
         );
@@ -2939,6 +3009,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| empty_partial,
         );
@@ -2964,6 +3036,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| retained_scheduler_partial,
         );
@@ -2996,6 +3070,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| no_contention,
         );
@@ -3012,6 +3088,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 100,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| short,
         );
@@ -3127,6 +3205,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Ok(observation),
@@ -3144,8 +3224,11 @@ mod tests {
         assert!(!output.contains("worker\nnext"));
     }
 
-    #[test]
-    fn concise_text_output_matches_the_fixed_multi_section_fixture() {
+    /// The fixed multi-section (CPU + memory + I/O + cgroup) observation
+    /// shared by the legacy and compact-report full-baseline goldens
+    /// (`hunt-legacy-full.txt`, `hunt-compact-full.txt`), so the two are a
+    /// true side-by-side comparison of the same diagnosis.
+    pub(crate) fn hunt_legacy_full_fixture_observation() -> HuntObservation {
         let observation = CpuPsiObservation {
             requested: Duration::from_secs(10),
             interval: CpuPsiInterval {
@@ -3223,21 +3306,28 @@ mod tests {
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
+        HuntObservation {
+            psi: Ok(observation),
+            cpu: Ok(cpu),
+            memory: Some(memory_hunt_observation(0.08, Some(0.01), true)),
+            io: Some(io_hunt_observation(0.08)),
+            cgroup: Some(scoped_memory_io_cgroup_observation(
+                Some(reclaim_events()),
+                true,
+            )),
+        }
+    }
+
+    #[test]
+    fn concise_text_output_matches_the_fixed_multi_section_fixture() {
         let output = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             },
-            |_| HuntObservation {
-                psi: Ok(observation),
-                cpu: Ok(cpu),
-                memory: Some(memory_hunt_observation(0.08, Some(0.01), true)),
-                io: Some(io_hunt_observation(0.08)),
-                cgroup: Some(scoped_memory_io_cgroup_observation(
-                    Some(reclaim_events()),
-                    true,
-                )),
-            },
+            |_| hunt_legacy_full_fixture_observation(),
         );
         assert_eq!(
             output,

@@ -116,7 +116,25 @@ Render findings for:
 - humans,
 - JSON consumers.
 
-Presentation should not recalculate the diagnosis.
+Presentation should not recalculate the diagnosis. Concretely, one analysis
+pass produces the typed findings, and every renderer formats that same
+pass: `render::analyze_hunt` runs each resource analyzer exactly once per
+hunt into a `HuntAnalyses`, and both `render::hunt_text` (the legacy/pipe
+renderer, `src/render.rs`) and `report::hunt_report` (the compact TTY
+report, `src/report.rs`, ADR-0013) consume it rather than re-deriving
+findings independently. `hunt_json` likewise formats the same
+`HuntObservation`. This is what makes it structurally impossible for the
+compact report to disagree with the legacy text or JSON about what was
+found — they differ only in how much of the same typed data they show and
+how it is laid out.
+
+`src/style.rs` is the single place that resolves terminal concerns shared
+across renderers: severity/confidence/lifecycle vocabulary, TTY-based color
+mode (honoring `--no-color`/`NO_COLOR`), and terminal width. Renderers take
+these as explicit parameters (`style::ReportLayout`) rather than probing
+the terminal or environment themselves, which is what keeps them
+deterministic and testable — a golden test pins a `ReportLayout` value
+instead of depending on the process's actual TTY state.
 
 ## Proposed code boundaries
 
@@ -170,6 +188,8 @@ src/
   psi.rs        # CPU, memory, and I/O PSI parsing, capabilities, and intervals
   record.rs     # versioned normalized-observation recordings and redaction
   render.rs     # concise finding-first text and full-evidence JSON rendering
+  report.rs     # compact color-coded TTY report for hunt/replay (ADR-0013)
+  style.rs      # shared severity/confidence/lifecycle vocabulary, color, width
   watch.rs      # rolling finding lifecycle tracker and watch renderer
 tests/
   cli.rs                # executable-level behavior tests

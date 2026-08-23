@@ -20,6 +20,8 @@ pub enum OutputFormat {
 pub struct HuntOptions {
     pub duration_ms: u64,
     pub output: OutputFormat,
+    pub verbose: bool,
+    pub no_color: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +41,8 @@ pub struct RecordOptions {
 pub struct ReplayOptions {
     pub input: PathBuf,
     pub output: OutputFormat,
+    pub verbose: bool,
+    pub no_color: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +136,12 @@ struct HuntArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Print full context and limitation messages instead of collapsed caveats
+    #[arg(long)]
+    verbose: bool,
+    /// Disable color; NO_COLOR is also honored
+    #[arg(long)]
+    no_color: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -164,6 +174,12 @@ struct ReplayArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Print full context and limitation messages instead of collapsed caveats
+    #[arg(long)]
+    verbose: bool,
+    /// Disable color; NO_COLOR is also honored
+    #[arg(long)]
+    no_color: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -196,6 +212,8 @@ impl From<HuntArgs> for HuntOptions {
         Self {
             duration_ms: args.duration,
             output: output_format(args.json),
+            verbose: args.verbose,
+            no_color: args.no_color,
         }
     }
 }
@@ -228,6 +246,8 @@ impl From<ReplayArgs> for ReplayOptions {
         Self {
             input: args.path,
             output: output_format(args.json),
+            verbose: args.verbose,
+            no_color: args.no_color,
         }
     }
 }
@@ -258,6 +278,8 @@ impl Cli {
             None => Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             }),
             Some(Commands::Hunt(args)) => Command::Hunt(args.into()),
             Some(Commands::Watch(args)) => Command::Watch(args.into()),
@@ -404,6 +426,8 @@ mod tests {
             Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             })
         );
     }
@@ -415,6 +439,8 @@ mod tests {
             Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             })
         );
     }
@@ -432,6 +458,8 @@ mod tests {
                 Command::Hunt(HuntOptions {
                     duration_ms: expected_ms,
                     output: OutputFormat::Json,
+                    verbose: false,
+                    no_color: false,
                 })
             );
         }
@@ -444,6 +472,8 @@ mod tests {
             Command::Hunt(HuntOptions {
                 duration_ms: 750,
                 output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
             })
         );
     }
@@ -490,8 +520,44 @@ mod tests {
     #[test]
     fn unknown_commands_and_options_are_errors() {
         assert!(parse(["stallhunt", "explain"]).is_err());
-        assert!(parse(["stallhunt", "hunt", "--verbose"]).is_err());
+        assert!(parse(["stallhunt", "hunt", "--bogus-flag"]).is_err());
         assert!(parse(["stallhunt", "capabilities", "extra"]).is_err());
+    }
+
+    #[test]
+    fn hunt_and_replay_support_verbose_and_no_color() {
+        assert_eq!(
+            expect_parse(["stallhunt", "hunt", "--verbose", "--no-color"]),
+            Command::Hunt(HuntOptions {
+                duration_ms: DEFAULT_HUNT_DURATION_MS,
+                output: OutputFormat::Text,
+                verbose: true,
+                no_color: true,
+            })
+        );
+        assert_eq!(
+            expect_parse([
+                "stallhunt",
+                "replay",
+                "recording.json",
+                "--verbose",
+                "--no-color"
+            ]),
+            Command::Replay(ReplayOptions {
+                input: PathBuf::from("recording.json"),
+                output: OutputFormat::Text,
+                verbose: true,
+                no_color: true,
+            })
+        );
+    }
+
+    #[test]
+    fn verbose_and_no_color_cannot_be_repeated() {
+        assert!(parse(["stallhunt", "hunt", "--verbose", "--verbose"]).is_err());
+        assert!(parse(["stallhunt", "hunt", "--no-color", "--no-color"]).is_err());
+        assert!(parse(["stallhunt", "replay", "r.json", "--verbose", "--verbose"]).is_err());
+        assert!(parse(["stallhunt", "replay", "r.json", "--no-color", "--no-color"]).is_err());
     }
 
     #[test]
@@ -553,6 +619,8 @@ mod tests {
             Command::Replay(ReplayOptions {
                 input: PathBuf::from("incident.json"),
                 output: OutputFormat::Json,
+                verbose: false,
+                no_color: false,
             })
         );
         assert_eq!(

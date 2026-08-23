@@ -12,9 +12,6 @@ use crate::watch::{LifecycleState, ObservationStatus};
 /// Whether ANSI color may be emitted. Layout (compact vs. legacy) is a
 /// separate decision from color; `Never` still renders the compact layout,
 /// just without escape codes.
-///
-/// Consumed starting with the compact hunt report; unused until then.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorMode {
     Never,
@@ -24,9 +21,6 @@ pub enum ColorMode {
 /// Resolve the color mode from the `--no-color` flag, the `NO_COLOR`
 /// environment variable (any non-empty value disables color, per the
 /// https://no-color.org convention), and TTY detection.
-///
-/// Consumed starting with the compact hunt report; unused until then.
-#[allow(dead_code)]
 pub fn resolve_color(no_color_flag: bool, is_tty: bool) -> ColorMode {
     let no_color_env = std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     if no_color_flag || no_color_env || !is_tty {
@@ -42,11 +36,25 @@ const MIN_TERMINAL_WIDTH: usize = 60;
 /// Terminal width in columns, falling back to 80 when it cannot be
 /// determined. Reads `COLUMNS` if set; a later phase replaces this with a
 /// `crossterm::terminal::size()`-based implementation for real TTY queries.
-///
-/// Consumed starting with the compact hunt report; unused until then.
-#[allow(dead_code)]
 pub fn terminal_width() -> usize {
     parse_terminal_width(std::env::var("COLUMNS").ok().as_deref())
+}
+
+/// Char-count truncation to at most `width` characters, appending `…` when
+/// truncated. Consistent with `render::terminal_name`'s approach: no
+/// unicode-width dependency, a simple upper bound on rendered length.
+pub fn truncate_ellipsis(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let char_count = text.chars().count();
+    if char_count <= width {
+        return text.to_owned();
+    }
+    let keep = width.saturating_sub(1).max(1);
+    let mut truncated: String = text.chars().take(keep).collect();
+    truncated.push('…');
+    truncated
 }
 
 fn parse_terminal_width(columns_env: Option<&str>) -> usize {
@@ -87,6 +95,60 @@ pub const fn status_label(status: ObservationStatus) -> &'static str {
         ObservationStatus::Pressure => "pressure",
         ObservationStatus::Healthy => "healthy",
         ObservationStatus::Unconfirmed => "unconfirmed",
+    }
+}
+
+/// Layout parameters for the compact hunt/replay report. Renderers take this
+/// explicitly rather than probing the terminal or environment themselves, so
+/// tests can pin deterministic values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReportLayout {
+    pub width: usize,
+    pub color: ColorMode,
+    pub verbose: bool,
+}
+
+/// A supporting color signal for a severity level. Never the only carrier of
+/// the severity word itself — `paint` always leaves the plain word intact
+/// and only wraps it in escape codes when `ColorMode::Always`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeverityTone {
+    None,
+    Low,
+    Moderate,
+    High,
+    Severe,
+}
+
+pub const fn severity_tone(severity: Severity) -> SeverityTone {
+    match severity {
+        Severity::None => SeverityTone::None,
+        Severity::Low => SeverityTone::Low,
+        Severity::Moderate => SeverityTone::Moderate,
+        Severity::High => SeverityTone::High,
+        Severity::Severe => SeverityTone::Severe,
+    }
+}
+
+const fn sgr_code(tone: SeverityTone) -> &'static str {
+    match tone {
+        SeverityTone::None => "2", // dim
+        SeverityTone::Low => "32",
+        SeverityTone::Moderate => "33",
+        SeverityTone::High => "31",
+        SeverityTone::Severe => "1;31", // bold red
+    }
+}
+
+const SGR_RESET: &str = "\x1b[0m";
+
+/// Wrap `text` in the SGR escape codes for `tone` when `mode` is `Always`;
+/// otherwise return it unchanged. `text` itself is never altered, so the
+/// plain word is always present regardless of color mode.
+pub fn paint(text: &str, tone: SeverityTone, mode: ColorMode) -> String {
+    match mode {
+        ColorMode::Never => text.to_owned(),
+        ColorMode::Always => format!("\x1b[{}m{text}{SGR_RESET}", sgr_code(tone)),
     }
 }
 
