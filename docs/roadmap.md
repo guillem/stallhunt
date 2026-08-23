@@ -219,9 +219,11 @@ Create ADR before promising format compatibility.
 ## Milestone 6 — Continuous watch mode
 
 Status: complete. Finding-lifecycle watch over contiguous rolling windows is
-implemented. It is not a TUI. ADR-0008 records the output and lifecycle
-contract. The first SIGINT drains the in-flight window before exit and a
-second SIGINT terminates immediately; there is still no multi-window recording.
+implemented. ADR-0008 records the output and lifecycle contract; its no-TUI
+clause is superseded by ADR-0013 (Milestone 9), which makes terminal `watch`
+open an interactive TUI by default. The first SIGINT drains the in-flight
+window before exit and a second SIGINT terminates immediately; there is still
+no multi-window recording.
 
 Goal:
 
@@ -282,6 +284,34 @@ CPU-heavy build
 ```
 
 Avoid overclaiming causality.
+
+## Milestone 9 — Interface redesign
+
+Status: implemented, pending local user feedback. Per the user, no pull
+request will be opened yet; multiple redesign variants will be tested locally.
+ADR-0013 records the decisions.
+
+Goal:
+
+Make the default interface glanceable and modern without losing the
+evidence-backed diagnosis differentiator.
+
+Scope:
+
+- compact default `hunt`/`replay` text: a status table over all three host
+  resources plus pressured cgroup scopes, bounded per-finding blocks, and
+  one-line evidence-chain summaries; `--explain` renders the pre-M9 long form
+  byte-identically; JSON output is unchanged;
+- color policy: terminal-auto, `--no-color`, `NO_COLOR`; never the only
+  carrier of meaning;
+- `watch` opens a ratatui/crossterm TUI on a TTY by default (pressure bars and
+  sparklines, finding lifecycle, current-window detail, scoped cgroup panel,
+  help overlay); `--plain` preserves the classic clear/home refresh; piped
+  text and `--json` are byte-compatible with before;
+- `watch --plain` and the `stallhunt.watch_window` JSON contract are unchanged.
+
+Non-goals: no new telemetry, no inference changes, no JSON schema changes, no
+per-finding drill-down in the TUI (deferred until local user feedback).
 
 ## Future possibilities
 

@@ -1,7 +1,13 @@
 # ADR-0008: Watch tracks finding lifecycle, not a live dashboard
 
-- Status: Accepted
+- Status: Superseded (partially) by ADR-0013
 - Date: 2026-08-17
+
+Superseded clause: the no-TUI output decision ("There is no TUI crate,
+alternate screen, or interactive navigation") is replaced by ADR-0013, which
+makes terminal `watch` open an interactive ratatui/crossterm TUI by default.
+The finding-lifecycle model and the piped/`--json` output contract in this
+ADR stand.
 
 ## Context
 

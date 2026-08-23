@@ -4,6 +4,22 @@ All notable user-facing changes to Stallhunt are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once public releases begin.
 
+## [Unreleased]
+
+### Changed
+
+- `hunt` and `replay` default to a compact text form (status table, bounded per-finding blocks, one-line evidence-chain summaries); `--explain` renders the previous full long-form output byte-identically. JSON output is unchanged. See ADR-0013.
+- `watch` on a terminal opens an interactive TUI by default; `--plain` restores the classic clear/home text refresh. Piped text and `--json` are byte-compatible with before.
+- Color is automatic on terminals and disabled by `--no-color` or a `NO_COLOR` environment variable with any value; severity words remain in the text, so color is never the only carrier of meaning.
+
+### Added
+
+- `--explain` flag on `hunt` and `replay` for the full long-form output.
+- `--no-color` flag on `hunt`, `replay`, `capabilities`, and `watch`.
+- `--plain` flag on `watch` for the classic refreshing text display.
+- Interactive `watch` TUI (ratatui 0.29 + crossterm 0.29): PSI bars with bounded sparklines, finding lifecycle, current-window detail, scoped cgroup panel, help overlay (`?`), pause (`p`/Space), quit-with-drain (`q`/Esc/Ctrl-C). The SIGINT contract is unchanged: first SIGINT drains the in-flight window, second SIGINT restores the terminal and exits 130.
+- ADR [`docs/decisions/0013-interface-redesign.md`](docs/decisions/0013-interface-redesign.md), which supersedes the ADR-0008 no-TUI clause.
+
 ## [0.1.2] - 2026-08-23
 
 ### Fixed

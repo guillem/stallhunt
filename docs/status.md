@@ -4,25 +4,26 @@ Last updated: 2026-08-23
 
 ## Current milestone
 
-**Milestone 8 — corrective maintenance release v0.1.2 shipped**
+**Milestone 9 — interface redesign: compact hunt output, color, and an
+interactive watch TUI**
 
-Milestones 1–6 remain functionally complete. Since the v0.1.0 productization,
-v0.1.1 landed the `BOTTLENECK_*` → `STALLHUNT_*` acceptance-variable rename
-(closing that ADR-0012 open decision), regression tests intended to cover four
-documented gaps (16-chain truncation order, schema-1 decode without
-`memory_stat`, host-memory watch kind transitions, invalid host `full` blocking
-possible-thrashing), and a graceful first-SIGINT drain for unlimited watch. The
-release workflow's Node-20-deprecated actions were bumped to
-`actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
-v0.1.2 corrective release makes the advertised second-SIGINT termination real
-and ensures the 16-chain regression actually reaches truncation with 18
-eligible candidates. The repository remains parked: no additional M8 chain or
-M7 probe is approved.
-Do not start M7 merely because eBPF is interesting; add a probe only for
-a concrete diagnostic gap. M5 recording and replay remain available for offline
-re-analysis. M4 remains implemented with opt-in live observational validation;
-that test still requires a caller-owned delegated subtree that already contains
-the test process and does not mutate the hierarchy.
+Milestones 1–6 and the two M8 evidence-chain slices remain functionally
+complete. M9 changes presentation without changing telemetry, inference, or
+the JSON contracts (ADR-0013):
+
+- `hunt`/`replay` default to a compact text form with a status table and
+  bounded finding blocks; `--explain` renders the previous full long form
+  byte-identically. Hunt/replay JSON is unchanged.
+- Color (hand-rolled ANSI) is automatic on terminals only, disabled by
+  `--no-color` or `NO_COLOR`, and never the only carrier of meaning.
+- `watch` on a TTY opens an interactive ratatui/crossterm TUI by default;
+  `--plain` restores the classic clear/home refresh, and piped text/`--json`
+  are byte-compatible with before. The `stallhunt.watch_window` JSON contract
+  is unchanged.
+
+The redesign is implemented and pending local user feedback; per the user, no
+pull request will be opened yet — multiple redesign variants will be tested
+locally.
 
 ## Verified milestone assessment
 
@@ -53,9 +54,10 @@ the test process and does not mutate the hierarchy.
 - **M6 complete within its exit condition:** `watch` classifies host and
   bounded cgroup pressure findings as new, persistent, or resolved across
   contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
-  keeps 16 history windows. It is not a TUI and does not store full evidence.
-  A second SIGINT while draining terminates immediately with the conventional
-  exit status; `--count` bounds scripted runs.
+  keeps 16 history windows. It does not store full evidence. M9 superseded the
+  TTY refresh with an interactive TUI by default (ADR-0013); `--plain` keeps
+  the original refresh. A second SIGINT while draining terminates immediately
+  with the conventional exit status; `--count` bounds scripted runs.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
   reclaim, swap, or possible-thrashing finding to host I/O pressure, and can
   relate same-cgroup memory plus I/O pressure when `memory.events` high/max or
@@ -218,11 +220,13 @@ the test process and does not mutate the hierarchy.
   windows. Host CPU, memory, and I/O pressure plus at most 16 cgroup pressure
   identities are classified as new, persistent, or resolved. Healthy results do
   not create findings; missing or short-window data does not resolve an active
-  finding. History is capped at 16 compact windows. TTY text clears the screen;
-  JSON emits one `stallhunt.watch_window` object per window. Watch JSON is not
-  hunt JSON and not a recording. Scoped cgroup lifecycle `kind` values name the
-  resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
-  identity remains path plus resource.
+  finding. History is capped at 16 compact windows. On a TTY, M9 (ADR-0013)
+  opens the interactive TUI by default; `--plain` clears the screen as before,
+  and piped text appends. JSON emits one `stallhunt.watch_window` object per
+  window. Watch JSON is not hunt JSON and not a recording. Scoped cgroup
+  lifecycle `kind` values name the resource and any reclaim, swap,
+  possible-thrashing, or quota-throttle label; identity remains path plus
+  resource.
 - M8 relates a memory reclaim, swap, or possible-thrashing finding to host I/O
   pressure as `consistent_with` when both exist. It also relates same-cgroup
   memory and I/O pressure when that path has a positive `memory.events` high or
@@ -248,6 +252,45 @@ the test process and does not mutate the hierarchy.
   `nr_throttled` without throttled time does not label. Throttle counters
   without PSI do not create pressure. Watch still keys off `Pressure`.
 - Cargo formatting, Clippy, and test quality gates are documented.
+- M9 makes `hunt`/`replay` default to a compact text form (ADR-0013): a
+  `Observed <duration> · N findings · worst: …` header (or `no significant
+  resource contention detected`), a `RESOURCE  STATUS  PSI some  SEVERITY
+  CONFIDENCE` table covering CPU/Memory/I/O plus one line per pressured cgroup
+  scope, 2–4 line finding blocks (`delayed:` at most five victims, `suspects:`
+  at most three with the same-window non-causal caveat, memory mechanism and
+  I/O activity lines), one-line `related:` evidence-chain summaries, and a
+  `Details: stallhunt hunt --explain · full evidence: --json` trailer. Partial
+  collection stays visible as a `· partial` marker. `--explain` on `hunt` and
+  `replay` renders the pre-M9 long form byte-identically; JSON output is
+  unchanged.
+- M9 adds a `color` module with hand-rolled ANSI and a `ColorPolicy` resolved
+  once per invocation: `--no-color` (hunt/replay/capabilities/watch) or any
+  `NO_COLOR` value disables color; otherwise color applies only when stdout is
+  a terminal. Severity maps to severe/high red, moderate yellow, low cyan,
+  healthy/none green. Color is never the only carrier of meaning; the
+  `--explain` long form and capabilities text are uncolored.
+- M9 makes `watch` open an interactive ratatui/crossterm TUI when stdout is a
+  terminal (ADR-0013), with a header, per-resource PSI gauges and bounded
+  sparklines (TUI-local ring of 60 windows), a finding-lifecycle panel, a
+  current-window detail panel (top delayed processes and top CPU consumers
+  extracted from the observation before signal reduction, plus memory
+  mechanism and I/O activity candidates), a scoped cgroup panel, and a footer.
+  Keys are `q`/Esc/Ctrl-C quit-with-drain, `?` help overlay, `p`/Space pause
+  refresh. Small terminals drop sparklines, then the detail panel, then show a
+  "terminal too small" notice below 40×12. `--plain` restores the legacy
+  clear/home refresh; piped text and `--json` are byte-compatible with before.
+  The SIGINT contract is preserved: first SIGINT (or quit key) drains the
+  in-flight window, second SIGINT restores the terminal and exits 130. The
+  `stallhunt.watch_window` JSON contract is unchanged.
+- M9 pins `ratatui` 0.29 (default-features off, `crossterm` feature) and
+  `crossterm` 0.29. `ratatui` 0.30 was rejected because it requires Rust 1.86,
+  above the MSRV 1.85 (ADR-0012); until ratatui can be upgraded, the lockfile
+  carries two crossterm copies, 0.28.1 transitive via ratatui and 0.29.0
+  direct.
+- M9 golden fixtures: `tests/fixtures/render/cpu-contention-compact.txt`,
+  `evidence-chain-compact.txt`, and `evidence-chain-cgroup-compact.txt` guard
+  the compact form; the three original goldens now assert the `--explain`
+  path.
 
 ## Known limitations
 
@@ -318,6 +361,17 @@ the test process and does not mutate the hierarchy.
   windows are too short to receive it. `memory.events` high/max do not label a
   finding. Scoped CPU quota-throttle is same-window `cpu.stat` correlation, not
   proof that a quota caused scoped or host CPU stalls.
+- The watch TUI cannot be exercised in CI (no TTY); it is validated by
+  headless ratatui `TestBackend` unit tests in `src/tui.rs` and by manual/PTY
+  smoke runs on a real terminal.
+- The lockfile carries two crossterm copies until ratatui can be upgraded past
+  0.29 (ratatui 0.30 requires Rust 1.86, above the MSRV 1.85).
+- The TUI retains only compact per-window signals plus TUI-local sparkline
+  history and per-window process detail; full evidence remains on `hunt
+  --explain`/`--json` and `record`. The `--explain` long form is intentionally
+  uncolored.
+- The compact form omits qualifier bodies, context, and timing detail; that
+  information is reachable only via `--explain` or `--json`.
 - M1's controlled positive-pressure and clean sleeping-thread scenarios passed,
   and busy-but-not-pressured behavior is deterministic fixture coverage. A
   controlled real-host workload that is busy while remaining below the
@@ -327,8 +381,9 @@ the test process and does not mutate the hierarchy.
 
 ## Pending work
 
-The repository is intentionally parked after the scoped possible-thrashing
-slice. No additional M8 chain or M7 probe is approved.
+The repository is intentionally parked after the M9 interface redesign, which
+is awaiting local user feedback (no pull request yet, per the user). No
+additional M8 chain or M7 probe is approved.
 
 Diagnostic and attribution gaps:
 
@@ -377,12 +432,14 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Write down one concrete diagnostic question and the independent evidence needed
-to answer it before selecting another feature. No such question is currently
-selected. Do not start Milestone 7 unless the question cannot be answered with
-current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain unless
-independent linking evidence already exists; do not treat coincident PSI as a
-path, and do not link host findings to cgroup findings.
+Collect structured feedback from the local user testing of the M9 interface
+redesign (compact hunt output, color, and the watch TUI). Per the user, no pull
+request will be opened yet: multiple redesign variants will be tested locally
+first. Afterward, the next feature still needs one concrete diagnostic question
+and the independent evidence needed to answer it; do not start Milestone 7
+unless the question cannot be answered with current `/proc`, PSI, and cgroup
+collectors, and do not add another M8 chain unless independent linking evidence
+already exists.
 
 ## Current design risks
 
@@ -461,7 +518,6 @@ Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 Not yet decided:
 
 - serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
-- color/terminal crate,
 - eventual eBPF framework,
 - compatibility policy, additional targets, and signing/provenance for
   pre-built release artifacts.
@@ -474,10 +530,39 @@ Decided in ADR-0012:
 - minimum Linux baseline: 4.20+,
 - CLI: clap 4 with derive; bare `stallhunt` defaults to 10s hunt; `stallhunt completions <shell>`.
 
+Decided in ADR-0013:
+
+- compact default `hunt`/`replay` text with `--explain` for the long form,
+- color policy: terminal-auto, `--no-color`, `NO_COLOR`; never the only
+  carrier of meaning,
+- `watch` TUI default on a TTY with ratatui 0.29/crossterm 0.29; `--plain`
+  preserves the classic refresh.
+
 These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-23, the M9 interface redesign was validated. Formatting, locked-
+offline Clippy, and the full default test suite passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
+
+The gate ran 183 unit tests (one fixture writer ignored among 184 total
+`#[test]`), 15 CLI tests, three replay-fixture tests, and five ignored Linux
+acceptance tests. The three new compact golden fixtures
+(`cpu-contention-compact.txt`, `evidence-chain-compact.txt`,
+`evidence-chain-cgroup-compact.txt`) match; the three original goldens pass
+against the `--explain` path. `cargo +1.85.0 check --locked --all-targets`
+passed on the MSRV toolchain. On this machine, a PTY smoke of the TUI
+exercised render, `q` quit-with-drain, `?` help overlay, `p` pause, first-
+SIGINT drain, and second-SIGINT exit 130, with the terminal restored after
+exit. Real `hunt` and `hunt --explain` output and a `watch --plain --count 1`
+run were inspected.
 
 Later on 2026-08-23, a documentation consistency audit reconciled the v0.1.1
 and v0.1.2 SIGINT/truncation history, current JSON examples, watch semantics,

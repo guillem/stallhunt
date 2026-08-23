@@ -169,8 +169,10 @@ src/
   observe.rs    # sequential bounded multi-resource observation orchestration
   psi.rs        # CPU, memory, and I/O PSI parsing, capabilities, and intervals
   record.rs     # versioned normalized-observation recordings and redaction
-  render.rs     # concise finding-first text and full-evidence JSON rendering
-  watch.rs      # rolling finding lifecycle tracker and watch renderer
+  render.rs     # compact default and --explain long-form text, full-evidence JSON
+  color.rs      # ANSI color policy (terminal-auto, --no-color, NO_COLOR)
+  watch.rs      # rolling finding lifecycle tracker and text/JSON watch renderer
+  tui.rs        # interactive watch interface (ratatui + crossterm, ADR-0013)
 tests/
   cli.rs                # executable-level behavior tests
   cpu_acceptance.rs     # ignored bounded rootless live-pressure acceptance test
@@ -243,9 +245,11 @@ CPU/memory/I/O and a bounded set of cgroup pressure findings as new,
 persistent, or resolved. It keeps 16 compact history windows and does not
 retain full observations. Cgroup watch `kind` strings include the scoped
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
-identity remains path plus resource. TTY text refreshes by clearing the screen; JSON is
-one compact `stallhunt.watch_window` object per window, not a recording and
-not hunt JSON.
+identity remains path plus resource. On a TTY, M9 (ADR-0013) renders the
+terminal output through the interactive `tui.rs` interface by default; the
+`--plain` path and piped/`--json` output use the original clear-screen or
+appended text. JSON is one compact `stallhunt.watch_window` object per
+window, not a recording and not hunt JSON.
 
 M8 adds `analyze_evidence_chains` in `analysis.rs` (ADR-0009, ADR-0010,
 ADR-0011). It consumes already-produced memory, I/O, and cgroup findings and

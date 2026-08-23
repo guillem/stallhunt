@@ -26,11 +26,15 @@ cargo install --path .
 stallhunt
 ```
 
-Bare `stallhunt` runs a default 10-second hunt. Use `--json` for the full structured evidence:
+Bare `stallhunt` runs a default 10-second hunt and prints the compact text
+form. Use `--explain` for the full long-form evidence and `--json` for the
+full structured evidence:
 
 ```bash
-stallhunt --json
+stallhunt
 stallhunt hunt --duration 30s
+stallhunt hunt --explain
+stallhunt --json
 ```
 
 Capture and replay a normalized observation:
@@ -41,10 +45,13 @@ stallhunt replay incident.json
 stallhunt redact incident.json --output incident.redacted.json
 ```
 
-Follow finding lifecycle for a bounded number of rolling windows:
+Follow finding lifecycle for a bounded number of rolling windows. On a
+terminal, `watch` opens an interactive TUI (press `?` for help; `q` quits);
+`--plain` restores the classic clear-screen text refresh:
 
 ```bash
 stallhunt watch --interval 2s --count 3
+stallhunt watch --plain --interval 2s --count 3
 ```
 
 Generate shell completions:
@@ -69,36 +76,33 @@ High utilization is not automatically a problem. A machine using 95% of its RAM 
 - network-related waits,
 - eventually deeper blocking chains.
 
-Example output shape:
+Example output shape (real compact form; `--explain` renders the full
+evidence version):
 
 ```text
-$ stallhunt
+$ stallhunt hunt --no-color
+Observed 10.0s · 2 findings · worst: Memory moderate
 
-SYSTEM HEALTH: DEGRADED
+RESOURCE  STATUS       PSI some  SEVERITY  CONFIDENCE
+CPU       healthy      0.50%     none      medium
+Memory    pressure     8.00%     moderate  high
+I/O       pressure     8.00%     moderate  high
 
-1. CPU scheduling contention                         SEVERE
-   Impact:    23.4% pressure during observation
-   Victims:   postgres [4812], nginx [5120]
-   Suspects:  rustc [9231], ffmpeg [9401]
-   Confidence: high
+Memory pressure observed with correlated direct reclaim activity (8.00% memory PSI some) — severity moderate · confidence high
+  800ms stalled over 10s (PSI some 8.00%)
+  mechanism: direct reclaim (confidence low; same-window counters)
 
-   Evidence:
-     CPU PSI some avg10:          23.4%
-     run queue latency estimate:  elevated
-     rustc CPU consumption:       735%
-     postgres runnable delay:     3.8s / 10s
+Block-I/O pressure observed (8.00% I/O PSI some) — severity moderate · confidence high
+  800ms stalled over 10s (PSI some 8.00%)
+  activity: sda (8:0), writer [42] (same window, not proven causal)
 
-2. Block I/O contention                              MODERATE
-   Device:    nvme0n1
-   Victim:    postgres [4812]
-   Suspect:   restic [7712]
-   Confidence: medium
+related: Memory reclaim pressure is consistent with block-I/O pressure in the same window · confidence low
 
-Memory: no significant pressure detected.
-High memory occupancy alone is not treated as a bottleneck.
+Details: stallhunt hunt --explain · full evidence: --json
 ```
 
-This output is aspirational; the project will reach it incrementally.
+The default output answers the triage question in one screen; full evidence,
+context, limitations, and timings are one `--explain` away.
 
 ## Product principles
 
@@ -148,6 +152,7 @@ Later releases may add:
 │   ├── analysis.rs
 │   ├── cgroup.rs
 │   ├── cli.rs
+│   ├── color.rs
 │   ├── cpu.rs
 │   ├── duration_us.rs
 │   ├── io.rs
@@ -157,6 +162,7 @@ Later releases may add:
 │   ├── psi.rs
 │   ├── record.rs
 │   ├── render.rs
+│   ├── tui.rs
 │   └── watch.rs
 ├── tests/
 │   ├── cgroup_acceptance.rs
@@ -197,7 +203,9 @@ Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your 
 ## Current state
 
 Milestones 1–6 are functionally complete. Milestone 8's first two evidence-chain
-slices are implemented. Milestone 2's host-memory slice is
+slices are implemented. Milestone 9's interface redesign (compact default
+output, color, interactive watch TUI) is implemented and pending local user
+feedback. Milestone 2's host-memory slice is
 implemented and has a recorded delegated-cgroup harmful-pressure acceptance.
 The repository contains a Rust binary named `stallhunt` with real `hunt`, `watch`, `record`,
 `replay`, `redact`, `capabilities`, help, version, duration parsing, and
@@ -276,11 +284,12 @@ M6 adds `watch`. Rolling windows reuse the previous endpoint snapshot. The
 command tracks host CPU/memory/I/O and a bounded set of cgroup pressure
 findings as new, persistent, or resolved. Scoped cgroup `kind` values name the
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label.
-TTY text refreshes the screen; JSON emits one compact
-`stallhunt.watch_window` object per window. Watch is not a TUI and is not a
-recording. On an unlimited watch, the first SIGINT drains and writes the
-in-flight window; a second SIGINT terminates immediately. Full evidence remains
-on `hunt --json` and `record`.
+On a terminal, watch opens an interactive TUI by default (M9); `--plain`
+restores the classic clear-screen refresh. Piped text and JSON emit one
+compact `stallhunt.watch_window` object per window and are byte-compatible
+with the pre-TUI behavior. Watch is not a recording. On an unlimited watch,
+the first SIGINT drains and writes the in-flight window; a second SIGINT
+terminates immediately. Full evidence remains on `hunt --json` and `record`.
 
 M8 adds a conservative evidence chain: when memory reclaim, swap, or possible
 thrashing coexists with I/O pressure, hunt text and JSON may report that the
@@ -290,3 +299,10 @@ show a high or max delta or `memory.stat` shows direct reclaim or swap-in.
 Coincident PSI without that independent mechanism is not a chain. The relation
 is not a causal claim, does not join host findings to cgroup findings, and is
 not tracked by watch.
+
+M9 is the interface redesign (ADR-0013): `hunt`/`replay` default to the
+compact form above with `--explain` for the full long form (JSON unchanged);
+color is automatic on terminals and disabled by `--no-color` or `NO_COLOR`;
+`watch` opens the interactive TUI on a terminal, with `--plain` as the escape
+hatch. The redesign is implemented and pending local user feedback; no pull
+request has been opened yet.

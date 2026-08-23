@@ -49,10 +49,12 @@ Accepted initial decisions:
 - ADR-0005: Git repository as project memory
 - ADR-0006: bounded cgroup-v2 scoped attribution
 - ADR-0007: versioned normalized-observation recordings without a compatibility promise
-- ADR-0008: watch tracks finding lifecycle rather than providing a TUI monitor
+- ADR-0008: watch tracks finding lifecycle rather than providing a TUI monitor (no-TUI clause superseded by ADR-0013)
 - ADR-0009: evidence chains require independent mechanism evidence and never claim causality
 - ADR-0010: same-cgroup memory plus I/O chains stay on one path and never join host findings
 - ADR-0011: same-cgroup chains may use memory.stat page deltas in addition to memory.events
+- ADR-0012: Stallhunt product identity, license, MSRV, Linux baseline, CLI
+- ADR-0013: interface redesign — compact hunt output, color policy, interactive watch TUI
 
 ## Documentation rules
 

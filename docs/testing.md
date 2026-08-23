@@ -186,11 +186,32 @@ new identity. Watch lifecycle `kind` strings name the scoped resource and any
 reclaim, swap, possible-thrashing, or quota-throttle label; a mechanism change
 stays `persistent`.
 
+M9 interface-redesign tests cover the compact renderer, color, and the watch
+TUI (ADR-0013). The compact `hunt`/`replay` form has three new checked-in
+goldens (`cpu-contention-compact.txt`, `evidence-chain-compact.txt`,
+`evidence-chain-cgroup-compact.txt`); the three original goldens now assert
+the `--explain` path and keep the long form byte-exact. Renderer unit tests
+force color on and off by policy (ANSI present/absent, `NO_COLOR` and
+`--no-color` both disable), and assert that adversarial process names stay
+sanitized in compact mode. The TUI is tested headless with
+`ratatui::backend::TestBackend`: 15 unit tests in `src/tui.rs` assert the
+status rows, finding-lifecycle labels, help overlay, paused/draining footer,
+small-terminal degradation (sparklines dropped, then the detail panel, then a
+"terminal too small" notice), the bounded PSI sparkline ring, and the key
+state machine, which is decoupled from crossterm events and unit-tested
+separately. The existing golden `watch-lifecycle.txt` still guards the piped
+text form. There is no TTY in CI, so TUI correctness on a real terminal is
+validated manually: a PTY smoke of render, `q`/`?`/`p`, resize, SIGINT drain,
+double-SIGINT exit 130, and terminal restoration after exit. `tests/cli.rs`
+covers `watch --plain --count 1` (legacy refresh), the unchanged
+`--json` stream, and parsing of the new flags.
+
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 157 unit tests, 13 CLI tests,
-and three replay-fixture tests. Five Linux acceptance tests are ignored by
-default and run only when intentionally requested.
+The current normal deterministic gate contains 183 unit tests (one fixture
+writer ignored among 184 total `#[test]`), 15 CLI tests, and three
+replay-fixture tests. Five Linux acceptance tests are ignored by default and
+run only when intentionally requested.
 
 ### 6. Synthetic load scenarios
 
@@ -299,6 +320,11 @@ tests/
       busy_but_not_pressured.json
     render/
       cpu-contention.txt
+      cpu-contention-compact.txt
+      evidence-chain.txt
+      evidence-chain-compact.txt
+      evidence-chain-cgroup.txt
+      evidence-chain-cgroup-compact.txt
       watch-lifecycle.txt
     proc-loadavg-valid
     proc-pid-stat-unusual-name

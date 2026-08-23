@@ -3,11 +3,13 @@
 ## Current state
 
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
-block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, and the
-first two Milestone 8 evidence-chain slices. Scoped cgroup findings can also
-carry reclaim, swap, possible-thrashing, or quota-throttle context labels. The
-repository is currently parked pending selection of another concrete diagnostic
-question; see `status.md`.
+block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, the
+first two Milestone 8 evidence-chain slices, and Milestone 9's interface
+redesign (compact default output, color, and the interactive watch TUI;
+ADR-0013). Scoped cgroup findings can also carry reclaim, swap,
+possible-thrashing, or quota-throttle context labels. The repository is
+currently parked pending local user feedback on the M9 redesign; see
+`status.md`.
 
 Build and run it from the repository root:
 
@@ -144,7 +146,11 @@ Do not add generated build output.
 
 The CLI uses clap 4 with derive parsing. M1.2 adds `serde` and
 `serde_json` because live structured output has dynamic optional fields and
-should not rely on hand-built JSON escaping.
+should not rely on hand-built JSON escaping. M9 (ADR-0013) adds `ratatui`
+0.29 and `crossterm` 0.29 for the interactive `watch` TUI; the lockfile
+carries crossterm 0.28.1 transitively via ratatui until it can be upgraded
+(ratatui 0.30 requires Rust 1.86, above the MSRV 1.85). Color in the text
+renderers is hand-rolled ANSI and adds no dependency.
 
 Likely useful categories:
 
