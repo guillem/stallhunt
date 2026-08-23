@@ -188,9 +188,9 @@ stays `persistent`.
 
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 148 unit tests and ten CLI
-tests. Five Linux acceptance tests are ignored by default and run only when
-intentionally requested.
+The current normal deterministic gate contains 157 unit tests, 13 CLI tests,
+and three replay-fixture tests. Five Linux acceptance tests are ignored by
+default and run only when intentionally requested.
 
 ### 6. Synthetic load scenarios
 

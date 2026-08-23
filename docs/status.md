@@ -1,20 +1,23 @@
 # Project status
 
-Last updated: 2026-08-22
+Last updated: 2026-08-23
 
 ## Current milestone
 
-**Milestone 8 — quick-win maintenance release v0.1.1 shipped**
+**Milestone 8 — corrective maintenance release v0.1.2 shipped**
 
 Milestones 1–6 remain functionally complete. Since the v0.1.0 productization,
 v0.1.1 landed the `BOTTLENECK_*` → `STALLHUNT_*` acceptance-variable rename
-(closing that ADR-0012 open decision), deterministic coverage for the four
+(closing that ADR-0012 open decision), regression tests intended to cover four
 documented gaps (16-chain truncation order, schema-1 decode without
-`memory_stat`, host-memory watch kind transitions, invalid host `full`
-blocking possible-thrashing), and a graceful first-SIGINT drain for unlimited
-watch. The release workflow's Node-20-deprecated actions were bumped to
+`memory_stat`, host-memory watch kind transitions, invalid host `full` blocking
+possible-thrashing), and a graceful first-SIGINT drain for unlimited watch. The
+release workflow's Node-20-deprecated actions were bumped to
 `actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
-repository remains parked: no additional M8 chain or M7 probe is approved.
+v0.1.2 corrective release makes the advertised second-SIGINT termination real
+and ensures the 16-chain regression actually reaches truncation with 18
+eligible candidates. The repository remains parked: no additional M8 chain or
+M7 probe is approved.
 Do not start M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -465,6 +468,20 @@ concrete, not all at once.
 
 ## Last meaningful validation
 
+On 2026-08-23, the v0.1.2 corrective release restored prompt second-SIGINT
+termination for unlimited watch and made the evidence-chain truncation fixture
+exercise 18 eligible candidates before retaining 16. Formatting, locked-offline
+Clippy, and the full default test suite passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
+
+The gate ran 157 unit tests (156 passed, one fixture writer ignored), 13 CLI
+tests, three replay-fixture tests, and five ignored Linux acceptance tests.
+
 On 2026-08-18, Stallhunt v0.1.0 productization landed: binary/package name
 `stallhunt`, clap CLI with default hunt and completions, JSON kinds
 `stallhunt.recording` and `stallhunt.watch_window`, dual license, MSRV 1.85,
@@ -486,8 +503,8 @@ cross-references, and experiment state. The documented quickstart CLI syntax
 was checked against the current binary. Formatting, locked-offline Clippy, and
 all default tests passed.
 
-Default-gate coverage is 148 unit tests, ten CLI tests, and five ignored Linux
-acceptance tests.
+Default-gate coverage is 157 unit tests, 13 CLI tests, three replay-fixture
+tests, and five ignored Linux acceptance tests.
 
 Earlier the same day, scoped cgroup possible-thrashing labels were validated with
 deterministic analyzer coverage (positive conjunction, slower observation-
