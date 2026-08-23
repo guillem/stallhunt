@@ -10,6 +10,13 @@ Current window
   I/O      healthy      none  PSI 0.10%
   Cgroup   no scoped pressure ranked this window
 
+Processes
+  CPU victims: no positive candidates ranked (runnable-delay)
+  CPU suspects: no positive candidates ranked (same-window CPU-consumption)
+  I/O suspects: not assessed (no current pressure finding) (same-window process-I/O)
+  I/O victims: unavailable (process I/O does not identify stalled workloads)
+  Memory and cgroup process roles: unavailable
+
 Recent history (oldest first)
   #1   CPU new high
 
