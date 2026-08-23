@@ -1,6 +1,6 @@
 [package]
 name = "stallhunt"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Linux-first command-line performance triage"
@@ -25,6 +25,7 @@ rustix = { version = "1", features = ["param"] }
 ctrlc = "3"
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"
+unicode-width = "0.2"
 
 [lints.rust]
 unsafe_code = "forbid"

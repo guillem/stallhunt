@@ -22,6 +22,12 @@ Bare `stallhunt` runs a default 10-second hunt. Equivalent explicit form:
 stallhunt hunt
 ```
 
+The implicit form also accepts hunt options:
+
+```text
+stallhunt [--duration <DURATION>] [--json] [--verbose] [--no-color]
+```
+
 Defaults:
 
 - bounded observation,
@@ -30,8 +36,11 @@ Defaults:
 - all implemented resource analyzers,
 - no requirement for elevated privileges.
 
-Implemented on `hunt` and `replay`: `--duration`/`--json` (hunt only), `--verbose`,
-`--no-color`. `watch` implements `--interval`, `--count`, `--json`, `--no-color`.
+Bare `stallhunt` is a complete implicit `hunt`: it accepts the same `--duration`,
+`--json`, `--verbose`, and `--no-color` options as `stallhunt hunt`. Root hunt
+options cannot be combined with an explicit subcommand. `replay` accepts
+`--json`, `--verbose`, and `--no-color`; `watch` accepts `--interval`,
+`--count`, `--json`, and `--no-color`.
 
 Still reserved, not yet implemented — do not add before a real use case exists:
 
@@ -82,7 +91,7 @@ stallhunt record --output incident.json [--duration 10s] [--redact] [--force]
 Re-analyze a recording with the current inference engine.
 
 ```bash
-stallhunt replay incident.json [--json]
+stallhunt replay incident.json [--json] [--verbose] [--no-color]
 ```
 
 ### `redact`
@@ -100,17 +109,17 @@ Implemented in Milestone 6:
 Follow rolling bottlenecks by finding lifecycle.
 
 ```bash
-stallhunt watch [--interval 2s] [--count N] [--json]
+stallhunt watch [--interval 2s] [--count N] [--json] [--no-color]
 ```
 
-This is not a TUI and not a generic resource monitor.
+This is a finding-lifecycle TUI on a terminal, not a generic resource monitor.
 
 ## Current CPU diagnosis behavior
 
 Milestone 1 implements:
 
 ```text
-stallhunt hunt [--duration <DURATION>] [--json]
+stallhunt hunt [--duration <DURATION>] [--json] [--verbose] [--no-color]
 stallhunt capabilities [--json]
 stallhunt version
 ```
@@ -188,9 +197,10 @@ and writes the in-flight window; a second SIGINT terminates immediately with
 status 130. Bounded `--count` runs retain the default signal disposition. Each
 window reuses the previous endpoint snapshot. Text reports `new` / `persistent`
 / `resolved` pressure findings plus a compact current-window summary. A TTY
-refreshes the screen with ANSI clear/home; piped text and `--json` append. JSON
+opens the finding-lifecycle TUI; piped text and `--json` append. JSON
 is one compact `stallhunt.watch_window` object per window. It is not hunt JSON
-and not a recording, and it omits full evidence. Host memory `kind` values
+and not a recording, and it omits full finding evidence while retaining typed,
+bounded process attribution where it is supported. Host memory `kind` values
 already name reclaim, swap, or possible thrashing. Scoped cgroup `kind` values
 name the resource and, when labeled, the mechanism
 (`cgroup_memory_reclaim_pressure`, `cgroup_memory_swap_pressure`,
@@ -213,6 +223,23 @@ Healthy, unavailable, and insufficient kinds can appear in the compact current
 window summary but do not create tracked identities. A mechanism change updates
 the lifecycle row's `kind` while preserving host-resource identity or cgroup
 path-plus-resource identity.
+
+Every watch surface includes a Processes section/object. Current CPU signals
+may contain ranked `cpu_victim` candidates with runnable-delay evidence and
+`cpu_suspect` candidates with same-window CPU-consumption evidence. Current
+I/O signals may contain ranked `io_suspect` candidates with same-window
+process-I/O evidence. Each candidate carries a stable process key, terminal-safe
+name, confidence, typed evidence, and its analyzer label. CPU victims, CPU
+suspects, and I/O suspects are correlation-qualified candidates, not proof of
+harm or causality. I/O victims and process attribution for memory or cgroup
+findings are explicitly unsupported.
+
+Lifecycle findings repeat their last observed process candidates. A confirmed
+persistent finding refreshes those candidates from the current window; an
+unconfirmed persistent or resolved finding labels them as **last observed** so
+they cannot be mistaken for current activity. Empty and unavailable role lists
+are rendered explicitly rather than omitted. This additive JSON field keeps
+`schema_version: 1`; consumers must tolerate absent fields from older producers.
 
 ## Human output structure
 
@@ -360,7 +387,7 @@ Representative Milestone 1 finding shape (optional context fields are omitted he
 ```json
 {
   "schema_version": 1,
-  "tool_version": "0.2.0",
+  "tool_version": "0.3.0",
   "requested_observation": {
     "duration_ms": 10000
   },
@@ -513,7 +540,8 @@ alongside the lifecycle panels, never the centerpiece.
 
 The differentiator is diagnosis.
 
-Panels: a title bar (window index, interval, key hints); a **Lifecycle**
+Panels: a title bar (window index, interval, key hints); a **Processes** panel
+with CPU victims, CPU suspects, and I/O suspects; a **Lifecycle**
 list of tracked findings (state, identity, kind, severity, age, and prior
 severity on a change); a **Current window** summary of CPU/memory/I-O
 status plus a scoped-cgroup-pressure count; a **History** strip mapping the

@@ -225,7 +225,11 @@ overwrite refusal, and invalid invocations.
 M6 watch tests cover finding lifecycle (new, persistent, resolved, severity
 change, unconfirmed missing data), independent host/cgroup identities, bounded
 history, cgroup tracking caps, and a checked-in lifecycle text fixture plus
-structural JSON assertions. Executable CLI tests cover `watch --count 1` text
+structural JSON assertions. Candidate tests cover CPU victim/suspect and I/O
+suspect conversion, confirmed-window refresh, stale retention for unconfirmed
+and resolved findings, and empty supported/unsupported roles. Renderer tests
+cover piped text, JSON, and the TUI's normal and expanded candidate evidence,
+including empty states and terminal-safe truncation. Executable CLI tests cover `watch --count 1` text
 and JSON on a 100 ms window, plus prompt second-SIGINT termination during an
 unlimited five-minute window. Live watch does not assert host contention.
 
@@ -252,9 +256,20 @@ stays `persistent`.
 
 Mark environment-dependent tests clearly.
 
-The current normal deterministic gate contains 157 unit tests, 13 CLI tests,
-and three replay-fixture tests. Five Linux acceptance tests are ignored by
-default and run only when intentionally requested.
+`tests/documentation.rs` scans every Git-tracked Markdown file and the manual
+page for concrete `stallhunt`, Cargo, and repository-tool invocations. It
+normalizes prompts, release-binary paths, roff escaping, and output redirection,
+then validates Stallhunt argv through the CLI's safe `--help` parse path and
+checks documented Cargo/repository subcommands through their help paths;
+failures include source path and line. Synopsis and placeholder forms are
+maintained in a separate explicit inventory. Historical schema prose such as
+`bottleneck.recording` is not executable syntax, but a concrete `bottleneck
+...` command is rejected.
+
+The current normal deterministic gate contains 196 unit tests, 15 CLI tests,
+three documentation-command tests, and three replay-fixture tests. Five Linux
+acceptance tests are ignored by default and run only when intentionally
+requested.
 
 ### 6. Synthetic load scenarios
 

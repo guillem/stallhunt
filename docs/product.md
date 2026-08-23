@@ -186,7 +186,7 @@ Bounded active diagnosis.
 Example:
 
 ```bash
-bottleneck hunt --duration 10s
+stallhunt hunt --duration 10s
 ```
 
 This should be the primary early workflow.

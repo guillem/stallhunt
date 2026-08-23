@@ -52,9 +52,15 @@ tar xzf stallhunt-<version>-x86_64-unknown-linux-gnu.tar.gz
 install -m 0755 stallhunt-<version>-x86_64-unknown-linux-gnu/stallhunt ~/.local/bin/stallhunt
 ```
 
-Verify the published SHA-256 checksum before use. Download release tarballs
-from the [GitHub Releases](https://github.com/guillem/stallhunt/releases) page;
-the current release is `v0.2.0`.
+Verify the published SHA-256 checksum before use:
+
+```bash
+sha256sum -c stallhunt-0.3.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+```
+
+Download release tarballs from the
+[GitHub Releases](https://github.com/guillem/stallhunt/releases) page; the
+current release is `v0.3.0`.
 
 ## Shell completions
 

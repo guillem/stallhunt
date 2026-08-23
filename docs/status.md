@@ -1,28 +1,21 @@
 # Project status
 
-Last updated: 2026-08-23
+Last updated: 2026-08-24
 
 ## Current milestone
 
-**Post-Milestone 8 — interface redesign release v0.2.0**
+**Post-Milestone 8 — UX and watch-attribution release v0.3.0**
 
-Milestones 1–6 remain functionally complete. Since the v0.1.0 productization,
-v0.1.1 landed the `BOTTLENECK_*` → `STALLHUNT_*` acceptance-variable rename
-(closing that ADR-0012 open decision), regression tests intended to cover four
-documented gaps (16-chain truncation order, schema-1 decode without
-`memory_stat`, host-memory watch kind transitions, invalid host `full` blocking
-possible-thrashing), and a graceful first-SIGINT drain for unlimited watch. The
-release workflow's Node-20-deprecated actions were bumped to
-`actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
-v0.1.2 corrective release makes the advertised second-SIGINT termination real
-and ensures the 16-chain regression actually reaches truncation with 18
-eligible candidates. Release v0.2.0 ships the ADR-0013 interface redesign in
-response to user feedback that default `hunt` output was a wall of text and
-`watch` was too primitive: `hunt`/`replay` gain a compact styled report and
-`--verbose`, and `watch` gains an interactive TUI, both TTY-only and both
-leaving piped text/JSON unchanged. This is presentation only; no analyzer,
-finding kind, or telemetry source changed, and the repository remains parked
-otherwise: no additional M8 chain or M7 probe is approved.
+Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
+invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
+explicit-`hunt` parity, and rejects root hunt flags mixed with a subcommand.
+Watch now transports the analyzers' bounded CPU victim/suspect and I/O suspect
+candidates through current signals, lifecycle findings, piped text, additive
+schema-1 JSON, and the TUI. Unconfirmed and resolved findings label retained
+candidates as last observed. Memory/cgroup process roles and I/O victims remain
+unsupported. ADR-0014 records both contracts. No analyzer rule, telemetry
+source, pressure finding kind, remaining M8 chain, or M7 probe was added, and
+the repository remains parked otherwise.
 Do not start M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -57,8 +50,9 @@ the test process and does not mutate the hierarchy.
   recording.
 - **M6 complete within its exit condition:** `watch` classifies host and
   bounded cgroup pressure findings as new, persistent, or resolved across
-  contiguous rolling windows, appends piped text/JSON unchanged, keeps 16
-  history windows, and does not store full evidence in its JSON stream. Per
+  contiguous rolling windows, keeps 16 history windows, and does not store full
+  finding evidence in its JSON stream. Piped text and additive schema-1 JSON
+  expose bounded CPU victim/suspect and I/O suspect candidates. Per
   ADR-0013, a TTY renders an interactive TUI over that same lifecycle model
   (not a utilization dashboard) instead of the earlier screen-clearing text.
   A second SIGINT while draining terminates immediately with the conventional
@@ -81,6 +75,9 @@ the test process and does not mutate the hierarchy.
   version command structure exists.
 - `hunt` accepts `--duration` values from 100 ms through 5 minutes, including
   exact-millisecond decimal values, and defaults to 10 seconds.
+- Bare `stallhunt` accepts the same `--duration`, `--json`, `--verbose`, and
+  `--no-color` options as explicit `stallhunt hunt`; root hunt options conflict
+  with explicit subcommands and appear in root help and shell completions.
 - `hunt` and `capabilities` support separate text and JSON render paths.
 - CPU PSI `some` parsing retains rolling averages and the raw cumulative
   microsecond total. The parser validates required fields and ranges, tolerates
@@ -227,9 +224,14 @@ the test process and does not mutate the hierarchy.
   not create findings; missing or short-window data does not resolve an active
   finding. History is capped at 16 compact windows. A TTY renders an
   interactive TUI (ADR-0013); piped text appends `--- window N ---` frames
-  and JSON emits one `stallhunt.watch_window` object per window, both
-  unchanged by the TUI's existence. Watch JSON is not hunt JSON and not a
-  recording. Scoped cgroup lifecycle `kind` values name the resource and any
+  and JSON emits one `stallhunt.watch_window` object per window. Every surface
+  exposes bounded CPU runnable-delay victims, same-window CPU-consumption
+  suspects, and same-window process-I/O suspects when supported. Confirmed
+  lifecycle findings refresh candidates; unconfirmed or resolved findings
+  retain them with a stale/last-observed label. Current JSON also distinguishes
+  available, unavailable, and not-assessed candidate roles while retaining
+  schema version 1. Watch JSON is not hunt JSON and not a recording. Scoped
+  cgroup lifecycle `kind` values name the resource and any
   reclaim, swap, possible-thrashing, or quota-throttle label; identity
   remains path plus resource.
 - Per ADR-0013, `hunt`/`replay` render a compact, color-coded, width-aware
@@ -239,7 +241,9 @@ the test process and does not mutate the hierarchy.
   restores the full text on hunt/replay, and the watch TUI's detail pane
   shows it per finding with no flag. `--no-color` and `NO_COLOR` disable
   color without changing layout on hunt, replay, and watch. `ratatui` 0.29
-  and `crossterm` 0.28 are new dependencies, justified in ADR-0013.
+  and `crossterm` 0.28 are new dependencies, justified in ADR-0013;
+  `unicode-width` 0.2 is direct for terminal-column-safe process names, as
+  recorded in ADR-0014.
 - M8 relates a memory reclaim, swap, or possible-thrashing finding to host I/O
   pressure as `consistent_with` when both exist. It also relates same-cgroup
   memory and I/O pressure when that path has a positive `memory.events` high or
@@ -317,12 +321,15 @@ the test process and does not mutate the hierarchy.
   microseconds, which can differ slightly from a live nanosecond `Instant`
   interval. Recordings do not include extra host identity such as hostname or
   kernel version.
-- Watch JSON omits victims, suspects, and raw evidence. A disappeared cgroup
-  finding stays unconfirmed until that scope is observed without ranked
-  pressure. Unlimited `watch` without `--count` samples until interrupted and
-  drains the current window after the first SIGINT; a second SIGINT exits
-  immediately. Consecutive 100 ms windows remain smoke observations, same as
-  hunt.
+- Watch JSON carries bounded process-candidate evidence but still omits full
+  observations, raw resource evidence, and qualifiers. CPU suspects and I/O
+  suspects are same-window correlation, while CPU victims are observed summed
+  runnable delay rather than proof of user-visible harm. I/O victims and
+  memory/cgroup process roles remain unsupported. A disappeared cgroup finding
+  stays unconfirmed until that scope is observed without ranked pressure.
+  Unlimited `watch` without `--count` samples until interrupted and drains the
+  current window after the first SIGINT; a second SIGINT exits immediately.
+  Consecutive 100 ms windows remain smoke observations, same as hunt.
 - M8's chains are same-window correlation of independent PSI plus either host
   VM counters or same-cgroup `memory.events` high/max or `memory.stat`
   direct-reclaim/swap-in deltas. They do not prove reclaim or swap caused I/O
@@ -500,10 +507,41 @@ Decided in ADR-0013:
 - color/terminal crate: `ratatui` 0.29 (`crossterm` 0.28 backend) for the
   watch TUI; `--no-color`/`NO_COLOR` for color, TTY-vs-pipe for layout.
 
+Decided in ADR-0014:
+
+- root hunt options have explicit-`hunt` parity and conflict with subcommands;
+- watch carries additive typed process candidates in schema version 1 and
+  labels retained lifecycle candidates as last observed.
+
 These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-24, the v0.3.0 release preparation validated implicit root-hunt
+option parity and conflicts, typed watch process attribution across lifecycle,
+piped text, JSON, and the 80x24 TUI, the tracked-document command audit, and
+the updated manual and release metadata. The complete local gate passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+cargo build --release --locked --offline
+./target/release/stallhunt version
+groff -man -Tascii docs/stallhunt.1
+```
+
+The release binary reported `stallhunt 0.3.0`. The default gate ran 196 unit
+tests (195 passed and one fixture writer was ignored), 15 CLI tests, three
+documentation-command tests, three replay-fixture tests, and five ignored Linux
+acceptance tests. Release-binary smoke checks confirmed root help and Bash
+completions expose all implicit-hunt flags, root `--json` mixed with
+`capabilities` exits 2, a 100 ms implicit JSON hunt emits schema 1, and a one-
+window watch JSON stream carries `stallhunt.watch_window` plus process-candidate
+fields. The man page rendered successfully. Pressure-generating acceptance
+tests remain opt-in because they require explicit host or delegated-cgroup
+setup.
 
 On 2026-08-23, the v0.2.0 release preparation updated the package, lockfile,
 manual, current JSON examples, installation guide, changelog, and project

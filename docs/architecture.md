@@ -151,6 +151,15 @@ mapping from severity to visual weight, expressed as two backends
 `ratatui` widgets) — so the two surfaces cannot drift apart on what a given
 severity looks like.
 
+Watch carries process attribution forward as typed analyzer output rather than
+reconstructing it in a renderer. Supported current signals contain bounded CPU
+runnable-delay victims, CPU-consumption suspects, or I/O-activity suspects;
+memory, cgroup, and I/O-victim process roles remain absent by design. The
+tracker refreshes candidates on confirmed pressure windows and marks retained
+last-observed candidates stale on unconfirmed or resolved lifecycle findings.
+Text, JSON, and TUI therefore expose the same candidate evidence and cannot
+silently turn historical activity into a current causal claim.
+
 ## Proposed code boundaries
 
 Do not force a multi-crate workspace immediately, but preserve these conceptual modules.

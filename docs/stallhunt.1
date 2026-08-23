@@ -1,4 +1,4 @@
-.TH STALLHUNT 1 "August 2026" "stallhunt 0.2.0" "User Commands"
+.TH STALLHUNT 1 "August 2026" "stallhunt 0.3.0" "User Commands"
 .SH NAME
 stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 .SH SYNOPSIS
@@ -7,12 +7,15 @@ stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 .PP
 .B stallhunt
 [\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+[\fB\-\-verbose\fR] [\fB\-\-no-color\fR]
 .PP
 .B stallhunt hunt
 [\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-json\fR]
+[\fB\-\-verbose\fR] [\fB\-\-no-color\fR]
 .PP
 .B stallhunt watch
-[\fB\-\-interval\fR \fIDURATION\fR] [\fB\-\-count\fR \fIN\fR] [\fB\-\-json\fR]
+[\fB\-\-interval\fR \fIDURATION\fR] [\fB\-\-count\fR \fIN\fR]
+[\fB\-\-json\fR] [\fB\-\-no-color\fR]
 .PP
 .B stallhunt capabilities
 [\fB\-\-json\fR]
@@ -23,7 +26,7 @@ stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 [\fB\-\-duration\fR \fIDURATION\fR] [\fB\-\-redact\fR] [\fB\-\-force\fR]
 .PP
 .B stallhunt replay
-[\fB\-\-json\fR]
+[\fB\-\-json\fR] [\fB\-\-verbose\fR] [\fB\-\-no-color\fR]
 .I PATH
 .PP
 .B stallhunt redact
@@ -46,6 +49,15 @@ Running
 .B stallhunt
 with no subcommand is equivalent to
 .BR "stallhunt hunt" .
+The implicit form accepts the same
+.BR \-\-duration ,
+.BR \-\-json ,
+.BR \-\-verbose ,
+and
+.B \-\-no-color
+options as explicit
+.BR hunt .
+Root hunt options cannot be combined with an explicit subcommand.
 Default human output is finding-first and concise.
 Use
 .B \-\-json
@@ -116,6 +128,7 @@ Observation duration for
 .B hunt
 and
 .BR record .
+It is also accepted at the command root for an implicit hunt.
 Default:
 .BR 10s " for both commands."
 .TP
@@ -143,6 +156,7 @@ Supported by
 .BR capabilities ,
 and
 .BR replay .
+It is also accepted at the command root for an implicit hunt.
 .TP
 .B \-\-verbose
 Print full context and limitation messages instead of collapsed caveats.
@@ -150,6 +164,7 @@ Supported by
 .B hunt
 and
 .BR replay .
+It is also accepted at the command root for an implicit hunt.
 Only affects the compact terminal report (see OUTPUT below); JSON output
 always includes full qualifier messages regardless of this flag.
 .TP
@@ -157,6 +172,7 @@ always includes full qualifier messages regardless of this flag.
 Disable color in terminal output.
 Supported by
 .BR hunt ", " replay ", and " watch .
+It is also accepted at the command root for an implicit hunt.
 The
 .B NO_COLOR
 environment variable has the same effect (see ENVIRONMENT below).
@@ -209,9 +225,12 @@ is not given.
 It shows the same finding-lifecycle model as the piped text output \(em
 new, persistent, and resolved findings across rolling windows \(em not
 host or per-process utilization.
-Panels: a title bar; a lifecycle list; a current-window resource summary;
-a bounded history strip; and, on request, a detail pane with a selected
-finding's full context and limitations text.
+Panels: a title bar; a lifecycle list; an always-visible three-column Processes
+panel for CPU victims, CPU suspects, and I/O suspects; a current-window resource
+summary; a bounded history strip; and, on request, a detail pane with the
+selected finding's complete candidate evidence before its full context and
+limitations text. Empty, unavailable, and retained last-observed candidate
+states are labeled explicitly.
 Keys:
 .BR q " or " Esc
 to quit,
@@ -223,7 +242,8 @@ to toggle the detail pane, and
 for a help overlay.
 Piped or redirected output, and
 .BR \-\-json ,
-are unaffected by this interface and unchanged from earlier releases.
+remain append-only and do not enter terminal mode.
+Every piped text frame includes a Processes section.
 .SS JSON
 .B hunt
 and
@@ -234,7 +254,12 @@ emit versioned JSON reports with
 .B watch \-\-json
 emits one
 .B stallhunt.watch_window
-object per window.
+object per window. Current signals and lifecycle findings add bounded, typed
+CPU runnable-delay victims, CPU-consumption suspects, and process-I/O suspects
+where supported. Candidate availability distinguishes an empty supported role
+from incomplete telemetry; candidates retained on unconfirmed or resolved
+findings are marked stale. I/O victims and memory/cgroup process roles remain
+unsupported. The additive stream remains schema version 1.
 .B replay \-\-json
 re-renders the current inference result for a stored recording.
 .SS Recordings
