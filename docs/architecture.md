@@ -136,6 +136,21 @@ the terminal or environment themselves, which is what keeps them
 deterministic and testable — a golden test pins a `ReportLayout` value
 instead of depending on the process's actual TTY state.
 
+`watch`'s presentation follows the same purity rule with its own analysis
+pass: `watch::signals_from_observation`/`WatchTracker::ingest` run the
+resource analyzers once per window into a `WatchWindow`, and the piped
+text/JSON renderer (`watch::render_window`) and the terminal UI
+(`src/tui/{mod,app,draw}.rs`, ADR-0013) both format that same typed window
+rather than re-deriving it. The TUI's `draw` function is pure over `App`
+state (no terminal access, no clock reads), so it is testable against
+`ratatui::backend::TestBackend`; only `tui::run` touches the real terminal.
+Severity color in the TUI shares its vocabulary with the compact report's
+ANSI painting through `style::SeverityTone`/`style::severity_tone` — one
+mapping from severity to visual weight, expressed as two backends
+(`style::paint` for ANSI text, `style::severity_ratatui_style` for
+`ratatui` widgets) — so the two surfaces cannot drift apart on what a given
+severity looks like.
+
 ## Proposed code boundaries
 
 Do not force a multi-crate workspace immediately, but preserve these conceptual modules.
@@ -190,7 +205,11 @@ src/
   render.rs     # concise finding-first text and full-evidence JSON rendering
   report.rs     # compact color-coded TTY report for hunt/replay (ADR-0013)
   style.rs      # shared severity/confidence/lifecycle vocabulary, color, width
-  watch.rs      # rolling finding lifecycle tracker and watch renderer
+  tui/          # watch's full-screen terminal UI (ADR-0013)
+    mod.rs      #   terminal lifecycle, event loop, two-stage interrupt
+    app.rs      #   pure app state: handle_key, on_window
+    draw.rs     #   pure rendering of App into a ratatui Frame
+  watch.rs      # rolling finding lifecycle tracker and piped/JSON renderer
 tests/
   cli.rs                # executable-level behavior tests
   cpu_acceptance.rs     # ignored bounded rootless live-pressure acceptance test

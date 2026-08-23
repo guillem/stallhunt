@@ -47,7 +47,10 @@ stallhunt replay incident.json
 stallhunt redact incident.json --output incident.redacted.json
 ```
 
-Follow finding lifecycle for a bounded number of rolling windows:
+Follow finding lifecycle for a bounded number of rolling windows. On a
+terminal this opens a full-screen TUI (`q` quit, arrows/`jk` select,
+`Enter`/`Space` expand a finding's detail, `h`/`?` help); piped output or
+`--json` are unchanged append-only text/JSON:
 
 ```bash
 stallhunt watch --interval 2s --count 3
@@ -163,6 +166,9 @@ Later releases may add:
 │   ├── psi.rs
 │   ├── record.rs
 │   ├── render.rs
+│   ├── report.rs
+│   ├── style.rs
+│   ├── tui/
 │   └── watch.rs
 ├── tests/
 │   ├── cgroup_acceptance.rs
@@ -282,11 +288,14 @@ M6 adds `watch`. Rolling windows reuse the previous endpoint snapshot. The
 command tracks host CPU/memory/I/O and a bounded set of cgroup pressure
 findings as new, persistent, or resolved. Scoped cgroup `kind` values name the
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label.
-TTY text refreshes the screen; JSON emits one compact
-`stallhunt.watch_window` object per window. Watch is not a TUI and is not a
-recording. On an unlimited watch, the first SIGINT drains and writes the
-in-flight window; a second SIGINT terminates immediately. Full evidence remains
-on `hunt --json` and `record`.
+On a TTY, text output opens a full-screen finding-lifecycle TUI
+(ADR-0013); piped text appends a frame per window; JSON emits one compact
+`stallhunt.watch_window` object per window regardless of TTY. Watch is not
+a utilization dashboard — the TUI's panels are the same lifecycle model as
+the plain-text output — and does not write a recording. On an unlimited
+watch, the first SIGINT (or, in the TUI, the first Ctrl-C key press)
+drains and writes the in-flight window; a second terminates immediately.
+Full evidence remains on `hunt --json` and `record`.
 
 M8 adds a conservative evidence chain: when memory reclaim, swap, or possible
 thrashing coexists with I/O pressure, hunt text and JSON may report that the

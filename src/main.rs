@@ -11,6 +11,7 @@ mod record;
 mod render;
 mod report;
 mod style;
+mod tui;
 mod watch;
 
 use std::io::{IsTerminal, Write};

@@ -152,6 +152,26 @@ pub fn paint(text: &str, tone: SeverityTone, mode: ColorMode) -> String {
     }
 }
 
+/// The same severity-to-visual-weight vocabulary as [`paint`], expressed as
+/// a `ratatui` style for the watch TUI. `SeverityTone`/`severity_tone` is
+/// the single source of truth for which severity gets which visual weight;
+/// this and `paint` are just two backends (ANSI text, ratatui widgets) for
+/// that one mapping, so the compact report and the TUI can never drift
+/// apart on what "high" or "severe" looks like.
+pub fn severity_ratatui_style(tone: SeverityTone, mode: ColorMode) -> ratatui::style::Style {
+    use ratatui::style::{Color, Modifier, Style};
+    if mode == ColorMode::Never {
+        return Style::default();
+    }
+    match tone {
+        SeverityTone::None => Style::default().add_modifier(Modifier::DIM),
+        SeverityTone::Low => Style::default().fg(Color::Green),
+        SeverityTone::Moderate => Style::default().fg(Color::Yellow),
+        SeverityTone::High => Style::default().fg(Color::Red),
+        SeverityTone::Severe => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -31,8 +31,7 @@ Defaults:
 - no requirement for elevated privileges.
 
 Implemented on `hunt` and `replay`: `--duration`/`--json` (hunt only), `--verbose`,
-`--no-color`. `watch` implements `--interval`, `--count`, `--json`; its
-`--no-color` support lands with the watch TUI.
+`--no-color`. `watch` implements `--interval`, `--count`, `--json`, `--no-color`.
 
 Still reserved, not yet implemented — do not add before a real use case exists:
 
@@ -298,10 +297,17 @@ Implemented on `hunt` and `replay` (ADR-0013):
 - the `NO_COLOR` environment variable (any non-empty value) is honored the
   same way.
 
-`watch` gains the same `--no-color`/`NO_COLOR` support with its TUI.
-Color is implemented with plain SGR escape codes in `src/style.rs`; no
-color-crate dependency was needed for this (see ADR-0013 for the
-terminal-framework dependency the watch TUI does take).
+`watch` implements the same `--no-color`/`NO_COLOR` support (ADR-0013):
+automatic TTY detection selects the TUI; piped text and `--json` are always
+the legacy output and never carry color. `--no-color`/`NO_COLOR` disable
+color in the TUI without changing that dispatch.
+
+Color for `hunt`/`replay`'s compact report is plain SGR escape codes in
+`src/style.rs`; the watch TUI reuses the same severity-to-visual-weight
+mapping (`SeverityTone`/`severity_tone`) through
+`style::severity_ratatui_style`, so the two surfaces cannot drift apart on
+what a given severity looks like even though they render through different
+backends (ANSI text vs. `ratatui` widgets).
 
 ## Exit codes
 
@@ -496,9 +502,41 @@ hatch to the legacy layout.
 
 ## TUI
 
-A TUI is explicitly not an early priority. M6 `watch` refreshes finding
-lifecycle on a TTY without introducing a TUI framework.
+`watch` renders a full-screen terminal UI (`ratatui`/`crossterm`, ADR-0013)
+when stdout is a terminal. ADR-0008 originally rejected a generic TUI
+resource monitor because it "would display utilization rather than finding
+lifecycle." This TUI is not that: its panels are the same finding-lifecycle
+model `watch` already computed for the plain-text renderer — new,
+persistent, and resolved findings, per M6 (ADR-0008) — not a live table of
+per-process utilization. Small PSI indicators are supporting visuals
+alongside the lifecycle panels, never the centerpiece.
 
 The differentiator is diagnosis.
 
-If a TUI is added later, it should display changing findings rather than simply reproduce `htop`.
+Panels: a title bar (window index, interval, key hints); a **Lifecycle**
+list of tracked findings (state, identity, kind, severity, age, and prior
+severity on a change); a **Current window** summary of CPU/memory/I-O
+status plus a scoped-cgroup-pressure count; a **History** strip mapping the
+last windows' severity to a glyph ramp per resource; a **Detail** pane for
+the selected finding, shown on request, with its full qualifier
+messages — the "Context and limitations" detail is not behind `--verbose`
+in the TUI, because the interaction model has no static "less verbose"
+default to begin with; a help overlay; and a persistent footer restating
+that watch tracks findings, not utilization.
+
+Keys: `q`/`Esc` quit; `↑`/`k` and `↓`/`j` select a lifecycle row;
+`Enter`/`Space` toggle that row's detail pane; `h`/`?` toggle the help
+overlay; `Ctrl-C` is the same two-stage interrupt described above for
+unlimited `watch` runs — the first drains the in-flight window before
+exiting, the second exits immediately — except that in raw mode a local
+keyboard Ctrl-C never reaches the process as `SIGINT` (the terminal driver
+stops translating it once raw mode disables `ISIG`), so it is read as a key
+event instead; an external `kill -INT <pid>` still works via the same
+signal handler as the piped path. Redraws only happen on a window tick, a
+key press, or a resize — never a busy loop, matching the "stay cheap on a
+stressed system" principle.
+
+Piped text and `--json` are completely unaffected by the TUI's existence:
+`stallhunt watch | cat` and `stallhunt watch --json` still emit the exact
+frames and `stallhunt.watch_window` stream documented above, with no
+alternate screen and no raw mode.

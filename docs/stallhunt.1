@@ -59,12 +59,14 @@ The default duration is 10 seconds.
 .B watch
 Track rolling finding lifecycle across repeated observation windows.
 The default interval is 2 seconds.
-On a TTY, text output refreshes the screen; with
+On a TTY, text output opens a full-screen terminal UI (see OUTPUT below);
+piped or redirected, it appends one text frame per window instead; with
 .BR \-\-json ,
-one compact JSON object is printed per window.
-Watch is not a TUI and does not write recordings.
-For an unlimited watch, the first SIGINT drains and writes the in-flight
-window; a second SIGINT terminates immediately.
+one compact JSON object is printed per window regardless of TTY.
+Watch does not write recordings.
+For an unlimited watch, the first SIGINT (or, in the TUI, the first
+Ctrl-C key press) drains and writes the in-flight window; a second SIGINT
+(or Ctrl-C) terminates immediately.
 .TP
 .B capabilities
 Report which telemetry sources are available, partially available, unsupported,
@@ -154,11 +156,12 @@ always includes full qualifier messages regardless of this flag.
 .B \-\-no-color
 Disable color in terminal output.
 Supported by
-.BR hunt " and " replay .
+.BR hunt ", " replay ", and " watch .
 The
 .B NO_COLOR
 environment variable has the same effect (see ENVIRONMENT below).
-Only affects color; it does not change which text layout is used.
+Only affects color; it does not change which text layout or interface is
+used.
 .TP
 .BR \-\-output " " \fIPATH\fR
 Output path for
@@ -198,6 +201,29 @@ example
 Partial collection is reported explicitly rather than failing silently.
 Sub-second hunts are telemetry smoke observations and do not receive healthy or
 pressure verdicts.
+.SS Watch terminal UI
+.B watch
+opens a full-screen terminal UI when standard output is a terminal and
+.B \-\-json
+is not given.
+It shows the same finding-lifecycle model as the piped text output \(em
+new, persistent, and resolved findings across rolling windows \(em not
+host or per-process utilization.
+Panels: a title bar; a lifecycle list; a current-window resource summary;
+a bounded history strip; and, on request, a detail pane with a selected
+finding's full context and limitations text.
+Keys:
+.BR q " or " Esc
+to quit,
+.B "up/k and down/j"
+to move the selection,
+.B "Enter or Space"
+to toggle the detail pane, and
+.B "h or ?"
+for a help overlay.
+Piped or redirected output, and
+.BR \-\-json ,
+are unaffected by this interface and unchanged from earlier releases.
 .SS JSON
 .B hunt
 and
@@ -231,7 +257,7 @@ prints a short confirmation to standard output after a successful write.
 Any non-empty value disables color in terminal output, equivalent to
 .BR \-\-no-color .
 Supported by
-.BR hunt " and " replay .
+.BR hunt ", " replay ", and " watch .
 See https://no-color.org.
 .SH EXIT STATUS
 .TP
