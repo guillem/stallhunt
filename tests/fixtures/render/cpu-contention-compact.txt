@@ -1,0 +1,13 @@
+Observed 10.0s · 1 finding · worst: CPU high
+
+RESOURCE  STATUS       PSI some  SEVERITY  CONFIDENCE
+CPU       pressure     20.00%    high      high
+Memory    not observed n/a       n/a       n/a
+I/O       not observed n/a       n/a       n/a
+
+CPU scheduling contention observed (20.00% CPU PSI some) — severity high · confidence high
+  2s stalled over 10s (PSI some 20.00%)
+  delayed: worker�next [21]
+  suspects: build�[31m [20], worker [21] (same window, not proven causal)
+
+Details: stallhunt hunt --explain · full evidence: --json

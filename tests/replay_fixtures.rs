@@ -55,17 +55,34 @@ fn replay_fixtures_render_human_output() {
         "io-pressure",
     ] {
         let path = format!("tests/fixtures/recordings/{name}.redacted.json");
-        let output = stallhunt(&["replay", &path]);
+        let explained = stallhunt(&["replay", "--explain", &path]);
         assert!(
-            output.status.success(),
+            explained.status.success(),
             "{}: {}",
             name,
-            String::from_utf8_lossy(&output.stderr)
+            String::from_utf8_lossy(&explained.stderr)
         );
-        let stdout = String::from_utf8(output.stdout).expect("utf-8 stdout");
+        let stdout = String::from_utf8(explained.stdout).expect("utf-8 stdout");
         assert!(
             stdout.contains("Verdict:"),
-            "{name} should render a verdict"
+            "{name} --explain should render a verdict"
+        );
+
+        let compact = stallhunt(&["replay", &path]);
+        assert!(
+            compact.status.success(),
+            "{}: {}",
+            name,
+            String::from_utf8_lossy(&compact.stderr)
+        );
+        let stdout = String::from_utf8(compact.stdout).expect("utf-8 stdout");
+        assert!(
+            stdout.contains("Observed"),
+            "{name} default replay should render the compact form"
+        );
+        assert!(
+            !stdout.contains("Verdict:"),
+            "{name} default replay should stay compact"
         );
     }
 }

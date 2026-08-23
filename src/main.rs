@@ -1,6 +1,7 @@
 mod analysis;
 mod cgroup;
 mod cli;
+mod color;
 mod cpu;
 mod duration_us;
 mod io;
@@ -52,7 +53,8 @@ fn write_stdout(output: &str) -> ExitCode {
 fn execute(command: Command) -> Result<String, Box<dyn std::error::Error>> {
     match command {
         Command::Hunt(options) => {
-            render::hunt(&options, observe::observe_hunt).map_err(|error| error.into())
+            let colors = color::resolve(options.no_color);
+            render::hunt(&options, observe::observe_hunt, colors).map_err(|error| error.into())
         }
         Command::Capabilities(options) => render::capabilities(
             &options,
@@ -74,7 +76,8 @@ fn execute(command: Command) -> Result<String, Box<dyn std::error::Error>> {
         }
         Command::Replay(options) => {
             let recording = read_recording(&options.input)?;
-            render::replay(&options, recording).map_err(|error| error.into())
+            let colors = color::resolve(options.no_color);
+            render::replay(&options, recording, colors).map_err(|error| error.into())
         }
         Command::Redact(options) => {
             let mut recording = read_recording(&options.input)?;

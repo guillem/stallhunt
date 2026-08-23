@@ -1,0 +1,18 @@
+Observed 10.0s · 2 findings · worst: Memory moderate
+
+RESOURCE  STATUS       PSI some  SEVERITY  CONFIDENCE
+CPU       healthy      0.50%     none      medium
+Memory    pressure     8.00%     moderate  high
+I/O       pressure     8.00%     moderate  high
+
+Memory pressure observed with correlated direct reclaim activity (8.00% memory PSI some) — severity moderate · confidence high
+  800ms stalled over 10s (PSI some 8.00%)
+  mechanism: direct reclaim (confidence low; same-window counters)
+
+Block-I/O pressure observed (8.00% I/O PSI some) — severity moderate · confidence high
+  800ms stalled over 10s (PSI some 8.00%)
+  activity: sda (8:0), writer [42] (same window, not proven causal)
+
+related: Memory reclaim pressure is consistent with block-I/O pressure in the same window · confidence low
+
+Details: stallhunt hunt --explain · full evidence: --json

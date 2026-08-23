@@ -20,7 +20,9 @@ fn bare_invocation_runs_default_hunt() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(stdout.contains("Verdict:") || stdout.contains("assessment"));
+    assert!(stdout.contains("Observed"));
+    assert!(stdout.contains("RESOURCE"));
+    assert!(stdout.contains("Details: stallhunt hunt --explain"));
 }
 
 #[test]
@@ -57,7 +59,7 @@ fn version_uses_the_binary_and_package_version() {
 
 #[test]
 fn hunt_handles_every_cpu_psi_capability_state() {
-    let output = stallhunt(&["hunt", "--duration", "100ms"]);
+    let output = stallhunt(&["hunt", "--duration", "100ms", "--explain"]);
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
 
     assert!(output.status.success());
@@ -69,6 +71,13 @@ fn hunt_handles_every_cpu_psi_capability_state() {
         assert!(stdout.contains("CPU assessment unavailable"));
         assert!(stdout.contains("no exact CPU PSI interval"));
     }
+
+    // The default hunt output is the compact form; --explain is opt-in.
+    let compact = stallhunt(&["hunt", "--duration", "100ms"]);
+    let compact_stdout = String::from_utf8(compact.stdout).expect("stdout should be UTF-8");
+    assert!(compact.status.success());
+    assert!(compact_stdout.contains("Observed"));
+    assert!(!compact_stdout.contains("Verdict:"));
 }
 
 #[test]
@@ -383,6 +392,33 @@ fn send_sigint(pid: u32) {
         .status()
         .expect("kill command should send SIGINT");
     assert!(status.success(), "kill command should succeed");
+}
+
+#[test]
+fn replay_explain_renders_the_long_form_for_a_redacted_fixture() {
+    let explained = stallhunt(&[
+        "replay",
+        "--explain",
+        "tests/fixtures/recordings/cpu-contention.redacted.json",
+    ]);
+    let stdout = String::from_utf8(explained.stdout).expect("stdout should be UTF-8");
+    assert!(
+        explained.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explained.stderr)
+    );
+    assert!(stdout.contains("CPU scheduling contention observed"));
+    assert!(stdout.contains("Verdict: contention"));
+
+    let compact = stallhunt(&[
+        "replay",
+        "tests/fixtures/recordings/cpu-contention.redacted.json",
+    ]);
+    let compact_stdout = String::from_utf8(compact.stdout).expect("stdout should be UTF-8");
+    assert!(compact.status.success());
+    assert!(compact_stdout.contains("Observed"));
+    assert!(compact_stdout.contains("worst: CPU"));
+    assert!(!compact_stdout.contains("Verdict:"));
 }
 
 #[test]

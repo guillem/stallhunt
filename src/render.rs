@@ -11,6 +11,7 @@ use crate::cgroup::{
     cgroup_capability_from_observation,
 };
 use crate::cli::{CapabilitiesOptions, HuntOptions, OutputFormat, RedactOptions, ReplayOptions};
+use crate::color::ColorPolicy;
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
 use crate::io::{DiskstatsError, IoCapabilities, IoCapability, ProcessIoObservation};
 use crate::memory::{
@@ -48,14 +49,18 @@ pub fn record_written(path: &Path, recording: &crate::record::Recording) -> Stri
 pub fn replay(
     options: &ReplayOptions,
     recording: crate::record::Recording,
+    colors: ColorPolicy,
 ) -> Result<String, crate::record::RecordError> {
     let observation = crate::record::observation_from_recording(&recording)?;
     hunt(
         &HuntOptions {
             duration_ms: recording.requested_duration_ms,
             output: options.output,
+            explain: options.explain,
+            no_color: options.no_color,
         },
         |_| observation,
+        colors,
     )
     .map_err(crate::record::RecordError::from)
 }
@@ -64,13 +69,17 @@ pub fn redact_written(options: &RedactOptions, recording: &crate::record::Record
     record_written(&options.output, recording)
 }
 
-pub fn hunt<F>(options: &HuntOptions, observe: F) -> Result<String, serde_json::Error>
+pub fn hunt<F>(
+    options: &HuntOptions,
+    observe: F,
+    colors: ColorPolicy,
+) -> Result<String, serde_json::Error>
 where
     F: FnOnce(Duration) -> HuntObservation,
 {
     let result = observe(Duration::from_millis(options.duration_ms));
     match options.output {
-        OutputFormat::Text => Ok(hunt_text(options, result)),
+        OutputFormat::Text => Ok(hunt_text(options, result, colors)),
         OutputFormat::Json => hunt_json(options, result),
     }
 }
@@ -142,7 +151,15 @@ pub fn capabilities(
     }
 }
 
-fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
+fn hunt_text(options: &HuntOptions, result: HuntObservation, colors: ColorPolicy) -> String {
+    if options.explain {
+        hunt_text_explain(options, result)
+    } else {
+        hunt_text_compact(options, &result, colors)
+    }
+}
+
+fn hunt_text_explain(options: &HuntOptions, result: HuntObservation) -> String {
     let cpu_rank = analysis::analyze_cpu(result.psi.as_ref().ok(), result.cpu.as_ref().ok())
         .findings
         .first()
@@ -200,6 +217,565 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
         text.push_str(&chain_text);
     }
     text
+}
+
+/// One row of the compact resource status table. `severity`/`confidence` are
+/// `None` when no verdict exists (unavailable, insufficient, or not observed
+/// telemetry).
+struct CompactRow {
+    resource: &'static str,
+    status: &'static str,
+    psi: String,
+    severity: Option<crate::analysis::Severity>,
+    confidence: Option<crate::analysis::Confidence>,
+    partial: bool,
+}
+
+impl CompactRow {
+    fn not_observed(resource: &'static str) -> Self {
+        Self {
+            resource,
+            status: "not observed",
+            psi: "n/a".to_owned(),
+            severity: None,
+            confidence: None,
+            partial: false,
+        }
+    }
+
+    fn unavailable(resource: &'static str, partial: bool) -> Self {
+        Self {
+            resource,
+            status: "unavailable",
+            psi: "n/a".to_owned(),
+            severity: None,
+            confidence: None,
+            partial,
+        }
+    }
+}
+
+struct CompactBlock {
+    rank: (u8, u8),
+    order: u8,
+    label: String,
+    severity: crate::analysis::Severity,
+    text: String,
+}
+
+fn hunt_text_compact(
+    options: &HuntOptions,
+    result: &HuntObservation,
+    colors: ColorPolicy,
+) -> String {
+    let cpu_analysis = analysis::analyze_cpu(result.psi.as_ref().ok(), result.cpu.as_ref().ok());
+    let memory_analysis = result.memory.as_ref().map(|memory| {
+        analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok())
+    });
+    let io_analysis = result.io.as_ref().map(|io| {
+        analysis::analyze_io(
+            io.psi.as_ref().ok(),
+            io.diskstats.as_ref().ok(),
+            io.processes.as_ref().ok(),
+        )
+    });
+    let cgroup_analysis = result
+        .cgroup
+        .as_ref()
+        .and_then(|cgroup| cgroup.observation.as_ref().ok())
+        .map(|observation| analysis::analyze_cgroups(Some(observation)));
+    let chains = analysis::analyze_evidence_chains(
+        memory_analysis
+            .as_ref()
+            .and_then(|analysis| analysis.findings.first()),
+        io_analysis
+            .as_ref()
+            .and_then(|analysis| analysis.findings.first()),
+        cgroup_analysis
+            .as_ref()
+            .map_or(&[][..], |analysis| analysis.findings.as_slice()),
+    );
+
+    let observed = [
+        result.psi.as_ref().ok().map(|psi| psi.interval.elapsed),
+        result.cpu.as_ref().ok().map(|cpu| cpu.elapsed),
+        result
+            .memory
+            .as_ref()
+            .and_then(|memory| memory.psi.as_ref().ok().map(|psi| psi.interval.elapsed)),
+        result
+            .io
+            .as_ref()
+            .and_then(|io| io.psi.as_ref().ok().map(|psi| psi.interval.elapsed)),
+        result.cgroup.as_ref().and_then(|cgroup| {
+            cgroup
+                .observation
+                .as_ref()
+                .ok()
+                .map(|cgroup| cgroup.elapsed)
+        }),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .unwrap_or_else(|| Duration::from_millis(options.duration_ms));
+
+    let rows = [
+        compact_cpu_row(result, &cpu_analysis),
+        compact_memory_row(result.memory.as_ref(), memory_analysis.as_ref()),
+        compact_io_row(result.io.as_ref(), io_analysis.as_ref()),
+    ];
+
+    let mut blocks: Vec<CompactBlock> = Vec::new();
+    if let Some(finding) = cpu_analysis.findings.first() {
+        if finding.kind == AssessmentKind::CpuContention {
+            blocks.push(CompactBlock {
+                rank: text_finding_rank(finding.severity, finding.resource_confidence),
+                order: 0,
+                label: "CPU".to_owned(),
+                severity: finding.severity,
+                text: compact_cpu_block(finding, colors),
+            });
+        }
+    }
+    if let Some(finding) = memory_analysis
+        .as_ref()
+        .and_then(|analysis| analysis.findings.first())
+    {
+        if finding.severity != crate::analysis::Severity::None {
+            blocks.push(CompactBlock {
+                rank: text_finding_rank(finding.severity, finding.resource_confidence),
+                order: 1,
+                label: "Memory".to_owned(),
+                severity: finding.severity,
+                text: compact_memory_block(finding, colors),
+            });
+        }
+    }
+    if let Some(finding) = io_analysis
+        .as_ref()
+        .and_then(|analysis| analysis.findings.first())
+    {
+        if finding.kind == IoAssessmentKind::Pressure {
+            blocks.push(CompactBlock {
+                rank: text_finding_rank(finding.severity, finding.resource_confidence),
+                order: 2,
+                label: "I/O".to_owned(),
+                severity: finding.severity,
+                text: compact_io_block(finding, colors),
+            });
+        }
+    }
+    let pressured_cgroups: Vec<&crate::analysis::CgroupFinding> = cgroup_analysis
+        .as_ref()
+        .map(|analysis| {
+            analysis
+                .findings
+                .iter()
+                .filter(|finding| finding.kind == CgroupAssessmentKind::Pressure)
+                .take(10)
+                .collect()
+        })
+        .unwrap_or_default();
+    blocks.sort_by(|left, right| {
+        right
+            .rank
+            .cmp(&left.rank)
+            .then_with(|| left.order.cmp(&right.order))
+    });
+
+    let finding_count = blocks.len() + pressured_cgroups.len();
+    let worst = blocks
+        .iter()
+        .map(|block| (block.rank, block.order, block.label.clone(), block.severity))
+        .chain(pressured_cgroups.iter().map(|finding| {
+            (
+                text_finding_rank(finding.severity, finding.resource_confidence),
+                3,
+                format!("cgroup {}", finding.path),
+                finding.severity,
+            )
+        }))
+        .max_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)));
+
+    let mut header = format!("Observed {:.1}s · ", observed.as_secs_f64());
+    if finding_count == 0 {
+        header.push_str("no significant resource contention detected.");
+    } else {
+        let (.., label, severity) = worst.expect("findings exist");
+        header.push_str(&format!(
+            "{} · worst: {} {}",
+            if finding_count == 1 {
+                "1 finding".to_owned()
+            } else {
+                format!("{finding_count} findings")
+            },
+            label,
+            severity_name(severity),
+        ));
+    }
+
+    let mut text = colors.bold(&header);
+    text.push_str("\n\nRESOURCE  STATUS       PSI some  SEVERITY  CONFIDENCE\n");
+    for row in &rows {
+        text.push_str(&compact_row_line(row, colors));
+        text.push('\n');
+    }
+    text.push_str(&compact_cgroup_lines(
+        result.cgroup.as_ref(),
+        &pressured_cgroups,
+    ));
+    for block in &blocks {
+        text.push('\n');
+        text.push_str(&block.text);
+    }
+    if !chains.is_empty() {
+        text.push('\n');
+        for chain in &chains {
+            text.push_str(&format!(
+                "related: {} · confidence {}\n",
+                chain.summary.trim_end_matches('.'),
+                confidence_name(chain.confidence)
+            ));
+        }
+    }
+    text.push_str("\nDetails: stallhunt hunt --explain · full evidence: --json\n");
+    text
+}
+
+fn compact_row_line(row: &CompactRow, colors: ColorPolicy) -> String {
+    let status = format!("{:<12}", row.status);
+    let psi = format!("{:<9}", row.psi);
+    let (status, severity) = match row.severity {
+        Some(severity) => (
+            colors.severity(severity, &status),
+            colors.severity(severity, &format!("{:<9}", severity_name(severity))),
+        ),
+        None => (status, format!("{:<9}", "n/a")),
+    };
+    let confidence = row.confidence.map_or("n/a", confidence_name);
+    let mut line = format!(
+        "{:<8}  {status} {psi} {severity} {confidence}",
+        row.resource
+    );
+    if row.partial {
+        line.push_str("  · partial");
+    }
+    line
+}
+
+fn compact_cpu_row(result: &HuntObservation, analysis: &AnalysisResult) -> CompactRow {
+    if result.psi.is_err() {
+        return CompactRow::unavailable("CPU", result.cpu.is_ok());
+    }
+    let Some(finding) = analysis.findings.first() else {
+        return CompactRow::unavailable("CPU", compact_cpu_partial(result));
+    };
+    let (status, severity) = match finding.kind {
+        AssessmentKind::CpuContention => ("pressure", Some(finding.severity)),
+        AssessmentKind::CpuNoMeaningfulContention => ("healthy", Some(finding.severity)),
+        AssessmentKind::InsufficientObservation => ("insufficient", None),
+    };
+    CompactRow {
+        resource: "CPU",
+        status,
+        psi: format!("{:.2}%", finding.evidence.psi_some_fraction * 100.0),
+        severity,
+        confidence: Some(finding.resource_confidence),
+        partial: compact_cpu_partial(result),
+    }
+}
+
+fn compact_cpu_partial(result: &HuntObservation) -> bool {
+    match &result.cpu {
+        Err(_) => true,
+        Ok(cpu) => {
+            cpu.collection_issues != crate::cpu::ProcessCollectionIssues::default()
+                || cpu.schedstat_collection_issues
+                    != crate::cpu::SchedstatCollectionIssues::default()
+                || cpu.schedstat_capability == crate::cpu::SchedstatCapability::Partial
+        }
+    }
+}
+
+fn compact_memory_row(
+    memory: Option<&MemoryHuntObservation>,
+    analysis: Option<&crate::analysis::MemoryAnalysisResult>,
+) -> CompactRow {
+    let Some(memory) = memory else {
+        return CompactRow::not_observed("Memory");
+    };
+    if memory.psi.is_err() {
+        return CompactRow::unavailable("Memory", memory.context.is_ok());
+    }
+    let partial = compact_memory_partial(memory);
+    let Some(finding) = analysis.and_then(|analysis| analysis.findings.first()) else {
+        return CompactRow::unavailable("Memory", partial);
+    };
+    let (status, severity) = match finding.kind {
+        crate::analysis::MemoryAssessmentKind::NoHarmfulPressure => {
+            ("healthy", Some(finding.severity))
+        }
+        crate::analysis::MemoryAssessmentKind::InsufficientObservation => ("insufficient", None),
+        _ => ("pressure", Some(finding.severity)),
+    };
+    CompactRow {
+        resource: "Memory",
+        status,
+        psi: format!("{:.2}%", finding.evidence.psi_some_fraction * 100.0),
+        severity,
+        confidence: Some(finding.resource_confidence),
+        partial,
+    }
+}
+
+fn compact_memory_partial(memory: &MemoryHuntObservation) -> bool {
+    let psi_partial = memory
+        .psi
+        .as_ref()
+        .is_ok_and(|psi| !matches!(psi.interval.full, MemoryPsiFullInterval::Available(_)));
+    let context_partial = match &memory.context {
+        Err(_) => true,
+        Ok(context) => {
+            context.meminfo_capability != MemoryContextCapability::Available
+                || context.vmstat_capability != MemoryContextCapability::Available
+        }
+    };
+    psi_partial || context_partial
+}
+
+fn compact_io_row(
+    io: Option<&IoHuntObservation>,
+    analysis: Option<&crate::analysis::IoAnalysisResult>,
+) -> CompactRow {
+    let Some(io) = io else {
+        return CompactRow::not_observed("I/O");
+    };
+    if io.psi.is_err() {
+        return CompactRow::unavailable("I/O", io.diskstats.is_ok() || io.processes.is_ok());
+    }
+    let partial = compact_io_partial(io);
+    let Some(finding) = analysis.and_then(|analysis| analysis.findings.first()) else {
+        return CompactRow::unavailable("I/O", partial);
+    };
+    let (status, severity) = match finding.kind {
+        IoAssessmentKind::NoMeaningfulContention => ("healthy", Some(finding.severity)),
+        IoAssessmentKind::InsufficientObservation => ("insufficient", None),
+        IoAssessmentKind::Pressure => ("pressure", Some(finding.severity)),
+    };
+    CompactRow {
+        resource: "I/O",
+        status,
+        psi: format!("{:.2}%", finding.evidence.psi_some_fraction * 100.0),
+        severity,
+        confidence: Some(finding.resource_confidence),
+        partial,
+    }
+}
+
+fn compact_io_partial(io: &IoHuntObservation) -> bool {
+    io.diskstats.is_err()
+        || io.processes.is_err()
+        || io
+            .psi
+            .as_ref()
+            .is_ok_and(|psi| !matches!(psi.interval.full, IoPsiFullInterval::Available(_)))
+}
+
+/// One table-adjacent line per pressured cgroup scope, or an explicit note
+/// when a requested cgroup assessment is unavailable. Healthy, unavailable,
+/// and short-window scopes stay omitted as in the explain form.
+fn compact_cgroup_lines(
+    cgroup: Option<&CgroupHuntObservation>,
+    pressured: &[&crate::analysis::CgroupFinding],
+) -> String {
+    let Some(cgroup) = cgroup else {
+        return String::new();
+    };
+    let Ok(observation) = &cgroup.observation else {
+        return "cgroup: scoped assessment unavailable\n".to_owned();
+    };
+    let partial = cgroup_capability_from_observation(observation) != CgroupCapability::Available;
+    let mut lines = String::new();
+    for finding in pressured {
+        let mut line = format!(
+            "cgroup {}: {} pressure · severity {} · confidence {}",
+            finding.path,
+            cgroup_resource_name(finding.resource),
+            severity_name(finding.severity),
+            confidence_name(finding.resource_confidence),
+        );
+        if let Some(mechanism) = finding.mechanism {
+            line.push_str(&format!(
+                " · mechanism {}",
+                cgroup_mechanism_name(mechanism)
+            ));
+        }
+        if partial {
+            line.push_str(" · partial");
+        }
+        lines.push_str(&line);
+        lines.push('\n');
+    }
+    lines
+}
+
+fn cgroup_resource_name(resource: crate::analysis::CgroupResourceKind) -> &'static str {
+    match resource {
+        crate::analysis::CgroupResourceKind::Cpu => "cpu",
+        crate::analysis::CgroupResourceKind::Memory => "memory",
+        crate::analysis::CgroupResourceKind::Io => "io",
+    }
+}
+
+fn cgroup_mechanism_name(mechanism: crate::analysis::CgroupMechanism) -> &'static str {
+    match mechanism {
+        crate::analysis::CgroupMechanism::Reclaim => "reclaim",
+        crate::analysis::CgroupMechanism::Swap => "swap",
+        crate::analysis::CgroupMechanism::PossibleThrashing => "possible thrashing",
+        crate::analysis::CgroupMechanism::CpuQuotaThrottle => "quota throttle",
+    }
+}
+
+fn compact_headline(
+    summary: &str,
+    severity: crate::analysis::Severity,
+    confidence: crate::analysis::Confidence,
+    colors: ColorPolicy,
+) -> String {
+    format!(
+        "{} — severity {} · confidence {}",
+        summary.trim_end_matches('.'),
+        colors.severity(severity, severity_name(severity)),
+        confidence_name(confidence),
+    )
+}
+
+fn compact_cpu_block(finding: &crate::analysis::CpuFinding, colors: ColorPolicy) -> String {
+    let mut lines = vec![compact_headline(
+        &finding.summary,
+        finding.severity,
+        finding.resource_confidence,
+        colors,
+    )];
+    lines.push(format!(
+        "  {} stalled over {} (PSI some {:.2}%)",
+        human_duration_from_duration(Duration::from_micros(finding.evidence.psi_total_delta_us)),
+        human_duration_from_duration(Duration::from_micros(finding.evidence.psi_window_us as u64)),
+        finding.evidence.psi_some_fraction * 100.0,
+    ));
+    if !finding.victims.is_empty() {
+        lines.push(format!(
+            "  delayed: {}",
+            finding
+                .victims
+                .iter()
+                .take(5)
+                .map(|victim| format!("{} [{}]", terminal_name(&victim.name), victim.key.pid))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !finding.suspects.is_empty() {
+        lines.push(format!(
+            "  suspects: {} (same window, not proven causal)",
+            finding
+                .suspects
+                .iter()
+                .take(3)
+                .map(|suspect| format!("{} [{}]", terminal_name(&suspect.name), suspect.key.pid))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    let mut block = lines.join("\n");
+    block.push('\n');
+    block
+}
+
+fn compact_memory_block(finding: &crate::analysis::MemoryFinding, colors: ColorPolicy) -> String {
+    let mut lines = vec![compact_headline(
+        &finding.summary,
+        finding.severity,
+        finding.resource_confidence,
+        colors,
+    )];
+    lines.push(format!(
+        "  {} stalled over {} (PSI some {:.2}%)",
+        human_duration_from_duration(Duration::from_micros(
+            finding.evidence.psi_some_total_delta_us
+        )),
+        human_duration_from_duration(Duration::from_micros(finding.evidence.psi_window_us as u64)),
+        finding.evidence.psi_some_fraction * 100.0,
+    ));
+    lines.push(match finding.mechanism_confidence {
+        Some(confidence) => format!(
+            "  mechanism: {} (confidence {}; same-window counters)",
+            memory_mechanism_name(finding.kind),
+            confidence_name(confidence),
+        ),
+        None => "  attribution: unavailable (host-wide evidence only)".to_owned(),
+    });
+    let mut block = lines.join("\n");
+    block.push('\n');
+    block
+}
+
+fn memory_mechanism_name(kind: crate::analysis::MemoryAssessmentKind) -> &'static str {
+    match kind {
+        crate::analysis::MemoryAssessmentKind::ReclaimPressure => "direct reclaim",
+        crate::analysis::MemoryAssessmentKind::SwapPressure => "swap",
+        crate::analysis::MemoryAssessmentKind::PossibleThrashing => "possible thrashing",
+        _ => "not established",
+    }
+}
+
+fn compact_io_block(finding: &crate::analysis::IoFinding, colors: ColorPolicy) -> String {
+    let mut lines = vec![compact_headline(
+        &finding.summary,
+        finding.severity,
+        finding.resource_confidence,
+        colors,
+    )];
+    lines.push(format!(
+        "  {} stalled over {} (PSI some {:.2}%)",
+        human_duration_from_duration(Duration::from_micros(
+            finding.evidence.psi_some_total_delta_us
+        )),
+        human_duration_from_duration(Duration::from_micros(finding.evidence.psi_window_us as u64)),
+        finding.evidence.psi_some_fraction * 100.0,
+    ));
+    let mut candidates: Vec<String> = finding
+        .device_candidates
+        .iter()
+        .take(3)
+        .map(|device| {
+            format!(
+                "{} ({}:{})",
+                terminal_name(&device.name),
+                device.key.major,
+                device.key.minor
+            )
+        })
+        .collect();
+    candidates.extend(
+        finding
+            .process_suspects
+            .iter()
+            .take(3_usize.saturating_sub(candidates.len()))
+            .map(|process| format!("{} [{}]", terminal_name(&process.name), process.key.pid)),
+    );
+    if candidates.is_empty() {
+        lines.push("  activity candidates: unavailable or none observed".to_owned());
+    } else {
+        lines.push(format!(
+            "  activity: {} (same window, not proven causal)",
+            candidates.join(", ")
+        ));
+    }
+    let mut block = lines.join("\n");
+    block.push('\n');
+    block
 }
 
 fn evidence_chain_hunt_text(result: &HuntObservation) -> Option<String> {
@@ -1788,7 +2364,23 @@ mod tests {
     where
         F: FnOnce(Duration) -> HuntObservation,
     {
-        super::hunt(options, observe).expect("hunt render")
+        super::hunt(options, observe, ColorPolicy::Never).expect("hunt render")
+    }
+
+    fn render_hunt_colored<F>(options: &HuntOptions, observe: F) -> String
+    where
+        F: FnOnce(Duration) -> HuntObservation,
+    {
+        super::hunt(options, observe, ColorPolicy::ForcedOn).expect("hunt render")
+    }
+
+    fn compact_options(duration_ms: u64) -> HuntOptions {
+        HuntOptions {
+            duration_ms,
+            output: OutputFormat::Text,
+            explain: false,
+            no_color: false,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2080,6 +2672,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| observation,
         );
@@ -2095,6 +2689,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2120,6 +2716,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| observation,
         );
@@ -2136,6 +2734,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| healthy,
         );
@@ -2155,6 +2755,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2177,6 +2779,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| hunt_observation(),
         );
@@ -2199,6 +2803,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         ))
@@ -2218,6 +2824,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Ok(observation()),
@@ -2237,6 +2845,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Ok(observation()),
@@ -2259,6 +2869,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         );
@@ -2279,6 +2891,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| observation,
         );
@@ -2298,6 +2912,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2317,6 +2933,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| partial,
         ))
@@ -2340,6 +2958,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| missing,
         ))
@@ -2378,6 +2998,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| chain_hunt_observation(true, true),
         );
@@ -2407,6 +3029,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(true, true),
         ))
@@ -2432,6 +3056,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(false, true),
         ))
@@ -2442,6 +3068,8 @@ mod tests {
                 &HuntOptions {
                     duration_ms: 10_000,
                     output: OutputFormat::Text,
+                    explain: true,
+                    no_color: false,
                 },
                 |_| chain_hunt_observation(false, true),
             )
@@ -2452,6 +3080,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| chain_hunt_observation(true, false),
         ))
@@ -2462,6 +3092,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| hunt_observation(),
         ))
@@ -2544,6 +3176,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| cgroup_chain_hunt_observation(),
         );
@@ -2568,6 +3202,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| cgroup_chain_hunt_observation(),
         ))
@@ -2599,6 +3235,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| coincident,
         ))
@@ -2617,6 +3255,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| combined,
         ))
@@ -2659,6 +3299,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2686,6 +3328,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2730,6 +3374,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2789,6 +3435,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 5_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| {
                 let mut observation = hunt_observation();
@@ -2836,6 +3484,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             },
             |_| observation,
         ))
@@ -2861,6 +3511,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
@@ -2880,6 +3532,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
@@ -2905,6 +3559,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| complete,
         );
@@ -2922,6 +3578,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| retained_partial,
         );
@@ -2936,6 +3594,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| empty_partial,
         );
@@ -2961,6 +3621,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| retained_scheduler_partial,
         );
@@ -2993,6 +3655,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 1_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| no_contention,
         );
@@ -3009,6 +3673,8 @@ mod tests {
             &HuntOptions {
                 duration_ms: 100,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
             |_| short,
         );
@@ -3041,8 +3707,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn concise_text_output_matches_the_fixed_contention_fixture() {
+    fn contention_hunt_observation() -> HuntObservation {
         let observation = CpuPsiObservation {
             requested: Duration::from_secs(10),
             interval: CpuPsiInterval {
@@ -3120,18 +3785,25 @@ mod tests {
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
+        HuntObservation {
+            psi: Ok(observation),
+            cpu: Ok(cpu),
+            memory: None,
+            io: None,
+            cgroup: None,
+        }
+    }
+
+    #[test]
+    fn explain_text_output_matches_the_fixed_contention_fixture() {
         let output = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
                 output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
             },
-            |_| HuntObservation {
-                psi: Ok(observation),
-                cpu: Ok(cpu),
-                memory: None,
-                io: None,
-                cgroup: None,
-            },
+            |_| contention_hunt_observation(),
         );
         assert_eq!(
             output,
@@ -3139,6 +3811,72 @@ mod tests {
         );
         assert!(!output.contains('\u{1b}'));
         assert!(!output.contains("worker\nnext"));
+    }
+
+    #[test]
+    fn compact_text_output_matches_the_contention_fixture() {
+        let output = render_hunt(&compact_options(10_000), |_| contention_hunt_observation());
+        assert_eq!(
+            output,
+            include_str!("../tests/fixtures/render/cpu-contention-compact.txt")
+        );
+        // Qualifier bodies stay in --explain, but the non-causal suspect
+        // caveat stays in the compact form.
+        assert!(!output.contains("Context and limitations"));
+        assert!(output.contains("(same window, not proven causal)"));
+        // Adversarial process names stay sanitized in compact mode.
+        assert!(!output.contains('\u{1b}'));
+        assert!(!output.contains("worker\nnext"));
+    }
+
+    #[test]
+    fn explain_output_keeps_the_full_qualifier_bodies() {
+        let explained = render_hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+                explain: true,
+                no_color: false,
+            },
+            |_| contention_hunt_observation(),
+        );
+        let compact = render_hunt(&compact_options(10_000), |_| contention_hunt_observation());
+        assert!(explained.contains("Context and limitations:"));
+        assert!(explained.contains("does not prove causality"));
+        assert!(!compact.contains("Context and limitations:"));
+    }
+
+    #[test]
+    fn compact_color_is_forced_on_and_off_by_policy() {
+        let colored =
+            render_hunt_colored(&compact_options(10_000), |_| contention_hunt_observation());
+        assert!(colored.contains('\u{1b}'));
+        let plain = render_hunt(&compact_options(10_000), |_| contention_hunt_observation());
+        assert!(!plain.contains('\u{1b}'));
+        // Color is never the only carrier of meaning: the severity word stays.
+        assert!(plain.contains("severity high"));
+    }
+
+    #[test]
+    fn compact_evidence_chain_matches_the_fixture() {
+        let output = render_hunt(&compact_options(10_000), |_| {
+            chain_hunt_observation(true, true)
+        });
+        assert_eq!(
+            output,
+            include_str!("../tests/fixtures/render/evidence-chain-compact.txt")
+        );
+    }
+
+    #[test]
+    fn compact_cgroup_evidence_chain_matches_the_fixture() {
+        let output = render_hunt(&compact_options(10_000), |_| {
+            cgroup_chain_hunt_observation()
+        });
+        assert_eq!(
+            output,
+            include_str!("../tests/fixtures/render/evidence-chain-cgroup-compact.txt")
+        );
     }
 
     #[test]
@@ -3152,6 +3890,7 @@ mod tests {
             let output = render_capabilities(
                 &CapabilitiesOptions {
                     output: OutputFormat::Text,
+                    no_color: false,
                 },
                 capability,
                 CpuTelemetryCapabilities {

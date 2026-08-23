@@ -1,0 +1,12 @@
+Observed 10.0s · 2 findings · worst: cgroup /workload.service moderate
+
+RESOURCE  STATUS       PSI some  SEVERITY  CONFIDENCE
+CPU       healthy      0.50%     none      medium
+Memory    not observed n/a       n/a       n/a
+I/O       not observed n/a       n/a       n/a
+cgroup /workload.service: memory pressure · severity moderate · confidence high · partial
+cgroup /workload.service: io pressure · severity moderate · confidence high · partial
+
+related: Scoped memory pressure in /workload.service is consistent with scoped I/O pressure in the same cgroup · confidence low
+
+Details: stallhunt hunt --explain · full evidence: --json

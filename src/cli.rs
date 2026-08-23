@@ -20,11 +20,14 @@ pub enum OutputFormat {
 pub struct HuntOptions {
     pub duration_ms: u64,
     pub output: OutputFormat,
+    pub explain: bool,
+    pub no_color: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CapabilitiesOptions {
     pub output: OutputFormat,
+    pub no_color: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +42,8 @@ pub struct RecordOptions {
 pub struct ReplayOptions {
     pub input: PathBuf,
     pub output: OutputFormat,
+    pub explain: bool,
+    pub no_color: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +137,12 @@ struct HuntArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Show full evidence, context and limitations
+    #[arg(long)]
+    explain: bool,
+    /// Disable colored text output
+    #[arg(long)]
+    no_color: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -139,6 +150,9 @@ struct CapabilitiesArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Disable colored text output
+    #[arg(long)]
+    no_color: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -164,6 +178,12 @@ struct ReplayArgs {
     /// Emit machine-readable JSON
     #[arg(long)]
     json: bool,
+    /// Show full evidence, context and limitations
+    #[arg(long)]
+    explain: bool,
+    /// Disable colored text output
+    #[arg(long)]
+    no_color: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -196,6 +216,8 @@ impl From<HuntArgs> for HuntOptions {
         Self {
             duration_ms: args.duration,
             output: output_format(args.json),
+            explain: args.explain,
+            no_color: args.no_color,
         }
     }
 }
@@ -204,6 +226,7 @@ impl From<CapabilitiesArgs> for CapabilitiesOptions {
     fn from(args: CapabilitiesArgs) -> Self {
         Self {
             output: output_format(args.json),
+            no_color: args.no_color,
         }
     }
 }
@@ -228,6 +251,8 @@ impl From<ReplayArgs> for ReplayOptions {
         Self {
             input: args.path,
             output: output_format(args.json),
+            explain: args.explain,
+            no_color: args.no_color,
         }
     }
 }
@@ -258,6 +283,8 @@ impl Cli {
             None => Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                explain: false,
+                no_color: false,
             }),
             Some(Commands::Hunt(args)) => Command::Hunt(args.into()),
             Some(Commands::Watch(args)) => Command::Watch(args.into()),
@@ -404,6 +431,8 @@ mod tests {
             Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                explain: false,
+                no_color: false,
             })
         );
     }
@@ -415,8 +444,55 @@ mod tests {
             Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
                 output: OutputFormat::Text,
+                explain: false,
+                no_color: false,
             })
         );
+    }
+
+    #[test]
+    fn hunt_accepts_explain_and_no_color() {
+        assert_eq!(
+            expect_parse(["stallhunt", "hunt", "--explain", "--no-color"]),
+            Command::Hunt(HuntOptions {
+                duration_ms: DEFAULT_HUNT_DURATION_MS,
+                output: OutputFormat::Text,
+                explain: true,
+                no_color: true,
+            })
+        );
+    }
+
+    #[test]
+    fn replay_accepts_explain_and_no_color() {
+        assert_eq!(
+            expect_parse(["stallhunt", "replay", "--explain", "--no-color", "in.json"]),
+            Command::Replay(ReplayOptions {
+                input: PathBuf::from("in.json"),
+                output: OutputFormat::Text,
+                explain: true,
+                no_color: true,
+            })
+        );
+    }
+
+    #[test]
+    fn capabilities_accepts_no_color() {
+        assert_eq!(
+            expect_parse(["stallhunt", "capabilities", "--no-color"]),
+            Command::Capabilities(CapabilitiesOptions {
+                output: OutputFormat::Text,
+                no_color: true,
+            })
+        );
+    }
+
+    #[test]
+    fn new_flags_cannot_be_repeated() {
+        assert!(parse(["stallhunt", "hunt", "--explain", "--explain"]).is_err());
+        assert!(parse(["stallhunt", "hunt", "--no-color", "--no-color"]).is_err());
+        assert!(parse(["stallhunt", "replay", "in.json", "--explain", "--explain"]).is_err());
+        assert!(parse(["stallhunt", "capabilities", "--no-color", "--no-color"]).is_err());
     }
 
     #[test]
@@ -432,6 +508,8 @@ mod tests {
                 Command::Hunt(HuntOptions {
                     duration_ms: expected_ms,
                     output: OutputFormat::Json,
+                    explain: false,
+                    no_color: false,
                 })
             );
         }
@@ -444,6 +522,8 @@ mod tests {
             Command::Hunt(HuntOptions {
                 duration_ms: 750,
                 output: OutputFormat::Text,
+                explain: false,
+                no_color: false,
             })
         );
     }
@@ -483,6 +563,7 @@ mod tests {
             expect_parse(["stallhunt", "capabilities", "--json"]),
             Command::Capabilities(CapabilitiesOptions {
                 output: OutputFormat::Json,
+                no_color: false,
             })
         );
     }
@@ -553,6 +634,8 @@ mod tests {
             Command::Replay(ReplayOptions {
                 input: PathBuf::from("incident.json"),
                 output: OutputFormat::Json,
+                explain: false,
+                no_color: false,
             })
         );
         assert_eq!(
