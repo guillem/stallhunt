@@ -21,6 +21,7 @@ use crate::cli::{OutputFormat, WatchOptions};
 use crate::observe::{
     HuntObservation, observation_from_endpoints, read_end_endpoint, read_start_endpoint,
 };
+use crate::style::{severity_name, state_label, status_label};
 
 pub const MAX_HISTORY_WINDOWS: usize = 16;
 pub const MAX_TRACKED_CGROUPS: usize = 16;
@@ -650,22 +651,6 @@ fn window_index_label(window: &WatchWindow) -> String {
     }
 }
 
-fn state_label(state: LifecycleState) -> &'static str {
-    match state {
-        LifecycleState::New => "NEW",
-        LifecycleState::Persistent => "PERSISTENT",
-        LifecycleState::Resolved => "RESOLVED",
-    }
-}
-
-fn status_label(status: ObservationStatus) -> &'static str {
-    match status {
-        ObservationStatus::Pressure => "pressure",
-        ObservationStatus::Healthy => "healthy",
-        ObservationStatus::Unconfirmed => "unconfirmed",
-    }
-}
-
 fn id_label(id: &FindingId) -> String {
     match id {
         FindingId::Cpu => "CPU".into(),
@@ -696,16 +681,6 @@ fn format_ms(duration_ms: u64) -> String {
         format!("{}s", duration_ms / 1_000)
     } else {
         format!("{duration_ms}ms")
-    }
-}
-
-const fn severity_name(severity: Severity) -> &'static str {
-    match severity {
-        Severity::None => "none",
-        Severity::Low => "low",
-        Severity::Moderate => "moderate",
-        Severity::High => "high",
-        Severity::Severe => "severe",
     }
 }
 
