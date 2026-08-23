@@ -195,14 +195,17 @@ This should be the primary early workflow.
 
 Continuous rolling diagnosis.
 
-M6 implements finding-lifecycle watch over contiguous rolling windows. It is
-not a TUI. See ADR-0008.
+M6 implements finding-lifecycle watch over contiguous rolling windows. On a
+TTY, watch is a findings TUI (ADR-0014, superseding ADR-0008's non-TUI
+presentation). Piped/`--json`/`--plain` remain non-interactive. See ADR-0008
+for the lifecycle model.
 
 ### `explain`
 
 Expand a finding, process, cgroup, resource or device.
 
-Later milestone.
+Interim: `hunt --explain` and watch TUI `?` expand qualifier text and static
+finding-kind help. A dedicated `explain` subcommand remains a later milestone.
 
 ### `record` / `replay`
 

@@ -219,13 +219,14 @@ Create ADR before promising format compatibility.
 ## Milestone 6 — Continuous watch mode
 
 Status: complete. Finding-lifecycle watch over contiguous rolling windows is
-implemented. It is not a TUI. ADR-0008 records the output and lifecycle
-contract. The first SIGINT drains the in-flight window before exit and a
-second SIGINT terminates immediately; there is still no multi-window recording.
+implemented. ADR-0008 recorded the lifecycle contract; ADR-0014 supersedes its
+non-TUI TTY presentation. The first SIGINT drains the in-flight window before
+exit and a second SIGINT terminates immediately; there is still no multi-window
+recording.
 
 Goal:
 
-Track rolling bottlenecks without becoming a generic TUI monitor.
+Track rolling bottlenecks without becoming a generic utilization monitor.
 
 Deliver:
 
@@ -282,6 +283,19 @@ CPU-heavy build
 ```
 
 Avoid overclaiming causality.
+
+## Presentation — compact hunt and findings TUI
+
+Status: implemented in this worktree for local testing (ADR-0013, ADR-0014).
+Not a GitHub release slice yet.
+
+Deliver:
+
+- compact hunt/replay snapshot text with `--explain` and `--no-color`,
+- watch TTY findings TUI, `--plain` escape hatch,
+- golden compact text and TestBackend TUI coverage.
+
+This does not start Milestone 7 and does not add another evidence chain.
 
 ## Future possibilities
 

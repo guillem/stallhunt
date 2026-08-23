@@ -16,8 +16,9 @@ release workflow's Node-20-deprecated actions were bumped to
 `actions/upload-artifact@v7` and `softprops/action-gh-release@v3`. The
 v0.1.2 corrective release makes the advertised second-SIGINT termination real
 and ensures the 16-chain regression actually reaches truncation with 18
-eligible candidates. The repository remains parked: no additional M8 chain or
-M7 probe is approved.
+eligible candidates. This worktree implements a local presentation redesign
+(compact hunt text, watch findings TUI) for user testing; it is not a GitHub
+PR and does not start M7 or another M8 chain.
 Do not start M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -53,7 +54,8 @@ the test process and does not mutate the hierarchy.
 - **M6 complete within its exit condition:** `watch` classifies host and
   bounded cgroup pressure findings as new, persistent, or resolved across
   contiguous rolling windows, refreshes TTY text, appends piped text/JSON, and
-  keeps 16 history windows. It is not a TUI and does not store full evidence.
+  keeps 16 history windows. TTY watch is a findings TUI (ADR-0014); JSON and
+  `--plain` stay non-interactive. It does not store full evidence.
   A second SIGINT while draining terminates immediately with the conventional
   exit status; `--count` bounds scripted runs.
 - **M8 host and same-cgroup slices complete:** hunt/replay can relate a memory
@@ -213,13 +215,16 @@ the test process and does not mutate the hierarchy.
   keeping counters, process keys, and path hierarchy. Hunt JSON is not a
   recording. Unknown kind or schema versions are rejected. Decode is bounded at
   32 MiB. Existing paths are not overwritten unless `--force` is passed.
+- Compact hunt/replay text with `--explain` and `--no-color`. Watch TTY is a
+  findings TUI; `--plain` forces compact text.
 - M6 `watch` reuses hunt collectors on contiguous rolling windows. `--interval`
   defaults to 2 s and uses the hunt duration range; `--count` stops after N
   windows. Host CPU, memory, and I/O pressure plus at most 16 cgroup pressure
   identities are classified as new, persistent, or resolved. Healthy results do
   not create findings; missing or short-window data does not resolve an active
-  finding. History is capped at 16 compact windows. TTY text clears the screen;
-  JSON emits one `stallhunt.watch_window` object per window. Watch JSON is not
+  finding. History is capped at 16 compact windows. TTY watch is a findings
+  TUI; `--plain` and pipes print compact text. JSON emits one
+  `stallhunt.watch_window` object per window. Watch JSON is not
   hunt JSON and not a recording. Scoped cgroup lifecycle `kind` values name the
   resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
   identity remains path plus resource.
@@ -377,12 +382,12 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Write down one concrete diagnostic question and the independent evidence needed
-to answer it before selecting another feature. No such question is currently
-selected. Do not start Milestone 7 unless the question cannot be answered with
-current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain unless
-independent linking evidence already exists; do not treat coincident PSI as a
-path, and do not link host findings to cgroup findings.
+This worktree's presentation redesign is ready for local user comparison against
+sibling redesigns. Do not open a GitHub PR from this branch as part of that
+testing. After feedback, tune colors/layout without changing inference. Do not
+start Milestone 7 unless a diagnostic question cannot be answered with current
+collectors. Do not add another M8 chain unless independent linking evidence
+already exists.
 
 ## Current design risks
 
@@ -461,10 +466,15 @@ Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 Not yet decided:
 
 - serialization crate/versioning policy for dynamic JSON beyond pre-1.0 hunt output,
-- color/terminal crate,
 - eventual eBPF framework,
 - compatibility policy, additional targets, and signing/provenance for
   pre-built release artifacts.
+
+Decided in ADR-0013 / ADR-0014:
+
+- terminal stack: ratatui 0.29 + crossterm 0.28,
+- hunt/replay default text is a compact snapshot; `--explain` expands help,
+- watch TTY is a findings TUI; `--plain`/`--json`/pipes are not.
 
 Decided in ADR-0012:
 
@@ -478,6 +488,15 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-23 this worktree implemented compact hunt text and a watch findings
+TUI. The presentation-slice gate passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
 
 Later on 2026-08-23, a documentation consistency audit reconciled the v0.1.1
 and v0.1.2 SIGINT/truncation history, current JSON examples, watch semantics,

@@ -4,6 +4,19 @@ All notable user-facing changes to Stallhunt are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once public releases begin.
 
+## [Unreleased]
+
+### Changed
+
+- Default `hunt`/`replay` text is a compact snapshot (health header, PSI bars, ranked finding cards). Qualifier paragraphs are behind `--explain`.
+- `watch` on a TTY is a findings TUI. Piped text, `--json`, and `--plain` stay non-interactive compact output.
+- ADR-0008 TTY presentation is superseded by ADR-0014; the lifecycle model is unchanged.
+
+### Added
+
+- `--explain`, `--no-color`, and `watch --plain`.
+- ratatui 0.29 + crossterm 0.28 presentation stack (ADR-0013).
+
 ## [0.1.2] - 2026-08-23
 
 ### Fixed

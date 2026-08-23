@@ -96,11 +96,13 @@ Avoid brittle tests for every whitespace character unless formatting is intentio
 
 JSON output can be validated structurally.
 
-M1.6 adds a checked-in concise CPU renderer text fixture driven by a fixed
-in-memory observation. It verifies the finding-first layout, bounded ranked
-roles, same-window/non-causal language, context/limitation wording, timing,
-and terminal-safe process names. Renderer tests also assert JSON finding shape structurally, without
-comparing host-collected or wall-clock-dependent output.
+M1.6 added a checked-in CPU renderer text fixture driven by a fixed in-memory
+observation. The presentation redesign keeps that golden as a compact snapshot
+(health header, PSI bars, finding cards, short uncertainty cue) plus a
+separate `--explain` assertion for qualifier prose. Renderer tests also assert
+JSON finding shape structurally, without comparing host-collected or
+wall-clock-dependent output. Watch TUI layout is covered with ratatui
+`TestBackend`; piped watch text has its own compact golden.
 
 ### 5. Host integration tests
 

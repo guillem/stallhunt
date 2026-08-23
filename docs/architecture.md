@@ -169,8 +169,11 @@ src/
   observe.rs    # sequential bounded multi-resource observation orchestration
   psi.rs        # CPU, memory, and I/O PSI parsing, capabilities, and intervals
   record.rs     # versioned normalized-observation recordings and redaction
-  render.rs     # concise finding-first text and full-evidence JSON rendering
-  watch.rs      # rolling finding lifecycle tracker and watch renderer
+  render.rs     # full-evidence JSON rendering; hunt text delegates to view.rs
+  style.rs      # bars, color policy, duration/name formatting
+  view.rs       # compact hunt/replay snapshot text
+  tui.rs        # watch TTY findings TUI
+  watch.rs      # rolling finding lifecycle tracker and non-TUI watch renderer
 tests/
   cli.rs                # executable-level behavior tests
   cpu_acceptance.rs     # ignored bounded rootless live-pressure acceptance test
@@ -187,8 +190,9 @@ PSI and CPU/process interval observations and emits typed serializable CPU
 findings. A valid PSI interval is sufficient for the CPU resource verdict;
 failed CPU/process context becomes qualification and removes attribution rather
 than invalidating PSI. Procfs remains outside analysis and renderers do not
-recompute rules. The text renderer is intentionally concise; JSON retains the
-complete structured observation, evidence, roles, and collection qualifiers.
+recompute rules. The text renderer is a compact snapshot; `--explain` expands
+qualifiers. JSON retains the complete structured observation, evidence, roles,
+and collection qualifiers.
 
 The M2 path keeps memory PSI separate from memory context. `observe.rs` reads
 all start snapshots, performs one requested sleep, then reads end snapshots;
@@ -237,15 +241,15 @@ durations, typed observed/unavailable resource slots, and optional identifier
 redaction. `replay` reconstructs `HuntObservation` and reuses the existing
 analyzer and renderers. Unknown `kind` or `schema_version` values are rejected.
 
-M6 adds `watch` (ADR-0008). `observe.rs` exposes start/end endpoints so the
+M6 adds `watch` (ADR-0008 lifecycle; ADR-0014 TTY TUI). `observe.rs` exposes start/end endpoints so the
 next window can reuse the previous end snapshot. `watch.rs` classifies host
 CPU/memory/I/O and a bounded set of cgroup pressure findings as new,
 persistent, or resolved. It keeps 16 compact history windows and does not
 retain full observations. Cgroup watch `kind` strings include the scoped
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label;
-identity remains path plus resource. TTY text refreshes by clearing the screen; JSON is
-one compact `stallhunt.watch_window` object per window, not a recording and
-not hunt JSON.
+identity remains path plus resource. TTY text opens a findings TUI (ADR-0014); `--plain` and pipes print compact
+lifecycle text. JSON is one compact `stallhunt.watch_window` object per window,
+not a recording and not hunt JSON.
 
 M8 adds `analyze_evidence_chains` in `analysis.rs` (ADR-0009, ADR-0010,
 ADR-0011). It consumes already-produced memory, I/O, and cgroup findings and

@@ -55,8 +55,9 @@ meaningful CPU scheduling contention or a provisional low, moderate, high, or
 severe finding. Host/process collection failure does not discard a valid PSI
 resource verdict, but leaves attribution empty and qualified. Runnable-delay
 victims and same-window CPU consumers are qualified attribution candidates, not
-proven causes. M1.6 adds a concise finding-first text renderer; `--json`
-retains the complete structured evidence and collection context.
+proven causes. Default hunt text is a compact snapshot; `--explain` expands qualifier prose.
+`--json` retains the complete structured evidence and collection context.
+`watch` on a TTY is a findings TUI.
 
 ## Toolchain
 

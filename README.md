@@ -74,31 +74,29 @@ Example output shape:
 ```text
 $ stallhunt
 
-SYSTEM HEALTH: DEGRADED
+stallhunt  10s  DEGRADED
 
-1. CPU scheduling contention                         SEVERE
-   Impact:    23.4% pressure during observation
-   Victims:   postgres [4812], nginx [5120]
-   Suspects:  rustc [9231], ffmpeg [9401]
-   Confidence: high
+ CPU  [########--]  23.40%  HIGH  scheduling contention
+ MEM  [----------]   0.20%  none  no harmful pressure
+ I/O  [###-------]   8.00%  MOD   block-I/O pressure
 
-   Evidence:
-     CPU PSI some avg10:          23.4%
-     run queue latency estimate:  elevated
-     rustc CPU consumption:       735%
-     postgres runnable delay:     3.8s / 10s
+1  CPU scheduling contention                 HIGH  conf high
+   impact    PSI some 23.40% · 2.34s stalled / 10s
+   victims   postgres [4812] — 1.81s delay · nginx [5120]
+   suspects  rustc [9231] 58.0% · ffmpeg [9401]
+   note      same-window; not causal
 
-2. Block I/O contention                              MODERATE
-   Device:    nvme0n1
-   Victim:    postgres [4812]
-   Suspect:   restic [7712]
-   Confidence: medium
+2  Block-I/O pressure                        MOD   conf medium
+   impact    PSI some 8.00%
+   disks     nvme0n1 (activity, not mapped)
+   procs     restic [7712] (activity, not causal)
+   note      same-window activity; not proven causal or device-mapped
 
-Memory: no significant pressure detected.
-High memory occupancy alone is not treated as a bottleneck.
+Explain: stallhunt --explain     Evidence: stallhunt --json
 ```
 
-This output is aspirational; the project will reach it incrementally.
+Default text is compact. `--explain` expands qualifier prose. `watch` on a TTY
+is a findings TUI; `--json` remains the full structured-evidence interface.
 
 ## Product principles
 
@@ -276,11 +274,11 @@ M6 adds `watch`. Rolling windows reuse the previous endpoint snapshot. The
 command tracks host CPU/memory/I/O and a bounded set of cgroup pressure
 findings as new, persistent, or resolved. Scoped cgroup `kind` values name the
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label.
-TTY text refreshes the screen; JSON emits one compact
-`stallhunt.watch_window` object per window. Watch is not a TUI and is not a
-recording. On an unlimited watch, the first SIGINT drains and writes the
-in-flight window; a second SIGINT terminates immediately. Full evidence remains
-on `hunt --json` and `record`.
+TTY watch is a findings TUI; `--plain` and pipes print compact lifecycle text.
+JSON emits one compact `stallhunt.watch_window` object per window. Watch is
+not a recording. On an unlimited watch, the first SIGINT drains the in-flight
+window; a second SIGINT restores the terminal and terminates immediately. Full
+evidence remains on `hunt --json` and `record`.
 
 M8 adds a conservative evidence chain: when memory reclaim, swap, or possible
 thrashing coexists with I/O pressure, hunt text and JSON may report that the

@@ -43,7 +43,8 @@ Options may include:
 --no-color
 ```
 
-Do not add flags before a real use case exists.
+Implemented presentation flags: `--explain`, `--no-color`, `watch --plain`.
+`--json` is global. Do not add further flags before a real use case exists.
 
 ## Early command set
 
@@ -104,10 +105,11 @@ Implemented in Milestone 6:
 Follow rolling bottlenecks by finding lifecycle.
 
 ```bash
-stallhunt watch [--interval 2s] [--count N] [--json]
+stallhunt watch [--interval 2s] [--count N] [--plain] [--json]
 ```
 
-This is not a TUI and not a generic resource monitor.
+On a TTY this is a findings TUI (ADR-0014). Piped text, `--json`, and
+`--plain` stay non-interactive. It is not a generic resource monitor.
 
 ## Current CPU diagnosis behavior
 
@@ -185,16 +187,17 @@ duration. Invalid recordings exit 1. Missing `--output` or an invalid invocation
 still exits 2. New recording files are created mode 0600 and are not
 overwritten unless `--force` is passed.
 
-M6 adds `watch`. `--interval` uses the same 100 ms–5 m duration parser as
-`hunt` and defaults to 2 seconds. `--count` stops after N windows; without it,
-watch runs until interrupted. For an unlimited watch, the first SIGINT drains
-and writes the in-flight window; a second SIGINT terminates immediately with
-status 130. Bounded `--count` runs retain the default signal disposition. Each
-window reuses the previous endpoint snapshot. Text reports `new` / `persistent`
-/ `resolved` pressure findings plus a compact current-window summary. A TTY
-refreshes the screen with ANSI clear/home; piped text and `--json` append. JSON
-is one compact `stallhunt.watch_window` object per window. It is not hunt JSON
-and not a recording, and it omits full evidence. Host memory `kind` values
+M6 adds `watch`; ADR-0014 changes only TTY presentation. `--interval` uses the
+same 100 ms–5 m duration parser as `hunt` and defaults to 2 seconds. `--count`
+stops after N windows; without it, watch runs until interrupted. For an
+unlimited watch, the first SIGINT drains the in-flight window; a second SIGINT
+restores the terminal and terminates immediately with status 130. Bounded
+`--count` TUI runs restore on SIGINT; `--plain`/`--json` `--count` runs keep
+default SIGINT termination. Each window reuses the previous endpoint snapshot.
+A TTY opens a findings TUI (resource bars, lifecycle table, selected-finding
+detail, `?` explain overlay). `--plain` and piped text print compact lifecycle
+rows; `--json` emits one compact `stallhunt.watch_window` object per window. It
+is not hunt JSON and not a recording, and JSON omits full evidence. Host memory `kind` values
 already name reclaim, swap, or possible thrashing. Scoped cgroup `kind` values
 name the resource and, when labeled, the mechanism
 (`cgroup_memory_reclaim_pressure`, `cgroup_memory_swap_pressure`,
@@ -220,34 +223,35 @@ path-plus-resource identity.
 
 ## Human output structure
 
-Current `hunt` text output is concise and finding-first. It shows the CPU
-verdict, severity, and resource confidence; exact-interval PSI evidence;
-bounded ranked victim candidates (at most five) and suspect candidates (at
-most three), including role and confidence; relevant context and limitations;
-and requested and measured timings. Suspect output explicitly states that it
-is same-window correlation rather than proof of causality. Missing or partial
-attribution is rendered as unavailable or incomplete rather than as an observed
-empty result.
+Default `hunt` text is a compact snapshot: a health header, PSI bars for CPU,
+memory, and I/O, ranked finding cards, and a one-line related-evidence cue.
+Narrative qualifier paragraphs are omitted unless `--explain` is passed.
+Default still keeps a short uncertainty cue (`same-window; not causal`).
+Missing or partial attribution is rendered as unavailable or incomplete rather
+than as an observed empty result.
 
 Process names are terminal-safe and bounded in text output. The default text
 renderer does not dump raw host counters, rolling PSI averages, or a separate
 top-ten process list. `--json` remains the full structured-evidence interface:
 it retains the complete observation, typed evidence, ranked roles, capabilities,
-and collection qualifiers rather than mirroring the concise text summary.
+and collection qualifiers rather than mirroring the compact text summary.
 
 Example:
 
 ```text
-CPU scheduling contention observed
-Verdict: contention · severity high · CPU confidence high
-Evidence: CPU PSI some 23.40% over exact 10s interval (2.34s cumulative stalled time)
-Victim candidates (observed runnable delay; not confirmed harm):
-  1. postgres [4812] — 1.81s delay (high; observed runnable-delay candidate)
-Suspect candidates (same window only; not proven causal):
-  1. rustc [9231] — 58.0% of one CPU (medium; leading concurrent CPU consumer)
-Context and limitations:
-  Suspects consumed CPU in the same window; this correlation does not prove causality.
-Timing: requested 10s; PSI measured 10s; CPU/process measured 10s
+stallhunt  10s  DEGRADED
+
+ CPU  [########--]  23.40%  HIGH  scheduling contention
+ MEM  [#---------]   2.10%  LOW   reclaim pressure · host-wide
+ I/O  [###-------]   8.00%  MOD   block-I/O pressure
+
+1  CPU scheduling contention                 HIGH  conf high
+   impact    PSI some 23.40% · 2.34s stalled / 10s
+   victims   postgres [4812] — 1.81s delay
+   suspects  rustc [9231] 58.0%
+   note      same-window; not causal
+
+Explain: stallhunt --explain     Evidence: stallhunt --json
 ```
 
 ## Negative results
@@ -457,9 +461,9 @@ Warn or reduce confidence for observation windows too short to support robust in
 
 ## TUI
 
-A TUI is explicitly not an early priority. M6 `watch` refreshes finding
-lifecycle on a TTY without introducing a TUI framework.
+`watch` on a TTY is a findings TUI (ADR-0014). It displays changing findings,
+not an htop process table. Keys: `q` quit, `j`/`k` select, `Enter` expand
+detail, `?` explain overlay, `Esc` close overlay.
 
-The differentiator is diagnosis.
-
-If a TUI is added later, it should display changing findings rather than simply reproduce `htop`.
+Hunt and replay remain one-shot snapshots. Color follows TTY detection,
+`--no-color`, and `NO_COLOR` (ADR-0013).
