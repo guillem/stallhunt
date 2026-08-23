@@ -9,6 +9,8 @@ mod observe;
 mod psi;
 mod record;
 mod render;
+mod style;
+mod view;
 mod watch;
 
 use std::io::Write;

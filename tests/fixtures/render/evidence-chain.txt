@@ -1,6 +1,2 @@
 Related evidence
-Memory reclaim pressure is consistent with block-I/O pressure in the same window.
-Confidence: low
-Independent evidence: memory PSI some 8.00%; I/O PSI some 8.00%; 100 direct-reclaim scan pages; 80 stolen pages.
-  Independent same-window PSI and VM-counter evidence can support a related path; it does not prove that memory reclaim or swap caused the I/O stalls.
-  The chain does not map processes to devices or identify which I/O was reclaim or swap traffic.
+Memory reclaim pressure ~ I/O  (low; consistent with, not a causal claim)

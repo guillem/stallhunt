@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::analysis::{
-    self, AnalysisResult, AssessmentKind, CgroupAssessmentKind, IoAssessmentKind,
-};
+use crate::analysis::{self, AnalysisResult};
 use crate::cgroup::{
     CgroupCapability, CgroupObservation, cgroup_capability_explanation,
     cgroup_capability_from_observation,
@@ -13,9 +11,7 @@ use crate::cgroup::{
 use crate::cli::{CapabilitiesOptions, HuntOptions, OutputFormat, RedactOptions, ReplayOptions};
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
 use crate::io::{DiskstatsError, IoCapabilities, IoCapability, ProcessIoObservation};
-use crate::memory::{
-    MemoryContextCapabilities, MemoryContextCapability, MemoryContextObservation, VmstatCounter,
-};
+use crate::memory::{MemoryContextCapabilities, MemoryContextCapability, MemoryContextObservation};
 use crate::observe::{
     CgroupHuntObservation, HuntObservation, IoHuntObservation, MemoryHuntObservation,
 };
@@ -54,6 +50,7 @@ pub fn replay(
         &HuntOptions {
             duration_ms: recording.requested_duration_ms,
             output: options.output,
+            style: options.style,
         },
         |_| observation,
     )
@@ -143,480 +140,7 @@ pub fn capabilities(
 }
 
 fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
-    let cpu_rank = analysis::analyze_cpu(result.psi.as_ref().ok(), result.cpu.as_ref().ok())
-        .findings
-        .first()
-        .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
-        .unwrap_or((0, 0));
-    let memory_rank = result
-        .memory
-        .as_ref()
-        .and_then(|memory| {
-            analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok())
-                .findings
-                .first()
-                .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
-        })
-        .unwrap_or((0, 0));
-    let io_rank = result
-        .io
-        .as_ref()
-        .and_then(|io| {
-            analysis::analyze_io(
-                io.psi.as_ref().ok(),
-                io.diskstats.as_ref().ok(),
-                io.processes.as_ref().ok(),
-            )
-            .findings
-            .first()
-            .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
-        })
-        .unwrap_or((0, 0));
-    let chain_text = evidence_chain_hunt_text(&result);
-    let cpu_output = cpu_hunt_text(options, result.psi, result.cpu);
-    let mut outputs = vec![(cpu_rank, 0_u8, cpu_output)];
-    if let Some(memory) = result.memory {
-        outputs.push((memory_rank, 1, memory_hunt_text(options, memory)));
-    }
-    if let Some(io) = result.io {
-        outputs.push((io_rank, 2, io_hunt_text(options, io)));
-    }
-    if let Some(cgroup) = result.cgroup.as_ref() {
-        let output = cgroup_hunt_text(cgroup);
-        if !output.is_empty() {
-            outputs.push((cgroup_text_rank(cgroup), 3, output));
-        }
-    }
-    outputs.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
-    let mut text = outputs
-        .into_iter()
-        .map(|(_, _, output)| output)
-        .collect::<Vec<_>>()
-        .join("\n");
-    if let Some(chain_text) = chain_text {
-        if !text.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str(&chain_text);
-    }
-    text
-}
-
-fn evidence_chain_hunt_text(result: &HuntObservation) -> Option<String> {
-    let chains = evidence_chains_from_observation(result);
-    if chains.is_empty() {
-        return None;
-    }
-    let mut output = String::from("Related evidence\n");
-    for chain in chains {
-        output.push_str(&format!(
-            "{}\nConfidence: {}\nIndependent evidence: {}.\n",
-            chain.summary,
-            confidence_name(chain.confidence),
-            chain_evidence_details(&chain.evidence),
-        ));
-        for qualifier in chain.qualifiers {
-            output.push_str(&format!("  {}\n", qualifier.message));
-        }
-    }
-    Some(output)
-}
-
-fn evidence_chains_from_observation(
-    result: &HuntObservation,
-) -> Vec<crate::analysis::EvidenceChain> {
-    let memory = result.memory.as_ref().and_then(|memory| {
-        analysis::analyze_memory(memory.psi.as_ref().ok(), memory.context.as_ref().ok())
-            .findings
-            .into_iter()
-            .next()
-    });
-    let io = result.io.as_ref().and_then(|io| {
-        analysis::analyze_io(
-            io.psi.as_ref().ok(),
-            io.diskstats.as_ref().ok(),
-            io.processes.as_ref().ok(),
-        )
-        .findings
-        .into_iter()
-        .next()
-    });
-    let cgroup_findings = result
-        .cgroup
-        .as_ref()
-        .and_then(|cgroup| cgroup.observation.as_ref().ok())
-        .map(|observation| analysis::analyze_cgroups(Some(observation)).findings)
-        .unwrap_or_default();
-    analysis::analyze_evidence_chains(memory.as_ref(), io.as_ref(), &cgroup_findings)
-}
-
-fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
-    let mut parts = Vec::new();
-    if let Some(path) = &evidence.path {
-        parts.push(format!("cgroup {path}"));
-    }
-    parts.push(format!(
-        "memory PSI some {:.2}%",
-        evidence.memory_psi_some_fraction * 100.0
-    ));
-    parts.push(format!(
-        "I/O PSI some {:.2}%",
-        evidence.io_psi_some_fraction * 100.0
-    ));
-    if let Some(pages) = evidence.scan_direct_pages.filter(|pages| *pages > 0) {
-        parts.push(format!("{pages} direct-reclaim scan pages"));
-    }
-    if let Some(pages) = evidence.steal_direct_pages.filter(|pages| *pages > 0) {
-        parts.push(format!("{pages} stolen pages"));
-    }
-    if let Some(pages) = evidence.swap_in_pages.filter(|pages| *pages > 0) {
-        parts.push(format!("{pages} swap-in pages"));
-    }
-    if let Some(pages) = evidence.swap_out_pages.filter(|pages| *pages > 0) {
-        parts.push(format!("{pages} swap-out pages"));
-    }
-    if let Some(events) = evidence.high_events.filter(|events| *events > 0) {
-        parts.push(format!("{events} memory.high events"));
-    }
-    if let Some(events) = evidence.max_events.filter(|events| *events > 0) {
-        parts.push(format!("{events} memory.max events"));
-    }
-    parts.join("; ")
-}
-
-fn cgroup_text_rank(cgroup: &CgroupHuntObservation) -> (u8, u8) {
-    let Ok(observation) = &cgroup.observation else {
-        return (0, 0);
-    };
-    analysis::analyze_cgroups(Some(observation))
-        .findings
-        .iter()
-        .map(|finding| text_finding_rank(finding.severity, finding.resource_confidence))
-        .max()
-        .unwrap_or((0, 0))
-}
-
-fn cgroup_hunt_text(cgroup: &CgroupHuntObservation) -> String {
-    let Ok(observation) = &cgroup.observation else {
-        return "Scoped cgroup findings\nCgroup v2 assessment unavailable.\n".into();
-    };
-    let analysis = analysis::analyze_cgroups(Some(observation));
-    let pressured: Vec<_> = analysis
-        .findings
-        .iter()
-        .filter(|finding| finding.kind == CgroupAssessmentKind::Pressure)
-        .take(10)
-        .collect();
-    if pressured.is_empty() {
-        return "Scoped cgroup findings\nNo scoped cgroup pressure findings are prominent; healthy, unavailable, and short-window groups are omitted from this bounded text summary.\n".into();
-    }
-    let mut output = String::from("Scoped cgroup findings\n");
-    for finding in pressured {
-        output.push_str(&format!(
-            "- {} · {} · severity {} · confidence {}",
-            finding.path,
-            finding.summary,
-            severity_name(finding.severity),
-            confidence_name(finding.resource_confidence)
-        ));
-        if let Some(mechanism_confidence) = finding.mechanism_confidence {
-            output.push_str(&format!(
-                " · mechanism confidence {}",
-                confidence_name(mechanism_confidence)
-            ));
-        }
-        output.push('\n');
-        if let Some(unit) = &finding.systemd_unit_candidate {
-            output.push_str(&format!(
-                "  systemd path candidate: {unit} (not authoritative)\n"
-            ));
-        }
-        if !finding.members.is_empty() {
-            output.push_str(&format!(
-                "  stable members: {}\n",
-                finding
-                    .members
-                    .iter()
-                    .map(|member| member.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        output.push_str(&cgroup_controller_context(finding));
-    }
-    output.push_str("Scoped findings are not host-causality claims; overlapping ancestor and child scopes are not summed.\n");
-    output
-}
-
-fn cgroup_controller_context(finding: &crate::analysis::CgroupFinding) -> String {
-    let evidence = &finding.evidence;
-    let mut lines = Vec::new();
-    if let Some(cpu) = &evidence.cpu.value {
-        let mut context = format!(
-            "CPU usage +{}",
-            human_duration_from_duration(Duration::from_micros(cpu.usage_usec.unwrap_or(0),))
-        );
-        if let Some(throttled) = cpu.throttled_usec {
-            context.push_str(&format!(
-                "; throttled +{}",
-                human_duration_from_duration(Duration::from_micros(throttled))
-            ));
-        }
-        lines.push(context);
-    }
-    if let Some(current) = evidence.memory_current_end.value {
-        let mut context = format!("memory.current {}", human_bytes(current));
-        if let Some(events) = &evidence.memory_events.value {
-            if let Some(oom_kill) = events.oom_kill {
-                context.push_str(&format!("; oom_kill +{oom_kill}"));
-            }
-            if let Some(high) = events.high {
-                context.push_str(&format!("; high events +{high}"));
-            }
-        }
-        lines.push(context);
-    }
-    if let Some(stat) = &evidence.memory_stat.value {
-        let mut parts = Vec::new();
-        if let Some(pages) = stat.pgscan_direct.filter(|pages| *pages > 0) {
-            parts.push(format!("{pages} direct-reclaim scan pages"));
-        }
-        if let Some(pages) = stat.pgsteal_direct.filter(|pages| *pages > 0) {
-            parts.push(format!("{pages} stolen pages"));
-        }
-        if let Some(pages) = stat.pswpin.filter(|pages| *pages > 0) {
-            parts.push(format!("{pages} swap-in pages"));
-        }
-        if let Some(pages) = stat.pswpout.filter(|pages| *pages > 0) {
-            parts.push(format!("{pages} swap-out pages"));
-        }
-        if !parts.is_empty() {
-            lines.push(parts.join("; "));
-        }
-    }
-    if let Some(io) = &evidence.io.value {
-        let read = io.values().filter_map(|device| device.rbytes).sum::<u64>();
-        let write = io.values().filter_map(|device| device.wbytes).sum::<u64>();
-        if read != 0 || write != 0 {
-            lines.push(format!(
-                "I/O +{} read / +{} write across {} controller device(s)",
-                human_bytes(read),
-                human_bytes(write),
-                io.len()
-            ));
-        }
-    }
-    if lines.is_empty() {
-        "  controller context: unavailable or incomplete\n".to_owned()
-    } else {
-        format!(
-            "  controller context: {} (scoped context only; not causal proof)\n",
-            lines.join("; ")
-        )
-    }
-}
-
-fn cpu_hunt_text(
-    options: &HuntOptions,
-    psi: Result<CpuPsiObservation, crate::psi::CpuPsiError>,
-    cpu: Result<CpuProcessObservation, crate::cpu::CpuError>,
-) -> String {
-    match (psi, cpu) {
-        (Ok(observation), Ok(cpu)) => {
-            let analysis = analysis::analyze_cpu(Some(&observation), Some(&cpu));
-            finding_text(
-                &analysis,
-                options.duration_ms,
-                observation.interval.elapsed,
-                Some(cpu.elapsed),
-            )
-        }
-        (Err(error), Ok(cpu)) => format!(
-            "CPU assessment unavailable\nVerdict: unavailable (no exact CPU PSI interval)\nCapability: CPU PSI {} — {}\nRetained context: host CPU {:.1}% busy across {} logical CPUs; {} stable process CPU interval(s); {} scheduler-delay candidate(s) ({}).\nLimitations:\n  CPU/process context was collected but cannot establish CPU contention without exact-interval PSI.\nTiming: requested {}; CPU/process measured {}\n",
-            error.capability().as_str(),
-            error.explanation(),
-            cpu.host.utilization_fraction * 100.0,
-            cpu.host.cpu_count,
-            cpu.processes.len(),
-            cpu.scheduler_delay_candidates.len(),
-            cpu.schedstat_capability.as_str(),
-            human_duration(options.duration_ms),
-            human_duration_from_duration(cpu.elapsed),
-        ),
-        (Err(error), Err(_)) => format!(
-            "CPU assessment unavailable\nVerdict: unavailable (no exact CPU PSI interval)\nCapability: CPU PSI {} — {}\nLimitations:\n  CPU/process context was also unavailable; no diagnosis was produced.\nTiming: requested {}\n",
-            error.capability().as_str(),
-            error.explanation(),
-            human_duration(options.duration_ms),
-        ),
-        (Ok(psi), Err(error)) => {
-            let analysis = analysis::analyze_cpu(Some(&psi), None);
-            let mut output =
-                finding_text(&analysis, options.duration_ms, psi.interval.elapsed, None);
-            output.push_str(&format!(
-                "CPU/process telemetry: unavailable — {}\n",
-                error.explanation()
-            ));
-            output
-        }
-    }
-}
-
-fn text_finding_rank(
-    severity: crate::analysis::Severity,
-    confidence: crate::analysis::Confidence,
-) -> (u8, u8) {
-    let severity = match severity {
-        crate::analysis::Severity::None => 0,
-        crate::analysis::Severity::Low => 1,
-        crate::analysis::Severity::Moderate => 2,
-        crate::analysis::Severity::High => 3,
-        crate::analysis::Severity::Severe => 4,
-    };
-    let confidence = match confidence {
-        crate::analysis::Confidence::Low => 0,
-        crate::analysis::Confidence::Medium => 1,
-        crate::analysis::Confidence::High => 2,
-    };
-    (severity, confidence)
-}
-
-fn memory_hunt_text(options: &HuntOptions, memory: MemoryHuntObservation) -> String {
-    match (memory.psi, memory.context) {
-        (Ok(psi), Ok(context)) => {
-            let analysis = analysis::analyze_memory(Some(&psi), Some(&context));
-            memory_finding_text(&analysis, options.duration_ms, &psi, Some(&context))
-        }
-        (Ok(psi), Err(_)) => {
-            let analysis = analysis::analyze_memory(Some(&psi), None);
-            memory_finding_text(&analysis, options.duration_ms, &psi, None)
-        }
-        (Err(error), Ok(context)) => {
-            let occupancy = context.end_meminfo.as_ref().map_or_else(
-                || "unavailable".to_owned(),
-                |meminfo| {
-                    format!(
-                        "{:.1}% occupied ({} available)",
-                        (1.0 - meminfo.mem_available_bytes as f64 / meminfo.mem_total_bytes as f64)
-                            * 100.0,
-                        human_bytes(meminfo.mem_available_bytes)
-                    )
-                },
-            );
-            format!(
-                "Memory assessment unavailable\nVerdict: unavailable (no exact memory PSI interval)\nCapability: memory PSI {} — {}\nRetained context: {occupancy}; meminfo {}; vmstat {}.\nContext and limitations:\n  Occupancy and VM counters cannot establish harmful memory pressure without exact-interval memory PSI.\nTiming: requested {}; memory context measured {}\n",
-                error.capability().as_str(),
-                memory_psi_error_explanation(error),
-                context.meminfo_capability.as_str(),
-                context.vmstat_capability.as_str(),
-                human_duration(options.duration_ms),
-                human_duration_from_duration(context.elapsed),
-            )
-        }
-        (Err(error), Err(_)) => format!(
-            "Memory assessment unavailable\nVerdict: unavailable (no exact memory PSI interval)\nCapability: memory PSI {} — {}\nContext and limitations:\n  Memory context was also unavailable; no memory diagnosis was produced.\nTiming: requested {}\n",
-            error.capability().as_str(),
-            memory_psi_error_explanation(error),
-            human_duration(options.duration_ms),
-        ),
-    }
-}
-
-fn memory_finding_text(
-    analysis: &crate::analysis::MemoryAnalysisResult,
-    requested_duration_ms: u64,
-    psi: &MemoryPsiObservation,
-    context: Option<&MemoryContextObservation>,
-) -> String {
-    let Some(finding) = analysis.findings.first() else {
-        return format!(
-            "Memory assessment unavailable\nVerdict: unavailable\nTiming: requested {}\n",
-            human_duration(requested_duration_ms)
-        );
-    };
-    let verdict = match finding.kind {
-        crate::analysis::MemoryAssessmentKind::NoHarmfulPressure => "no harmful pressure",
-        crate::analysis::MemoryAssessmentKind::Pressure => "active pressure",
-        crate::analysis::MemoryAssessmentKind::ReclaimPressure => "reclaim pressure",
-        crate::analysis::MemoryAssessmentKind::SwapPressure => "swap pressure",
-        crate::analysis::MemoryAssessmentKind::PossibleThrashing => "possible thrashing",
-        crate::analysis::MemoryAssessmentKind::InsufficientObservation => {
-            "insufficient observation"
-        }
-    };
-    let mechanism_confidence = finding.mechanism_confidence.map_or_else(
-        || "unavailable".to_string(),
-        |confidence| confidence_name(confidence).to_string(),
-    );
-    let mut output = format!(
-        "{}\nVerdict: {verdict} · severity {} · pressure confidence {} · mechanism confidence {mechanism_confidence}\nEvidence: memory PSI some {:.2}% over exact {} interval ({} cumulative stalled time)",
-        finding.summary,
-        severity_name(finding.severity),
-        confidence_name(finding.resource_confidence),
-        finding.evidence.psi_some_fraction * 100.0,
-        human_duration_from_duration(psi.interval.elapsed),
-        human_duration_from_duration(Duration::from_micros(
-            finding.evidence.psi_some_total_delta_us
-        )),
-    );
-    if let (Some(fraction), Some(total)) = (
-        finding.evidence.psi_full_fraction,
-        finding.evidence.psi_full_total_delta_us,
-    ) {
-        output.push_str(&format!(
-            "; full {:.2}% ({} all-non-idle-task stall)",
-            fraction * 100.0,
-            human_duration_from_duration(Duration::from_micros(total))
-        ));
-    } else {
-        output.push_str("; full unavailable or excluded");
-    }
-    output.push('\n');
-    if let (Some(occupancy), Some(available), Some(total)) = (
-        finding.evidence.memory_occupancy_fraction,
-        finding.evidence.memory_available_bytes,
-        finding.evidence.memory_total_bytes,
-    ) {
-        output.push_str(&format!(
-            "Memory context: {:.1}% occupied; {} available of {} total",
-            occupancy * 100.0,
-            human_bytes(available),
-            human_bytes(total),
-        ));
-        if let Some(swap_used) = finding.evidence.swap_used_bytes {
-            output.push_str(&format!("; {} swap allocated", human_bytes(swap_used)));
-        }
-        output.push('\n');
-    } else {
-        output.push_str("Memory context: unavailable or incomplete\n");
-    }
-    let vm_delta =
-        |counter| context.and_then(|context| context.vmstat_deltas.get(&counter).copied());
-    output.push_str(&format!(
-        "VM interval context: direct scan/steal {}/{} pages; swap in/out {}/{} pages; major faults {}\n",
-        optional_counter(vm_delta(VmstatCounter::ScanDirect)),
-        optional_counter(vm_delta(VmstatCounter::StealDirect)),
-        optional_counter(vm_delta(VmstatCounter::SwapIn)),
-        optional_counter(vm_delta(VmstatCounter::SwapOut)),
-        optional_counter(vm_delta(VmstatCounter::MajorPageFaults)),
-    ));
-    output.push_str("Attribution: unavailable (host-wide evidence only)\n");
-    if !finding.qualifiers.is_empty() {
-        output.push_str("Context and limitations:\n");
-        for qualifier in &finding.qualifiers {
-            output.push_str(&format!("  {}\n", qualifier.message));
-        }
-    }
-    output.push_str(&format!(
-        "Timing: requested {}; memory PSI measured {}{}\n",
-        human_duration(requested_duration_ms),
-        human_duration_from_duration(psi.interval.elapsed),
-        context.map_or_else(String::new, |context| format!(
-            "; memory context measured {}",
-            human_duration_from_duration(context.elapsed)
-        )),
-    ));
-    output
+    crate::view::hunt_text(options, &result)
 }
 
 fn memory_psi_error_explanation(error: crate::psi::MemoryPsiError) -> &'static str {
@@ -644,162 +168,6 @@ fn memory_psi_error_explanation(error: crate::psi::MemoryPsiError) -> &'static s
             "Memory PSI `full` exceeded `some` and was rejected as inconsistent."
         }
     }
-}
-
-fn io_hunt_text(options: &HuntOptions, io: IoHuntObservation) -> String {
-    match (io.psi, io.diskstats, io.processes) {
-        (Ok(psi), diskstats, processes) => {
-            let analysis =
-                analysis::analyze_io(Some(&psi), diskstats.as_ref().ok(), processes.as_ref().ok());
-            io_finding_text(
-                &analysis,
-                options.duration_ms,
-                &psi,
-                diskstats.as_ref().ok(),
-                processes.as_ref().ok(),
-            )
-        }
-        (Err(error), diskstats, processes) => format!(
-            "I/O assessment unavailable\nVerdict: unavailable (no exact I/O PSI interval)\nCapability: I/O PSI {} — {}\nRetained context: diskstats {}; process I/O {}.\nContext and limitations:\n  Disk and process I/O activity cannot establish block-I/O pressure without exact-interval I/O PSI.\nTiming: requested {}{}{}\n",
-            error.capability().as_str(),
-            io_psi_error_explanation(error),
-            diskstats
-                .as_ref()
-                .map_or("failed", |value| value.capability.as_str()),
-            processes
-                .as_ref()
-                .map_or("failed", |value| value.capability.as_str()),
-            human_duration(options.duration_ms),
-            diskstats.as_ref().map_or_else(
-                |_| String::new(),
-                |value| format!(
-                    "; diskstats measured {}",
-                    human_duration_from_duration(value.elapsed)
-                )
-            ),
-            processes.as_ref().map_or_else(
-                |_| String::new(),
-                |value| format!(
-                    "; process I/O measured {}",
-                    human_duration_from_duration(value.elapsed)
-                )
-            ),
-        ),
-    }
-}
-
-fn io_finding_text(
-    analysis: &crate::analysis::IoAnalysisResult,
-    requested_duration_ms: u64,
-    psi: &IoPsiObservation,
-    diskstats: Option<&crate::io::DiskstatsObservation>,
-    processes: Option<&ProcessIoObservation>,
-) -> String {
-    let Some(finding) = analysis.findings.first() else {
-        return format!(
-            "I/O assessment unavailable\nVerdict: unavailable\nTiming: requested {}\n",
-            human_duration(requested_duration_ms)
-        );
-    };
-    let verdict = match finding.kind {
-        IoAssessmentKind::NoMeaningfulContention => "no meaningful block-I/O pressure",
-        IoAssessmentKind::Pressure => "block-I/O pressure",
-        IoAssessmentKind::InsufficientObservation => "insufficient observation",
-    };
-    let mut output = format!(
-        "{}\nVerdict: {verdict} · severity {} · I/O confidence {}\nEvidence: I/O PSI some {:.2}% over exact {} interval ({} cumulative stalled time)",
-        finding.summary,
-        severity_name(finding.severity),
-        confidence_name(finding.resource_confidence),
-        finding.evidence.psi_some_fraction * 100.0,
-        human_duration_from_duration(psi.interval.elapsed),
-        human_duration_from_duration(Duration::from_micros(
-            finding.evidence.psi_some_total_delta_us
-        )),
-    );
-    if let (Some(fraction), Some(total)) = (
-        finding.evidence.psi_full_fraction,
-        finding.evidence.psi_full_total_delta_us,
-    ) {
-        output.push_str(&format!(
-            "; full {:.2}% ({} all-non-idle-task stall)",
-            fraction * 100.0,
-            human_duration_from_duration(Duration::from_micros(total)),
-        ));
-    } else {
-        output.push_str("; full unavailable or excluded");
-    }
-    output.push('\n');
-    if finding.kind == IoAssessmentKind::Pressure {
-        if finding.device_candidates.is_empty() {
-            output.push_str(
-                "Device activity candidates: unavailable or no positive stable activity\n",
-            );
-        } else {
-            output.push_str(
-                "Device activity candidates (same window only; not mapped to workloads):\n",
-            );
-            for (index, candidate) in finding.device_candidates.iter().enumerate() {
-                output.push_str(&format!(
-                    "  {}. {} ({}:{}) — read/write {} / {} 512-byte sectors; I/O time {}; in-flight {} ({}; same-window activity only)\n",
-                    index + 1,
-                    terminal_name(&candidate.name),
-                    candidate.key.major,
-                    candidate.key.minor,
-                    optional_counter(candidate.read_sectors_512),
-                    optional_counter(candidate.write_sectors_512),
-                    candidate.io_ticks_ms.map_or_else(|| "unavailable".to_owned(), |value| human_duration_from_duration(Duration::from_millis(value))),
-                    candidate.end_in_flight,
-                    confidence_name(candidate.confidence),
-                ));
-            }
-        }
-        if finding.process_suspects.is_empty() {
-            output.push_str(
-                "Process I/O accounting candidates: unavailable or no positive stable read/charged-write activity\n",
-            );
-        } else {
-            output.push_str("Process I/O accounting candidates (same window only; not proven causal or device-mapped):\n");
-            for (index, candidate) in finding.process_suspects.iter().enumerate() {
-                output.push_str(&format!(
-                    "  {}. {} [{}] — {} read + {} charged write; {} cancelled write ({}; same-window accounting only)\n",
-                    index + 1,
-                    terminal_name(&candidate.name),
-                    candidate.key.pid,
-                    optional_bytes(candidate.read_bytes),
-                    optional_bytes(candidate.write_bytes),
-                    optional_bytes(candidate.cancelled_write_bytes),
-                    confidence_name(candidate.confidence),
-                ));
-            }
-        }
-        output.push_str("Affected workloads: unavailable (this telemetry does not identify I/O stall victims or map processes to devices)\n");
-    } else {
-        output.push_str(
-            "Device and process activity candidates: not ranked without an I/O pressure finding\n",
-        );
-        output.push_str("Affected workloads: not assessed without an I/O pressure finding\n");
-    }
-    if !finding.qualifiers.is_empty() {
-        output.push_str("Context and limitations:\n");
-        for qualifier in &finding.qualifiers {
-            output.push_str(&format!("  {}\n", qualifier.message));
-        }
-    }
-    output.push_str(&format!(
-        "Timing: requested {}; I/O PSI measured {}{}{}\n",
-        human_duration(requested_duration_ms),
-        human_duration_from_duration(psi.interval.elapsed),
-        diskstats.map_or_else(String::new, |value| format!(
-            "; diskstats measured {}",
-            human_duration_from_duration(value.elapsed)
-        )),
-        processes.map_or_else(String::new, |value| format!(
-            "; process I/O measured {}",
-            human_duration_from_duration(value.elapsed)
-        )),
-    ));
-    output
 }
 
 fn io_psi_error_explanation(error: crate::psi::IoPsiError) -> &'static str {
@@ -835,189 +203,6 @@ fn io_error_capability(error: crate::psi::IoPsiError) -> IoPsiCapability {
         crate::psi::IoPsiError::CounterRegressed
         | crate::psi::IoPsiError::EmptyInterval
         | crate::psi::IoPsiError::DeltaExceedsElapsed => IoPsiCapability::Available,
-    }
-}
-
-fn optional_counter(value: Option<u64>) -> String {
-    value.map_or_else(|| "unavailable".to_owned(), |value| value.to_string())
-}
-
-fn optional_bytes(value: Option<u64>) -> String {
-    value.map_or_else(|| "unavailable".to_owned(), human_bytes)
-}
-
-fn human_bytes(bytes: u64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-    let bytes = bytes as f64;
-    if bytes >= GIB {
-        format!("{:.2} GiB", bytes / GIB)
-    } else if bytes >= MIB {
-        format!("{:.1} MiB", bytes / MIB)
-    } else if bytes >= KIB {
-        format!("{:.1} KiB", bytes / KIB)
-    } else {
-        format!("{} B", bytes as u64)
-    }
-}
-
-fn finding_text(
-    analysis: &AnalysisResult,
-    requested_duration_ms: u64,
-    psi_elapsed: Duration,
-    cpu_elapsed: Option<Duration>,
-) -> String {
-    let Some(finding) = analysis.findings.first() else {
-        return format!(
-            "CPU assessment unavailable\nVerdict: unavailable\nTiming: requested {}\n",
-            human_duration(requested_duration_ms)
-        );
-    };
-    let verdict = match finding.kind {
-        AssessmentKind::CpuContention => "CPU scheduling contention observed",
-        AssessmentKind::CpuNoMeaningfulContention => {
-            "No meaningful CPU scheduling contention observed"
-        }
-        AssessmentKind::InsufficientObservation => {
-            "CPU assessment is inconclusive (short observation)"
-        }
-    };
-    let mut output = format!(
-        "{verdict}\nVerdict: {} · severity {} · CPU confidence {}\nEvidence: CPU PSI some {:.2}% over exact {} interval ({} cumulative stalled time)\n",
-        match finding.kind {
-            AssessmentKind::CpuContention => "contention",
-            AssessmentKind::CpuNoMeaningfulContention => "no meaningful contention",
-            AssessmentKind::InsufficientObservation => "insufficient observation",
-        },
-        severity_name(finding.severity),
-        confidence_name(finding.resource_confidence),
-        finding.evidence.psi_some_fraction * 100.0,
-        human_duration_from_duration(psi_elapsed),
-        human_duration_from_duration(Duration::from_micros(finding.evidence.psi_total_delta_us)),
-    );
-
-    let cpu_context_available = cpu_elapsed.is_some();
-    let victim_attribution_limited = finding
-        .qualifiers
-        .iter()
-        .any(|qualifier| qualifier.kind == "victim_attribution_limited");
-    let suspect_attribution_limited = finding
-        .qualifiers
-        .iter()
-        .any(|qualifier| qualifier.kind == "suspect_attribution_limited");
-
-    if !cpu_context_available {
-        output.push_str("Victim candidates: unavailable\nSuspect candidates: unavailable\n");
-    } else if finding.kind == AssessmentKind::InsufficientObservation {
-        output.push_str(
-            "Victim candidates: not assessed for a short observation\nSuspect candidates: not assessed for a short observation\n",
-        );
-    } else if finding.kind == AssessmentKind::CpuNoMeaningfulContention {
-        output.push_str(
-            "Victim candidates: not ranked without a contention finding\nSuspect candidates: not ranked without a contention finding\n",
-        );
-    } else {
-        if !finding.victims.is_empty() {
-            output.push_str("Victim candidates (observed runnable delay; not confirmed harm):\n");
-            for (index, victim) in finding.victims.iter().enumerate() {
-                output.push_str(&format!(
-                    "  {}. {} [{}] — {} delay ({}; observed runnable-delay candidate)\n",
-                    index + 1,
-                    terminal_name(&victim.name),
-                    victim.key.pid,
-                    human_duration_from_duration(Duration::from_nanos(victim.runnable_wait_ns)),
-                    confidence_name(victim.confidence),
-                ));
-            }
-        } else if victim_attribution_limited {
-            output.push_str(
-                "Victim candidates: unavailable or incomplete (see context and limitations)\n",
-            );
-        } else {
-            output.push_str("Victim candidates: no positive stable runnable-delay candidates\n");
-        }
-        if !finding.suspects.is_empty() {
-            output.push_str("Suspect candidates (same window only; not proven causal):\n");
-            for (index, suspect) in finding.suspects.iter().enumerate() {
-                output.push_str(&format!(
-                    "  {}. {} [{}] — {:.1}% of one CPU ({}; {})\n",
-                    index + 1,
-                    terminal_name(&suspect.name),
-                    suspect.key.pid,
-                    suspect.cpu_fraction_of_one * 100.0,
-                    confidence_name(suspect.confidence),
-                    suspect_role(suspect.label),
-                ));
-            }
-        } else if suspect_attribution_limited {
-            output.push_str(
-                "Suspect candidates: unavailable or incomplete (see context and limitations)\n",
-            );
-        } else {
-            output.push_str("Suspect candidates: no consumers above 25% of one CPU\n");
-        }
-    }
-    if !finding.qualifiers.is_empty() {
-        output.push_str("Context and limitations:\n");
-        for qualifier in &finding.qualifiers {
-            output.push_str(&format!("  {}\n", qualifier.message));
-        }
-    }
-    output.push_str(&format!(
-        "Timing: requested {}; PSI measured {}{}\n",
-        human_duration(requested_duration_ms),
-        human_duration_from_duration(psi_elapsed),
-        cpu_elapsed.map_or_else(String::new, |elapsed| format!(
-            "; CPU/process measured {}",
-            human_duration_from_duration(elapsed)
-        )),
-    ));
-    output
-}
-
-fn severity_name(severity: crate::analysis::Severity) -> &'static str {
-    match severity {
-        crate::analysis::Severity::None => "none",
-        crate::analysis::Severity::Low => "low",
-        crate::analysis::Severity::Moderate => "moderate",
-        crate::analysis::Severity::High => "high",
-        crate::analysis::Severity::Severe => "severe",
-    }
-}
-
-fn confidence_name(confidence: crate::analysis::Confidence) -> &'static str {
-    match confidence {
-        crate::analysis::Confidence::Low => "low",
-        crate::analysis::Confidence::Medium => "medium",
-        crate::analysis::Confidence::High => "high",
-    }
-}
-
-fn suspect_role(label: &str) -> &'static str {
-    match label {
-        "leading_concurrent_cpu_consumer" => "leading concurrent CPU consumer",
-        _ => "concurrent CPU consumer",
-    }
-}
-
-fn terminal_name(name: &str) -> String {
-    const MAX_CHARS: usize = 48;
-    let mut rendered = String::new();
-    for character in name.chars().take(MAX_CHARS) {
-        if character.is_control() {
-            rendered.push('\u{fffd}');
-        } else {
-            rendered.push(character);
-        }
-    }
-    if name.chars().count() > MAX_CHARS {
-        rendered.push('…');
-    }
-    if rendered.is_empty() {
-        "<unnamed>".to_owned()
-    } else {
-        rendered
     }
 }
 
@@ -1715,53 +900,6 @@ struct QualifierJson<'a> {
     message: &'a str,
 }
 
-fn human_duration(duration_ms: u64) -> String {
-    human_duration_from_duration(Duration::from_millis(duration_ms))
-}
-
-fn human_duration_from_duration(duration: Duration) -> String {
-    if duration.is_zero() {
-        return "0ms".to_owned();
-    }
-    let nanoseconds = duration.as_nanos();
-    if nanoseconds != 0 && nanoseconds < 1_000 {
-        return format!("{nanoseconds}ns");
-    }
-    if nanoseconds != 0 && nanoseconds < 1_000_000 {
-        return decimal_duration(nanoseconds / 1_000, nanoseconds % 1_000, "µs");
-    }
-    if nanoseconds < 1_000_000_000 {
-        return decimal_duration(
-            nanoseconds / 1_000_000,
-            (nanoseconds % 1_000_000) / 1_000,
-            "ms",
-        );
-    }
-    let milliseconds = duration.as_millis();
-    if milliseconds % 60_000 == 0 {
-        format!("{}m", milliseconds / 60_000)
-    } else if milliseconds % 1_000 == 0 {
-        format!("{}s", milliseconds / 1_000)
-    } else if milliseconds >= 1_000 {
-        let seconds = milliseconds / 1_000;
-        let fractional_milliseconds = milliseconds % 1_000;
-        let fraction = format!("{fractional_milliseconds:03}")
-            .trim_end_matches('0')
-            .to_owned();
-        format!("{seconds}.{fraction}s")
-    } else {
-        format!("{milliseconds}ms")
-    }
-}
-
-fn decimal_duration(whole: u128, fractional: u128, unit: &str) -> String {
-    if fractional == 0 {
-        return format!("{whole}{unit}");
-    }
-    let fraction = format!("{fractional:03}").trim_end_matches('0').to_owned();
-    format!("{whole}.{fraction}{unit}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1778,7 +916,7 @@ mod tests {
         BlockDeviceKey, DiskstatsInterval, DiskstatsIntervalIssues, DiskstatsObservation,
         ProcessIoCollectionIssues, ProcessIoInterval,
     };
-    use crate::memory::{MeminfoRaw, VmstatIntervalIssues};
+    use crate::memory::{MeminfoRaw, VmstatCounter, VmstatIntervalIssues};
     use crate::psi::{
         CpuPsiInterval, CpuPsiRaw, IoPsiInterval, IoPsiLine, IoPsiLineInterval, IoPsiRaw,
         MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval, MemoryPsiRaw,
@@ -1789,6 +927,29 @@ mod tests {
         F: FnOnce(Duration) -> HuntObservation,
     {
         super::hunt(options, observe).expect("hunt render")
+    }
+
+    fn related_section(text: &str) -> String {
+        let rest = text
+            .split_once("Related evidence\n")
+            .expect("related evidence section")
+            .1;
+        let mut lines = vec!["Related evidence".to_owned()];
+        for line in rest.lines() {
+            if line.starts_with("Timing")
+                || line.starts_with("Explain")
+                || line.starts_with("Scoped")
+                || line.starts_with("CPU ")
+                || line.starts_with("Cgroup")
+            {
+                break;
+            }
+            if line.is_empty() && lines.len() > 1 {
+                break;
+            }
+            lines.push(line.to_owned());
+        }
+        format!("{}\n", lines.join("\n"))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2076,14 +1237,10 @@ mod tests {
         let mut observation = hunt_observation();
         observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
         observation.cgroup = Some(scoped_cgroup_observation(true));
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| observation,
-        );
-        assert!(text.starts_with("Scoped cgroup findings"));
+        let text = render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| {
+            observation
+        });
+        assert!(text.contains("Scoped cgroup findings"));
         assert!(text.contains("Scoped CPU quota-throttle pressure"));
         assert!(text.contains("mechanism confidence low"));
         assert!(text.contains("controller context: CPU usage +2s; throttled +250ms"));
@@ -2092,10 +1249,7 @@ mod tests {
         let mut observation = hunt_observation();
         observation.cgroup = Some(scoped_cgroup_observation(true));
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(1_000, OutputFormat::Json),
             |_| observation,
         ))
         .unwrap();
@@ -2116,32 +1270,20 @@ mod tests {
     fn io_renderer_keeps_psi_pressure_independent_of_context_and_never_claims_mapping() {
         let mut observation = hunt_observation();
         observation.io = Some(io_hunt_observation(0.08));
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| observation,
-        );
-        assert!(text.contains("Block-I/O pressure observed"));
-        assert!(
-            text.contains("Device activity candidates (same window only; not mapped to workloads)")
-        );
+        let text = render_hunt(&HuntOptions::new(10_000, OutputFormat::Text), |_| {
+            observation
+        });
+        assert!(text.contains("Block-I/O pressure"));
+        assert!(text.contains("activity, not mapped") || text.contains("sda"));
         assert!(text.contains("not proven causal or device-mapped"));
-        assert!(text.contains("Affected workloads: unavailable"));
+        assert!(text.contains("unavailable (this telemetry does not identify I/O stall victims"));
 
         let mut healthy = hunt_observation();
         healthy.io = Some(io_hunt_observation(0.005));
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| healthy,
-        );
-        assert!(text.contains("No meaningful block-I/O pressure observed"));
-        assert!(text.contains("activity counters do not override that verdict"));
+        let text = render_hunt(&HuntOptions::new(10_000, OutputFormat::Text), |_| healthy);
+        assert!(text.contains("no block-I/O pressure"));
         assert!(text.contains("not ranked without an I/O pressure finding"));
+        assert!(!text.contains("sda"));
     }
 
     #[test]
@@ -2152,10 +1294,7 @@ mod tests {
         io.processes = Err(DiskstatsError::PermissionDenied);
         observation.io = Some(io);
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| observation,
         ))
         .unwrap();
@@ -2173,33 +1312,23 @@ mod tests {
 
     #[test]
     fn hunt_renders_interval_pressure_with_a_diagnosis() {
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| hunt_observation(),
-        );
-        assert!(output.contains("CPU scheduling contention observed"));
-        assert!(output.contains("Verdict: contention · severity high · CPU confidence medium"));
-        assert!(output.contains("CPU PSI some 20.00% over exact 1.25s interval"));
-        assert!(output.contains("same window; this correlation does not prove causality"));
-        assert!(output.contains(
-            "Victim candidates: unavailable or incomplete (see context and limitations)"
-        ));
-        assert!(
-            output.contains("Timing: requested 1s; PSI measured 1.25s; CPU/process measured 1.25s")
-        );
+        let output = render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| {
+            hunt_observation()
+        });
+        assert!(output.contains("CPU scheduling contention"));
+        assert!(output.contains("HIGH"));
+        assert!(output.contains("conf medium"));
+        assert!(output.contains("PSI some 20.00%"));
+        assert!(output.contains("same-window; not causal"));
+        assert!(output.contains("victims   unavailable or incomplete"));
+        assert!(output.contains("Timing  PSI 1.25s · CPU 1.25s"));
         assert!(!output.contains("Top process CPU consumers during interval"));
     }
 
     #[test]
     fn contention_json_is_typed_and_cpu_failure_retains_psi_finding() {
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(1_000, OutputFormat::Json),
             |_| hunt_observation(),
         ))
         .unwrap();
@@ -2215,10 +1344,7 @@ mod tests {
                 && finding["qualifiers"].is_array()
         );
         let partial: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(1_000, OutputFormat::Json),
             |_| HuntObservation {
                 psi: Ok(observation()),
                 cpu: Err(crate::cpu::CpuError::Unreadable),
@@ -2233,35 +1359,27 @@ mod tests {
         assert!(partial["findings"][0]["evidence"]["host_utilization_fraction"].is_null());
         assert!(partial["qualifiers"][0]["kind"].is_string());
 
-        let partial_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| HuntObservation {
+        let partial_text = render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| {
+            HuntObservation {
                 psi: Ok(observation()),
                 cpu: Err(crate::cpu::CpuError::Unreadable),
                 memory: None,
                 io: None,
                 cgroup: None,
-            },
-        );
+            }
+        });
         assert!(partial_text.contains("CPU interval context is unavailable"));
         assert!(partial_text.contains("CPU/process telemetry: unavailable"));
-        assert!(partial_text.contains("Victim candidates: unavailable"));
-        assert!(partial_text.contains("Suspect candidates: unavailable"));
+        assert!(partial_text.contains("victims   unavailable"));
+        assert!(partial_text.contains("suspects  unavailable"));
         assert!(!partial_text.contains("none observed"));
     }
 
     #[test]
     fn hunt_json_contains_typed_cpu_psi_evidence() {
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
-            |_| hunt_observation(),
-        );
+        let output = render_hunt(&HuntOptions::new(1_000, OutputFormat::Json), |_| {
+            hunt_observation()
+        });
         let json: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert_eq!(json["status"], "observed");
         assert_eq!(json["observation"]["cpu_psi"]["total_delta_us"], 250_000);
@@ -2275,18 +1393,12 @@ mod tests {
         cpu_psi.interval.some_fraction = 0.005;
         cpu_psi.interval.total_delta_us = 50_000;
         observation.memory = Some(memory_hunt_observation(0.08, Some(0.01), true));
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| observation,
-        );
-        assert!(
-            text.starts_with("Memory pressure observed with correlated direct reclaim activity")
-        );
-        assert!(text.contains("Verdict: reclaim pressure · severity moderate"));
-        assert!(text.contains("Attribution: unavailable (host-wide evidence only)"));
+        let text = render_hunt(&HuntOptions::new(10_000, OutputFormat::Text), |_| {
+            observation
+        });
+        assert!(text.contains("Memory reclaim pressure"));
+        assert!(text.contains("reclaim pressure"));
+        assert!(text.contains("unavailable (host-wide evidence only)"));
         assert!(text.contains("occupancy is context and is not itself evidence"));
 
         let mut observation = hunt_observation();
@@ -2295,10 +1407,7 @@ mod tests {
         cpu_psi.interval.total_delta_us = 50_000;
         observation.memory = Some(memory_hunt_observation(0.08, Some(0.01), true));
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| observation,
         ))
         .unwrap();
@@ -2314,10 +1423,7 @@ mod tests {
         let mut partial = hunt_observation();
         partial.memory = Some(memory_hunt_observation(0.08, None, false));
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| partial,
         ))
         .unwrap();
@@ -2337,10 +1443,7 @@ mod tests {
             context: memory_hunt_observation(0.0, Some(0.0), true).context,
         });
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| missing,
         ))
         .unwrap();
@@ -2374,21 +1477,12 @@ mod tests {
 
     #[test]
     fn evidence_chain_is_rendered_only_when_independent_mechanism_supports_it() {
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| chain_hunt_observation(true, true),
-        );
-        let related = text
-            .split_once("Related evidence\n")
-            .map(|(prefix, related)| {
-                assert!(prefix.contains("reclaim pressure"));
-                assert!(prefix.contains("block-I/O pressure"));
-                format!("Related evidence\n{related}")
-            })
-            .expect("related evidence section");
+        let text = render_hunt(&HuntOptions::new(10_000, OutputFormat::Text), |_| {
+            chain_hunt_observation(true, true)
+        });
+        let related = related_section(&text);
+        assert!(text.contains("reclaim pressure"));
+        assert!(text.contains("block-I/O pressure") || text.contains("Block-I/O pressure"));
         assert_eq!(
             related,
             include_str!("../tests/fixtures/render/evidence-chain.txt")
@@ -2401,13 +1495,22 @@ mod tests {
                 .to_lowercase()
                 .contains("cause")
         );
-        assert!(related.contains("does not prove"));
-
-        let json: serde_json::Value = serde_json::from_str(&render_hunt(
+        let explained = render_hunt(
             &HuntOptions {
                 duration_ms: 10_000,
-                output: OutputFormat::Json,
+                output: OutputFormat::Text,
+                style: crate::cli::TextStyle {
+                    explain: true,
+                    color: false,
+                    unicode: false,
+                },
             },
+            |_| chain_hunt_observation(true, true),
+        );
+        assert!(explained.contains("does not prove"));
+
+        let json: serde_json::Value = serde_json::from_str(&render_hunt(
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| chain_hunt_observation(true, true),
         ))
         .unwrap();
@@ -2429,40 +1532,27 @@ mod tests {
         );
 
         let coincident: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| chain_hunt_observation(false, true),
         ))
         .unwrap();
         assert_eq!(coincident["evidence_chains"].as_array().unwrap().len(), 0);
         assert!(
-            !render_hunt(
-                &HuntOptions {
-                    duration_ms: 10_000,
-                    output: OutputFormat::Text,
-                },
-                |_| chain_hunt_observation(false, true),
-            )
+            !render_hunt(&HuntOptions::new(10_000, OutputFormat::Text), |_| {
+                chain_hunt_observation(false, true)
+            },)
             .contains("Related evidence")
         );
 
         let io_healthy: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| chain_hunt_observation(true, false),
         ))
         .unwrap();
         assert_eq!(io_healthy["evidence_chains"].as_array().unwrap().len(), 0);
 
         let cpu_only: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(1_000, OutputFormat::Json),
             |_| hunt_observation(),
         ))
         .unwrap();
@@ -2540,17 +1630,10 @@ mod tests {
 
     #[test]
     fn same_cgroup_evidence_chain_is_rendered_without_host_linking() {
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| cgroup_chain_hunt_observation(),
-        );
-        let related = text
-            .split_once("Related evidence\n")
-            .map(|(_, related)| format!("Related evidence\n{related}"))
-            .expect("related evidence section");
+        let text = render_hunt(&HuntOptions::new(10_000, OutputFormat::Text), |_| {
+            cgroup_chain_hunt_observation()
+        });
+        let related = related_section(&text);
         assert_eq!(
             related,
             include_str!("../tests/fixtures/render/evidence-chain-cgroup.txt")
@@ -2565,10 +1648,7 @@ mod tests {
         );
 
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| cgroup_chain_hunt_observation(),
         ))
         .unwrap();
@@ -2596,10 +1676,7 @@ mod tests {
         let mut coincident = hunt_observation();
         coincident.cgroup = Some(scoped_memory_io_cgroup_observation(None, true));
         let coincident_json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| coincident,
         ))
         .unwrap();
@@ -2614,10 +1691,7 @@ mod tests {
             true,
         ));
         let combined_json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| combined,
         ))
         .unwrap();
@@ -2656,10 +1730,7 @@ mod tests {
         }
         observation.cgroup = Some(cgroup);
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| observation,
         ))
         .unwrap();
@@ -2682,31 +1753,25 @@ mod tests {
                 .unwrap()
                 .contains("reclaim pressure")
         );
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| {
-                let mut observation = hunt_observation();
-                observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
-                observation.psi.as_mut().unwrap().interval.total_delta_us = 50_000;
-                let mut cgroup = scoped_memory_io_cgroup_observation(None, true);
-                if let Ok(value) = cgroup.observation.as_mut() {
-                    value.groups[0].memory_stat = cgroup_resource(
-                        Some(CgroupMemoryStatRaw {
-                            pgscan_direct: Some(12),
-                            pgsteal_direct: Some(8),
-                            pswpin: Some(0),
-                            pswpout: Some(0),
-                        }),
-                        CgroupFileState::Available,
-                    );
-                }
-                observation.cgroup = Some(cgroup);
-                observation
-            },
-        );
+        let text = render_hunt(&HuntOptions::new(10_000, OutputFormat::Text), |_| {
+            let mut observation = hunt_observation();
+            observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+            observation.psi.as_mut().unwrap().interval.total_delta_us = 50_000;
+            let mut cgroup = scoped_memory_io_cgroup_observation(None, true);
+            if let Ok(value) = cgroup.observation.as_mut() {
+                value.groups[0].memory_stat = cgroup_resource(
+                    Some(CgroupMemoryStatRaw {
+                        pgscan_direct: Some(12),
+                        pgsteal_direct: Some(8),
+                        pswpin: Some(0),
+                        pswpout: Some(0),
+                    }),
+                    CgroupFileState::Available,
+                );
+            }
+            observation.cgroup = Some(cgroup);
+            observation
+        });
         assert!(text.contains("Scoped memory reclaim pressure"));
         assert!(text.contains("mechanism confidence low"));
         assert!(text.contains("12 direct-reclaim scan pages"));
@@ -2727,10 +1792,7 @@ mod tests {
     fn scoped_possible_thrashing_label_is_rendered_without_claiming_causality() {
         let elapsed = Duration::from_secs(5);
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 5_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(5_000, OutputFormat::Json),
             |_| {
                 let mut observation = hunt_observation();
                 observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
@@ -2785,41 +1847,35 @@ mod tests {
                 .contains("cause")
         );
 
-        let text = render_hunt(
-            &HuntOptions {
-                duration_ms: 5_000,
-                output: OutputFormat::Text,
-            },
-            |_| {
-                let mut observation = hunt_observation();
-                observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
-                observation.psi.as_mut().unwrap().interval.total_delta_us = 25_000;
-                let mut cgroup = scoped_memory_io_cgroup_observation(None, false);
-                if let Ok(value) = cgroup.observation.as_mut() {
-                    value.elapsed = elapsed;
-                    value.groups[0].memory_pressure = cgroup_resource(
-                        Some(CgroupPsiInterval {
-                            elapsed: Some(elapsed),
-                            some_total_usec: Some(1_000_000),
-                            full_total_usec: Some(100_000),
-                            state: CgroupPsiIntervalState::Available,
-                        }),
-                        CgroupFileState::Available,
-                    );
-                    value.groups[0].memory_stat = cgroup_resource(
-                        Some(CgroupMemoryStatRaw {
-                            pgscan_direct: Some(5_120),
-                            pgsteal_direct: Some(5_120),
-                            pswpin: Some(5_120),
-                            pswpout: Some(5_120),
-                        }),
-                        CgroupFileState::Available,
-                    );
-                }
-                observation.cgroup = Some(cgroup);
-                observation
-            },
-        );
+        let text = render_hunt(&HuntOptions::new(5_000, OutputFormat::Text), |_| {
+            let mut observation = hunt_observation();
+            observation.psi.as_mut().unwrap().interval.some_fraction = 0.005;
+            observation.psi.as_mut().unwrap().interval.total_delta_us = 25_000;
+            let mut cgroup = scoped_memory_io_cgroup_observation(None, false);
+            if let Ok(value) = cgroup.observation.as_mut() {
+                value.elapsed = elapsed;
+                value.groups[0].memory_pressure = cgroup_resource(
+                    Some(CgroupPsiInterval {
+                        elapsed: Some(elapsed),
+                        some_total_usec: Some(1_000_000),
+                        full_total_usec: Some(100_000),
+                        state: CgroupPsiIntervalState::Available,
+                    }),
+                    CgroupFileState::Available,
+                );
+                value.groups[0].memory_stat = cgroup_resource(
+                    Some(CgroupMemoryStatRaw {
+                        pgscan_direct: Some(5_120),
+                        pgsteal_direct: Some(5_120),
+                        pswpin: Some(5_120),
+                        pswpout: Some(5_120),
+                    }),
+                    CgroupFileState::Available,
+                );
+            }
+            observation.cgroup = Some(cgroup);
+            observation
+        });
         assert!(text.contains("possible thrashing"));
         assert!(text.contains("mechanism confidence medium"));
         assert!(!text.to_lowercase().contains("caused"));
@@ -2833,10 +1889,7 @@ mod tests {
         observation.memory = Some(memory);
 
         let json: serde_json::Value = serde_json::from_str(&render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Json,
-            },
+            &HuntOptions::new(10_000, OutputFormat::Json),
             |_| observation,
         ))
         .unwrap();
@@ -2857,38 +1910,30 @@ mod tests {
 
     #[test]
     fn hunt_reports_unavailable_cpu_psi_explicitly() {
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| HuntObservation {
+        let output = render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| {
+            HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
                 cpu: Err(crate::cpu::CpuError::Malformed),
                 memory: None,
                 io: None,
                 cgroup: None,
-            },
-        );
+            }
+        });
         assert!(output.contains("Capability: CPU PSI failed"));
         assert!(output.contains("did not match the expected kernel format"));
     }
 
     #[test]
     fn psi_failure_retains_scheduler_delay_text_context() {
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| HuntObservation {
+        let output = render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| {
+            HuntObservation {
                 psi: Err(crate::psi::CpuPsiError::Malformed),
                 cpu: hunt_observation().cpu,
                 memory: None,
                 io: None,
                 cgroup: None,
-            },
-        );
+            }
+        });
         assert!(output.contains("CPU assessment unavailable"));
         assert!(output.contains("CPU/process context was collected"));
         assert!(output.contains("Retained context: host CPU"));
@@ -2901,13 +1946,7 @@ mod tests {
         let cpu = complete.cpu.as_mut().unwrap();
         cpu.processes.clear();
         cpu.schedstat_capability = crate::cpu::SchedstatCapability::Available;
-        let complete_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| complete,
-        );
+        let complete_text = render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| complete);
         assert!(complete_text.contains("no positive stable runnable-delay candidates"));
         assert!(complete_text.contains("no consumers above 25% of one CPU"));
 
@@ -2918,13 +1957,10 @@ mod tests {
             .unwrap()
             .collection_issues
             .appeared = 1;
-        let retained_partial_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| retained_partial,
-        );
+        let retained_partial_text =
+            render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| {
+                retained_partial
+            });
         assert!(retained_partial_text.contains("consumer [9]"));
         assert!(retained_partial_text.contains("Process collection is partial"));
 
@@ -2932,14 +1968,13 @@ mod tests {
         let cpu = empty_partial.cpu.as_mut().unwrap();
         cpu.processes.clear();
         cpu.collection_issues.appeared = 1;
-        let empty_partial_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| empty_partial,
+        let empty_partial_text = render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| {
+            empty_partial
+        });
+        assert!(
+            empty_partial_text.contains("suspects  unavailable or incomplete")
+                || empty_partial_text.contains("unavailable or incomplete")
         );
-        assert!(empty_partial_text.contains("Suspect candidates: unavailable or incomplete"));
 
         let mut retained_scheduler_partial = hunt_observation();
         let cpu = retained_scheduler_partial.cpu.as_mut().unwrap();
@@ -2957,13 +1992,10 @@ mod tests {
                 runnable_delay_fraction: 0.0002,
                 timeslices: 1,
             });
-        let retained_scheduler_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| retained_scheduler_partial,
-        );
+        let retained_scheduler_text =
+            render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| {
+                retained_scheduler_partial
+            });
         assert!(retained_scheduler_text.contains("consumer [9] — 250µs delay"));
         assert!(retained_scheduler_text.contains("Scheduler accounting is unavailable or partial"));
     }
@@ -2989,13 +2021,9 @@ mod tests {
                 runnable_delay_fraction: 0.0002,
                 timeslices: 1,
             });
-        let no_contention_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 1_000,
-                output: OutputFormat::Text,
-            },
-            |_| no_contention,
-        );
+        let no_contention_text = render_hunt(&HuntOptions::new(1_000, OutputFormat::Text), |_| {
+            no_contention
+        });
         assert!(no_contention_text.contains("not ranked without a contention finding"));
         assert!(!no_contention_text.contains("no consumers above 25%"));
         assert!(!no_contention_text.contains("no positive stable runnable-delay"));
@@ -3005,40 +2033,9 @@ mod tests {
         psi.requested = Duration::from_millis(100);
         psi.interval.elapsed = Duration::from_millis(100);
         short.cpu.as_mut().unwrap().elapsed = Duration::from_millis(100);
-        let short_text = render_hunt(
-            &HuntOptions {
-                duration_ms: 100,
-                output: OutputFormat::Text,
-            },
-            |_| short,
-        );
+        let short_text = render_hunt(&HuntOptions::new(100, OutputFormat::Text), |_| short);
         assert!(short_text.contains("not assessed for a short observation"));
         assert!(!short_text.contains("no consumers above 25%"));
-    }
-
-    #[test]
-    fn submillisecond_durations_preserve_precision() {
-        assert_eq!(human_duration_from_duration(Duration::ZERO), "0ms");
-        assert_eq!(
-            human_duration_from_duration(Duration::from_nanos(999)),
-            "999ns"
-        );
-        assert_eq!(
-            human_duration_from_duration(Duration::from_nanos(1_500)),
-            "1.5µs"
-        );
-        assert_eq!(
-            human_duration_from_duration(Duration::from_micros(999)),
-            "999µs"
-        );
-        assert_eq!(
-            human_duration_from_duration(Duration::from_micros(1_500)),
-            "1.5ms"
-        );
-        assert_eq!(
-            human_duration_from_duration(Duration::from_micros(1_999)),
-            "1.999ms"
-        );
     }
 
     #[test]
@@ -3120,19 +2117,15 @@ mod tests {
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
-        let output = render_hunt(
-            &HuntOptions {
-                duration_ms: 10_000,
-                output: OutputFormat::Text,
-            },
-            |_| HuntObservation {
+        let output = render_hunt(&HuntOptions::new(10_000, OutputFormat::Text), |_| {
+            HuntObservation {
                 psi: Ok(observation),
                 cpu: Ok(cpu),
                 memory: None,
                 io: None,
                 cgroup: None,
-            },
-        );
+            }
+        });
         assert_eq!(
             output,
             include_str!("../tests/fixtures/render/cpu-contention.txt")

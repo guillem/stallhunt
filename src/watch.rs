@@ -383,6 +383,7 @@ pub fn run(options: &WatchOptions) -> io::Result<()> {
     let mut writer = stdout.lock();
     run_on(&mut writer, options, refresh)
 }
+
 fn write_window(
     writer: &mut dyn Write,
     options: &WatchOptions,
@@ -479,31 +480,51 @@ fn watch_text(window: &WatchWindow, refresh: bool) -> String {
     } else {
         output.push_str(&format!("--- window {} ---\n", window.index));
     }
+    let health = if [
+        &window.current.cpu,
+        &window.current.memory,
+        &window.current.io,
+    ]
+    .into_iter()
+    .any(|signal| signal.status == ObservationStatus::Pressure)
+        || window
+            .current
+            .cgroups
+            .iter()
+            .any(|(_, signal)| signal.status == ObservationStatus::Pressure)
+    {
+        "DEGRADED"
+    } else {
+        "HEALTHY"
+    };
     output.push_str(&format!(
-        "WATCH  window {}  interval {}\n\n",
+        "WATCH  window {}  interval {}  {health}\n\n",
         window_index_label(window),
         format_ms(window.interval_ms)
     ));
-    output.push_str("Lifecycle\n");
+    output.push_str(&compact_resource_line("CPU", &window.current.cpu));
+    output.push_str(&compact_resource_line("MEM", &window.current.memory));
+    output.push_str(&compact_resource_line("I/O", &window.current.io));
+    output.push('\n');
     if window.lifecycle.is_empty() {
-        output.push_str("  (no pressure findings this window)\n");
+        output.push_str("NEW         (no pressure findings this window)\n");
     } else {
         for finding in &window.lifecycle {
             output.push_str(&format!(
-                "  {:<11} {}  {}  {}{}\n",
+                "{:<11} {}  {}  {}{}\n",
                 state_label(finding.state),
                 id_label(&finding.id),
                 finding.kind,
-                severity_name(finding.severity),
+                crate::style::severity_abbrev(finding.severity),
                 psi_suffix(finding.psi_some_fraction)
             ));
             if finding.state == LifecycleState::Persistent {
                 output.push_str(&format!(
-                    "              {} consecutive window(s)",
+                    "            {} consecutive window(s)",
                     finding.consecutive_windows
                 ));
                 if let Some(previous) = finding.previous_severity {
-                    output.push_str(&format!("; was {}", severity_name(previous)));
+                    output.push_str(&format!("; was {}", crate::style::severity_name(previous)));
                 }
                 if !finding.confirmed {
                     output.push_str("; unconfirmed this window");
@@ -514,75 +535,23 @@ fn watch_text(window: &WatchWindow, refresh: bool) -> String {
     }
     if window.current.cgroup_tracking_capped {
         output.push_str(
-            "  Cgroup tracking is capped; additional scoped pressure was not added to lifecycle.\n",
+            "Cgroup tracking is capped; additional scoped pressure was not added to lifecycle.\n",
         );
     }
-    output.push_str("\nCurrent window\n");
-    output.push_str(&current_line("CPU", &window.current.cpu));
-    output.push_str(&current_line("Memory", &window.current.memory));
-    output.push_str(&current_line("I/O", &window.current.io));
-    let cgroup_pressure: Vec<_> = window
-        .current
-        .cgroups
-        .iter()
-        .filter(|(_, signal)| signal.status == ObservationStatus::Pressure)
-        .take(8)
-        .collect();
-    if cgroup_pressure.is_empty() {
-        output.push_str("  Cgroup   no scoped pressure ranked this window\n");
-    } else {
-        for (id, signal) in cgroup_pressure {
-            output.push_str(&format!(
-                "  {:<8} {}  {}  {}{}\n",
-                "Cgroup",
-                id_label(id),
-                signal.kind,
-                severity_name(signal.severity),
-                psi_suffix(signal.psi_some_fraction)
-            ));
-        }
-    }
-    output.push_str("\nRecent history (oldest first)\n");
-    if window.history.is_empty() {
-        output.push_str("  (none)\n");
-    } else {
-        for entry in &window.history {
-            if entry.events.is_empty() {
-                output.push_str(&format!(
-                    "  #{:<3} (no pressure findings)\n",
-                    entry.window_index
-                ));
-            } else {
-                let events = entry
-                    .events
-                    .iter()
-                    .map(|event| {
-                        format!(
-                            "{} {} {}",
-                            id_label(&event.id),
-                            state_label(event.state).to_ascii_lowercase(),
-                            severity_name(event.severity)
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                output.push_str(&format!("  #{:<3} {events}\n", entry.window_index));
-            }
-        }
-    }
-    output.push_str(
-        "\nLifecycle tracks pressure findings only. Healthy windows resolve a previous finding; missing data does not.\n",
-    );
     output
 }
 
-fn current_line(label: &str, signal: &ResourceSignal) -> String {
+fn compact_resource_line(label: &str, signal: &ResourceSignal) -> String {
+    let bar = crate::style::pressure_bar(signal.psi_some_fraction.unwrap_or(0.0), false);
     format!(
-        "  {:<8} {:<12} {}{}\n",
-        label,
+        " {label:<4} {bar} {:>7}  {:<4}  {}{}\n",
+        signal
+            .psi_some_fraction
+            .map(crate::style::psi_percent)
+            .unwrap_or_else(|| "--".into()),
+        crate::style::severity_abbrev(signal.severity),
         status_label(signal.status),
-        severity_name(signal.severity),
-        psi_suffix(signal.psi_some_fraction)
+        ""
     )
 }
 
@@ -696,16 +665,6 @@ fn format_ms(duration_ms: u64) -> String {
         format!("{}s", duration_ms / 1_000)
     } else {
         format!("{duration_ms}ms")
-    }
-}
-
-const fn severity_name(severity: Severity) -> &'static str {
-    match severity {
-        Severity::None => "none",
-        Severity::Low => "low",
-        Severity::Moderate => "moderate",
-        Severity::High => "high",
-        Severity::Severe => "severe",
     }
 }
 
@@ -1250,10 +1209,9 @@ mod tests {
         )
         .expect("watch text render");
         assert!(text.contains("WATCH  window 1/3  interval 2s"));
-        assert!(text.contains("NEW         CPU  cpu_scheduling_contention  high  PSI 20.00%"));
-        assert!(text.contains("Current window"));
-        assert!(text.contains("CPU      pressure     high  PSI 20.00%"));
-        assert!(text.contains("Memory   healthy      none  PSI 0.10%"));
+        assert!(text.contains("NEW         CPU  cpu_scheduling_contention  HIGH  PSI 20.00%"));
+        assert!(text.contains("pressure"));
+        assert!(text.contains("healthy"));
         assert!(!text.contains("Top process CPU consumers"));
         assert_eq!(
             text,

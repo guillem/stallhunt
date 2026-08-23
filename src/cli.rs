@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 
+use crate::style;
+
 pub const DEFAULT_HUNT_DURATION_MS: u64 = 10_000;
 #[allow(dead_code)] // referenced by CLI defaults, docs, and unit tests
 pub const DEFAULT_WATCH_INTERVAL_MS: u64 = 2_000;
@@ -16,10 +18,29 @@ pub enum OutputFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextStyle {
+    pub explain: bool,
+    pub color: bool,
+    pub unicode: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HuntOptions {
     pub duration_ms: u64,
     pub output: OutputFormat,
+    pub style: TextStyle,
+}
+
+impl HuntOptions {
+    #[cfg(test)]
+    pub fn new(duration_ms: u64, output: OutputFormat) -> Self {
+        Self {
+            duration_ms,
+            output,
+            style: TextStyle::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +60,7 @@ pub struct RecordOptions {
 pub struct ReplayOptions {
     pub input: PathBuf,
     pub output: OutputFormat,
+    pub style: TextStyle,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +118,15 @@ impl std::error::Error for CliError {}
     after_help = "Run `stallhunt` with no subcommand for a default 10s hunt.\nUse `stallhunt completions <SHELL>` to generate shell completions."
 )]
 pub struct Cli {
+    /// Emit machine-readable JSON
+    #[arg(long, global = true)]
+    json: bool,
+    /// Expand qualifier text and finding-kind help
+    #[arg(long, global = true)]
+    explain: bool,
+    /// Disable ANSI color even on a TTY
+    #[arg(long, global = true)]
+    no_color: bool,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -129,17 +160,10 @@ struct HuntArgs {
     /// Observation duration from 100ms to 5m
     #[arg(long, value_name = "DURATION", default_value = "10s", value_parser = parse_duration_value)]
     duration: u64,
-    /// Emit machine-readable JSON
-    #[arg(long)]
-    json: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
-struct CapabilitiesArgs {
-    /// Emit machine-readable JSON
-    #[arg(long)]
-    json: bool,
-}
+struct CapabilitiesArgs {}
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
 struct RecordArgs {
@@ -161,9 +185,6 @@ struct RecordArgs {
 struct ReplayArgs {
     /// Recording to replay
     path: PathBuf,
-    /// Emit machine-readable JSON
-    #[arg(long)]
-    json: bool,
 }
 
 #[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
@@ -186,26 +207,6 @@ struct WatchArgs {
     /// Stop after N windows; omit to run until interrupted
     #[arg(long, value_name = "N", value_parser = parse_count_value)]
     count: Option<u32>,
-    /// Emit one compact JSON object per window
-    #[arg(long)]
-    json: bool,
-}
-
-impl From<HuntArgs> for HuntOptions {
-    fn from(args: HuntArgs) -> Self {
-        Self {
-            duration_ms: args.duration,
-            output: output_format(args.json),
-        }
-    }
-}
-
-impl From<CapabilitiesArgs> for CapabilitiesOptions {
-    fn from(args: CapabilitiesArgs) -> Self {
-        Self {
-            output: output_format(args.json),
-        }
-    }
 }
 
 impl From<RecordArgs> for RecordOptions {
@@ -223,15 +224,6 @@ impl From<RecordArgs> for RecordOptions {
     }
 }
 
-impl From<ReplayArgs> for ReplayOptions {
-    fn from(args: ReplayArgs) -> Self {
-        Self {
-            input: args.path,
-            output: output_format(args.json),
-        }
-    }
-}
-
 impl From<RedactArgs> for RedactOptions {
     fn from(args: RedactArgs) -> Self {
         Self {
@@ -242,28 +234,39 @@ impl From<RedactArgs> for RedactOptions {
     }
 }
 
-impl From<WatchArgs> for WatchOptions {
-    fn from(args: WatchArgs) -> Self {
-        Self {
-            interval_ms: args.interval,
-            count: args.count,
-            output: output_format(args.json),
-        }
-    }
-}
-
 impl Cli {
     pub fn into_command(self) -> Command {
+        let output = output_format(self.json);
+        let style = TextStyle {
+            explain: self.explain,
+            color: style::color_enabled(self.no_color),
+            unicode: style::unicode_enabled(),
+        };
         match self.command {
             None => Command::Hunt(HuntOptions {
                 duration_ms: DEFAULT_HUNT_DURATION_MS,
-                output: OutputFormat::Text,
+                output,
+                style,
             }),
-            Some(Commands::Hunt(args)) => Command::Hunt(args.into()),
-            Some(Commands::Watch(args)) => Command::Watch(args.into()),
-            Some(Commands::Capabilities(args)) => Command::Capabilities(args.into()),
+            Some(Commands::Hunt(args)) => Command::Hunt(HuntOptions {
+                duration_ms: args.duration,
+                output,
+                style,
+            }),
+            Some(Commands::Watch(args)) => Command::Watch(WatchOptions {
+                interval_ms: args.interval,
+                count: args.count,
+                output,
+            }),
+            Some(Commands::Capabilities(_)) => {
+                Command::Capabilities(CapabilitiesOptions { output })
+            }
             Some(Commands::Record(args)) => Command::Record(args.into()),
-            Some(Commands::Replay(args)) => Command::Replay(args.into()),
+            Some(Commands::Replay(args)) => Command::Replay(ReplayOptions {
+                input: args.path,
+                output,
+                style,
+            }),
             Some(Commands::Redact(args)) => Command::Redact(args.into()),
             Some(Commands::Completions { shell }) => Command::Completions(shell),
             Some(Commands::Version) => Command::Version,
@@ -399,24 +402,25 @@ mod tests {
 
     #[test]
     fn no_arguments_defaults_to_hunt() {
-        assert_eq!(
-            expect_parse(["stallhunt"]),
-            Command::Hunt(HuntOptions {
-                duration_ms: DEFAULT_HUNT_DURATION_MS,
-                output: OutputFormat::Text,
-            })
-        );
+        match expect_parse(["stallhunt"]) {
+            Command::Hunt(options) => {
+                assert_eq!(options.duration_ms, DEFAULT_HUNT_DURATION_MS);
+                assert_eq!(options.output, OutputFormat::Text);
+                assert!(!options.style.explain);
+            }
+            other => panic!("expected hunt, got {other:?}"),
+        }
     }
 
     #[test]
     fn hunt_uses_documented_defaults() {
-        assert_eq!(
-            expect_parse(["stallhunt", "hunt"]),
-            Command::Hunt(HuntOptions {
-                duration_ms: DEFAULT_HUNT_DURATION_MS,
-                output: OutputFormat::Text,
-            })
-        );
+        match expect_parse(["stallhunt", "hunt"]) {
+            Command::Hunt(options) => {
+                assert_eq!(options.duration_ms, DEFAULT_HUNT_DURATION_MS);
+                assert_eq!(options.output, OutputFormat::Text);
+            }
+            other => panic!("expected hunt, got {other:?}"),
+        }
     }
 
     #[test]
@@ -427,25 +431,25 @@ mod tests {
             ("1.5s", 1_500),
             ("1m", 60_000),
         ] {
-            assert_eq!(
-                expect_parse(["stallhunt", "hunt", "--json", "--duration", value]),
-                Command::Hunt(HuntOptions {
-                    duration_ms: expected_ms,
-                    output: OutputFormat::Json,
-                })
-            );
+            match expect_parse(["stallhunt", "hunt", "--json", "--duration", value]) {
+                Command::Hunt(options) => {
+                    assert_eq!(options.duration_ms, expected_ms);
+                    assert_eq!(options.output, OutputFormat::Json);
+                }
+                other => panic!("expected hunt, got {other:?}"),
+            }
         }
     }
 
     #[test]
     fn hunt_accepts_duration_equals_syntax() {
-        assert_eq!(
-            expect_parse(["stallhunt", "hunt", "--duration=750ms"]),
-            Command::Hunt(HuntOptions {
-                duration_ms: 750,
-                output: OutputFormat::Text,
-            })
-        );
+        match expect_parse(["stallhunt", "hunt", "--duration=750ms"]) {
+            Command::Hunt(options) => {
+                assert_eq!(options.duration_ms, 750);
+                assert_eq!(options.output, OutputFormat::Text);
+            }
+            other => panic!("expected hunt, got {other:?}"),
+        }
     }
 
     #[test]
@@ -489,36 +493,51 @@ mod tests {
 
     #[test]
     fn unknown_commands_and_options_are_errors() {
-        assert!(parse(["stallhunt", "explain"]).is_err());
+        assert!(parse(["stallhunt", "verbose"]).is_err());
         assert!(parse(["stallhunt", "hunt", "--verbose"]).is_err());
         assert!(parse(["stallhunt", "capabilities", "extra"]).is_err());
     }
 
     #[test]
+    fn explain_and_no_color_are_global_flags() {
+        match expect_parse(["stallhunt", "--explain", "--no-color"]) {
+            Command::Hunt(options) => {
+                assert!(options.style.explain);
+                assert!(!options.style.color);
+            }
+            other => panic!("expected hunt, got {other:?}"),
+        }
+        match expect_parse(["stallhunt", "hunt", "--explain"]) {
+            Command::Hunt(options) => assert!(options.style.explain),
+            other => panic!("expected hunt, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn watch_uses_documented_defaults_and_bounds() {
-        assert_eq!(
-            expect_parse(["stallhunt", "watch"]),
-            Command::Watch(WatchOptions {
-                interval_ms: DEFAULT_WATCH_INTERVAL_MS,
-                count: None,
-                output: OutputFormat::Text,
-            })
-        );
-        assert_eq!(
-            expect_parse([
-                "stallhunt",
-                "watch",
-                "--json",
-                "--interval",
-                "1s",
-                "--count=3"
-            ]),
-            Command::Watch(WatchOptions {
-                interval_ms: 1_000,
-                count: Some(3),
-                output: OutputFormat::Json,
-            })
-        );
+        match expect_parse(["stallhunt", "watch"]) {
+            Command::Watch(options) => {
+                assert_eq!(options.interval_ms, DEFAULT_WATCH_INTERVAL_MS);
+                assert_eq!(options.count, None);
+                assert_eq!(options.output, OutputFormat::Text);
+            }
+            other => panic!("expected watch, got {other:?}"),
+        }
+        match expect_parse([
+            "stallhunt",
+            "watch",
+            "--json",
+            "--interval",
+            "1s",
+            "--count=3",
+        ]) {
+            Command::Watch(options) => {
+                assert_eq!(options.interval_ms, 1_000);
+                assert_eq!(options.count, Some(3));
+                assert_eq!(options.output, OutputFormat::Json);
+            }
+            other => panic!("expected watch, got {other:?}"),
+        }
         assert!(parse(["stallhunt", "watch", "--count", "0"]).is_err());
         assert!(parse(["stallhunt", "watch", "--interval", "1s", "--interval=2s"]).is_err());
     }
@@ -548,13 +567,13 @@ mod tests {
     #[test]
     fn replay_and_redact_require_paths() {
         assert!(parse(["stallhunt", "replay"]).is_err());
-        assert_eq!(
-            expect_parse(["stallhunt", "replay", "--json", "incident.json"]),
-            Command::Replay(ReplayOptions {
-                input: PathBuf::from("incident.json"),
-                output: OutputFormat::Json,
-            })
-        );
+        match expect_parse(["stallhunt", "replay", "--json", "incident.json"]) {
+            Command::Replay(options) => {
+                assert_eq!(options.input, PathBuf::from("incident.json"));
+                assert_eq!(options.output, OutputFormat::Json);
+            }
+            other => panic!("expected replay, got {other:?}"),
+        }
         assert_eq!(
             expect_parse([
                 "stallhunt",
