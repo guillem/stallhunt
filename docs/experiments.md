@@ -467,6 +467,70 @@ No controlled live scoped-thrashing result exists. Do not substitute
 unconstrained host pressure; any live follow-up requires a caller-owned,
 bounded delegated cgroup setup.
 
+## EXP-0009: Milestone 9 interface feedback round, first pass
+
+Date: 2026-08-23. Commit: (worktree `stallhunt-qwen`, follows the Milestone 9
+commit; see `docs/status.md`). Host: workstation with 8 logical CPUs, Linux
+7.1.5, two cgroup2 mounts (`/sys/fs/cgroup` and a `bpftune` mount at
+`/run/bpftune/cgroupv2`), ~876 visible tasks. The `stallhunt` 0.2.0 debug
+binary.
+
+### Question
+
+What does the redesigned interface (compact default hunt text, `--explain`,
+watch TUI, watch classic fallback) actually look like on a real host, and where
+does it mislead or confuse a first-time user?
+
+### Setup
+
+Exercised every documented path on the live host: bare `stallhunt` (compact),
+`stallhunt hunt --explain`, `hunt --json`, `watch` TUI (via a pseudo-TTY with
+key injection for `?`, `Esc`, `e`, `q`), `watch --no-tui`, `watch --json`,
+`TERM=dumb` fallback, `NO_COLOR`, single- and double-SIGINT drain, and a
+`record` → `replay --explain` → `redact` → `replay` round trip.
+
+### Result
+
+All paths worked; no crashes or contract regressions. The TUI rendered a live
+`[NEW] I/O io_pressure low 1.34%` lifecycle row, the details pane, and the help
+overlay; single Ctrl-C drained with a visible `draining:` header state and exit
+0, double Ctrl-C exited 130 with the terminal restored. Three first-pass
+findings were folded into the interface in this same session:
+
+1. `stallhunt --explain` (and `--json`/`--duration`) failed on the bare default
+   hunt, despite the compact footer directing users to `--explain`. Fixed: the
+   bare invocation accepts all three hunt options; combining them with an
+   explicit subcommand is an error (exit 2).
+2. The TUI footer said `Ctrl-C ... (second exits now)`; `second` was cryptic.
+   Fixed: `Ctrl-C: 1st drains, 2nd exits now`.
+3. When cgroup v2 collection failed (ambiguous mount on this host), hunt text
+   was honest but watch — TUI, classic text, and JSON — printed `no scoped
+   pressure ranked this window`, presenting absence of evidence as evidence of
+   absence. Fixed: watch now reports `scoped cgroup assessment unavailable
+   (cgroup v2 discovery or collection failed.)` in the TUI panel and classic
+   text and adds `current.cgroup_unavailable_reason` to watch JSON.
+
+Coverage after the fixes: 172 unit tests (up from 166), 15 CLI tests, three
+replay-fixture tests; formatting and locked-offline Clippy with `-D warnings`
+pass.
+
+### Conclusion
+
+The interface is usable end to end and now distinguishes "no scoped pressure"
+from "scoped assessment unavailable" in every watch surface. This is one
+self-review pass; real-user feedback on density, colors, and key bindings is
+still required before the 0.2.0 release decision.
+
+### Follow-up
+
+- Have local users compare TUI vs `--no-tui` vs v0.1.x and record what
+  confuses or convinces them; fold results into the 0.2.0 release decision.
+- Exercise the scoped cgroup panels on a host where cgroup collection
+  succeeds (the bpftune host cannot).
+- Re-examine the `hunt --json` `status: incomplete` wording for hosts where
+  only cgroup collection failed; the capability message is present but the
+  overall status does not name the failing slice.
+
 ## Deterministic negative coverage
 
 Busy-but-not-pressured avoidance is deterministic normalized analyzer coverage,

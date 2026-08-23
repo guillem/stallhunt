@@ -297,6 +297,17 @@ pub fn cgroup_capability_from_observation(observation: &CgroupObservation) -> Cg
     }
 }
 
+/// Maps a collection error to the capability category that best describes it.
+/// Used by `capabilities`, `hunt`, and `watch` so every renderer explains a
+/// failed cgroup collection with the same wording.
+pub fn cgroup_capability_from_error(error: &CgroupError) -> CgroupCapability {
+    match error {
+        CgroupError::Unsupported => CgroupCapability::Unsupported,
+        CgroupError::PermissionDenied => CgroupCapability::PermissionDenied,
+        _ => CgroupCapability::Failed,
+    }
+}
+
 fn collection_is_partial(issues: &CgroupCollectionIssues) -> bool {
     issues.process_enumeration_failed
         || issues.process_enumeration_errors != 0

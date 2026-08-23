@@ -4,7 +4,7 @@ Last updated: 2026-08-23
 
 ## Current milestone
 
-**Milestone 9 — interface redesign implemented, pending local user feedback**
+**Milestone 9 — interface redesign implemented; first feedback pass folded in, real-user round pending**
 
 Field feedback on v0.1.x was that default `hunt` output reads like a wall of
 text and `watch` looks primitive next to `htop`/`btop`, while the explanatory
@@ -23,9 +23,15 @@ touching collection or inference:
   (ADR-0008 remains in force except for its superseded presentation clause).
 - `NO_COLOR` disables TUI colors; severity words are always rendered so color
   never carries meaning alone.
+- The bare `stallhunt` default hunt now accepts `--duration`, `--json`, and
+  `--explain` (passing them with an explicit subcommand is an error, exit 2).
+- When scoped cgroup collection fails, watch — TUI panel, classic text, and
+  JSON — says `scoped cgroup assessment unavailable` with the capability
+  reason instead of `no scoped pressure ranked this window`.
 - Version is bumped to 0.2.0 in `Cargo.toml`; nothing is tagged or released
-  yet. Local users will test the redesign on this worktree and provide
-  feedback before the release decision.
+  yet. A first self-review feedback pass (EXP-0009) found and fixed the three
+  items above; local users will still test the redesign on this worktree and
+  provide feedback before the release decision.
 
 Milestones 1–6 remain functionally complete; M8's two chain slices and M5
 recording/replay are unchanged. The repository remains parked for additional
@@ -74,11 +80,13 @@ the hierarchy.
   Coincident PSI without that independent mechanism does not create a chain.
   Confidence is never high. Host findings are not linked to cgroup findings.
   Watch does not track chain identities.
-- **M9 implemented, unvalidated by users:** compact default text, `--explain`,
-  and the watch TUI are implemented with deterministic fixture and
-  `TestBackend` coverage and a pseudo-TTY smoke run. Real-user feedback and the
-  0.2.0 release decision are pending. The TUI is presentation-only: no new
-  collectors, inference, or identities.
+- **M9 implemented, first feedback pass incorporated:** compact default text,
+  `--explain`, and the watch TUI are implemented with deterministic fixture and
+  `TestBackend` coverage and a pseudo-TTY smoke run. EXP-0009 records the first
+  feedback pass (bare-invocation `--explain`/`--json`/`--duration`, footer
+  wording, and the watch cgroup-unavailable distinction) with fixes folded in.
+  Real-user feedback and the 0.2.0 release decision are still pending. The TUI
+  is presentation-only: no new collectors, inference, or identities.
 - **M7 not started; remaining M8 chains not started:** no eBPF probe exists,
   and no CPU–I/O, host–cgroup, or process-device chain exists.
 
@@ -274,7 +282,9 @@ the hierarchy.
   compact layout is a projection of analyzer output: it adds no claims,
   thresholds, or categories. Golden fixtures cover compact contention and the
   explained layout; structural tests cover healthy, unavailable, insufficient,
-  multi-resource, scoped, and chain cases.
+  multi-resource, scoped, and chain cases. The bare `stallhunt` default hunt
+  accepts `--duration`, `--json`, and `--explain`; combining them with an
+  explicit subcommand is an error (exit 2, CLI and integration tested).
 - M9 renders `watch` as a ratatui/crossterm full-screen TUI on terminals
   (stdout is a TTY, `TERM` is not `dumb`, terminal size available, no
   `--no-tui`): header with window/interval/drain state, host PSI gauges, the
@@ -288,7 +298,11 @@ the hierarchy.
   always accompany color. On setup failure watch falls back to the classic
   text renderer; piped text and `--json` are unchanged. Deterministic
   `TestBackend` tests cover the panels, overlays, empty/first-window states,
-  and too-small-terminal degradation.
+  and too-small-terminal degradation. When scoped cgroup collection fails for
+  a window, the scoped panel and classic text report `scoped cgroup
+  assessment unavailable` with the capability reason, and watch JSON adds
+  `current.cgroup_unavailable_reason`; an empty scoped panel is never shown
+  as proof that no scoped pressure exists.
 - Cargo formatting, Clippy, and test quality gates are documented.
 
 ## Known limitations
@@ -349,8 +363,9 @@ the hierarchy.
   immediately. Consecutive 100 ms windows remain smoke observations, same as
   hunt.
 - The watch TUI is presentation-only and has not been validated by real users
-  yet; the 0.2.0 release is deliberately not tagged. Table columns can
-  truncate long cgroup paths on narrow terminals (the details pane and
+  yet; the 0.2.0 release is deliberately not tagged. EXP-0009 is a first
+  self-review pass only. Table columns can truncate long cgroup paths on
+  narrow terminals (the details pane and
   `hunt --explain` carry the full strings). Terminal restore on the immediate
   second-SIGINT path is best-effort because the handler exits the process
   directly. The TUI depends on ratatui 0.29/crossterm 0.28 because ratatui
@@ -382,10 +397,14 @@ additional M8 chain or M7 probe is approved.
 
 Interface feedback loop (current priority):
 
-- local users test the redesigned interface on real hosts, comparing the TUI
-  against `--no-tui` classic text and v0.1.x behavior;
-- collect feedback on compact default density, `--explain` discoverability,
-  TUI panel layout, colors, and key bindings;
+- a first self-review feedback pass (EXP-0009) found three issues that were
+  folded in: bare `stallhunt --explain`/`--json`/`--duration` now work, the
+  TUI footer Ctrl-C wording is clearer, and watch no longer claims "no scoped
+  pressure" when cgroup collection failed;
+- local users still need to test the redesigned interface on real hosts,
+  comparing the TUI against `--no-tui` classic text and v0.1.x behavior;
+- collect remaining feedback on compact default density, TUI panel layout,
+  colors, and key bindings;
 - decide the 0.2.0 release (tag) after feedback is incorporated.
 
 Diagnostic and attribution gaps:
@@ -435,12 +454,17 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Run the local user feedback round for the Milestone 9 interface: have users
-compare `stallhunt`, `stallhunt hunt --explain`, `stallhunt watch`, and
+Continue the local user feedback round for the Milestone 9 interface: have
+users compare `stallhunt`, `stallhunt hunt --explain`, `stallhunt watch`, and
 `stallhunt watch --no-tui` on real hosts, record what confuses or convinces
-them, and fold the results into the 0.2.0 release decision. Do not start
-Milestone 7 unless a concrete diagnostic question cannot be answered with
-current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain
+them, and fold the results into the 0.2.0 release decision. The first
+self-review pass (EXP-0009) is done: bare-invocation `--explain`/`--json`/
+`--duration`, the footer wording, and the watch cgroup-unavailable distinction
+are fixed and committed on `stallhunt-qwen`. Remaining feedback is about
+real-user reactions to density, colors, and key bindings, plus a host where
+scoped cgroup collection succeeds so the cgroup panels can be seen live. Do
+not start Milestone 7 unless a concrete diagnostic question cannot be answered
+with current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain
 unless independent linking evidence already exists; do not treat coincident
 PSI as a path, and do not link host findings to cgroup findings.
 
@@ -534,7 +558,10 @@ Decided in ADR-0013 (2026-08-23, closes the open "color/terminal crate" item):
 Decided in ADR-0014:
 
 - compact verdict-first default text for hunt/replay, full report behind
-  `--explain`, JSON unchanged.
+  `--explain`, JSON unchanged;
+- the bare default hunt accepts the same `--duration`/`--json`/`--explain`
+  options as `hunt` (folded in from the EXP-0009 feedback pass; combining
+  them with an explicit subcommand is an error).
 
 Decided in ADR-0012:
 
@@ -548,6 +575,34 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-23, the Milestone 9 feedback round's first pass (EXP-0009) was run
+and folded in on the `stallhunt-qwen` worktree. The redesigned interface was
+exercised live on an 8-CPU Linux 7.1.5 host with two cgroup2 mounts (the
+`bpftune` second mount exercises the ambiguous-mount path): compact default
+hunt, `hunt --explain`, `hunt --json`, watch TUI (via a pseudo-TTY with key
+injection for `?`, `Esc`, `e`, `q`), `watch --no-tui`, `watch --json`,
+`TERM=dumb` fallback, `NO_COLOR`, single- and double-SIGINT drain, and a
+`record` → `replay --explain` → `redact` → `replay` round trip. The TUI
+rendered a live `[NEW] I/O io_pressure low` lifecycle row; single Ctrl-C
+drained with a visible `draining:` header and exit 0; double Ctrl-C exited
+130 with the terminal restored. Three findings were fixed in the same pass:
+bare `stallhunt` now accepts `--duration`/`--json`/`--explain`, the TUI
+footer says `Ctrl-C: 1st drains, 2nd exits now`, and watch reports `scoped
+cgroup assessment unavailable (cgroup v2 discovery or collection failed.)`
+instead of claiming no scoped pressure. Formatting, locked-offline Clippy with
+`-D warnings`, and the full default test gates passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
+
+The gate ran 172 unit tests (all passed, one fixture writer ignored), 15 CLI
+tests, and three replay-fixture tests, plus the ignored opt-in Linux
+acceptance tests. Real-user feedback and the 0.2.0 release decision remain
+pending.
 
 On 2026-08-23, the Milestone 9 interface redesign was implemented and
 validated. Default `hunt`/`replay` text became compact and verdict-first with

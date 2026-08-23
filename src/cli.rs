@@ -96,11 +96,27 @@ impl std::error::Error for CliError {}
     name = "stallhunt",
     version,
     about = "Linux performance triage that reports evidence-backed bottlenecks",
-    after_help = "Run `stallhunt` with no subcommand for a default 10s hunt.\nUse `stallhunt completions <SHELL>` to generate shell completions."
+    after_help = "Run `stallhunt` with no subcommand for a default 10s hunt (accepts --duration, --json, and --explain).\nUse `stallhunt completions <SHELL>` to generate shell completions."
 )]
 pub struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+    /// Options for the default hunt; used only when no subcommand is given.
+    #[command(flatten)]
+    default_hunt: DefaultHuntArgs,
+}
+
+#[derive(clap::Args, Debug, Clone, Default, PartialEq, Eq)]
+struct DefaultHuntArgs {
+    /// Observation duration from 100ms to 5m (default hunt only)
+    #[arg(long, value_name = "DURATION", value_parser = parse_duration_value)]
+    duration: Option<u64>,
+    /// Emit machine-readable JSON (default hunt only)
+    #[arg(long)]
+    json: bool,
+    /// Show the full evidence, qualifiers, and timing details (default hunt only)
+    #[arg(long)]
+    explain: bool,
 }
 
 #[derive(Subcommand)]
@@ -268,22 +284,34 @@ impl From<WatchArgs> for WatchOptions {
 }
 
 impl Cli {
-    pub fn into_command(self) -> Command {
-        match self.command {
-            None => Command::Hunt(HuntOptions {
-                duration_ms: DEFAULT_HUNT_DURATION_MS,
-                output: OutputFormat::Text,
-                explain: false,
-            }),
-            Some(Commands::Hunt(args)) => Command::Hunt(args.into()),
-            Some(Commands::Watch(args)) => Command::Watch(args.into()),
-            Some(Commands::Capabilities(args)) => Command::Capabilities(args.into()),
-            Some(Commands::Record(args)) => Command::Record(args.into()),
-            Some(Commands::Replay(args)) => Command::Replay(args.into()),
-            Some(Commands::Redact(args)) => Command::Redact(args.into()),
-            Some(Commands::Completions { shell }) => Command::Completions(shell),
-            Some(Commands::Version) => Command::Version,
+    pub fn try_into_command(self) -> Result<Command, CliError> {
+        if self.command.is_some() && self.default_hunt_used() {
+            return Err(CliError::new(
+                "--duration, --json, and --explain apply only to the default hunt; pass them after `stallhunt hunt`",
+            ));
         }
+        match self.command {
+            None => Ok(Command::Hunt(HuntOptions {
+                duration_ms: self
+                    .default_hunt
+                    .duration
+                    .unwrap_or(DEFAULT_HUNT_DURATION_MS),
+                output: output_format(self.default_hunt.json),
+                explain: self.default_hunt.explain,
+            })),
+            Some(Commands::Hunt(args)) => Ok(Command::Hunt(args.into())),
+            Some(Commands::Watch(args)) => Ok(Command::Watch(args.into())),
+            Some(Commands::Capabilities(args)) => Ok(Command::Capabilities(args.into())),
+            Some(Commands::Record(args)) => Ok(Command::Record(args.into())),
+            Some(Commands::Replay(args)) => Ok(Command::Replay(args.into())),
+            Some(Commands::Redact(args)) => Ok(Command::Redact(args.into())),
+            Some(Commands::Completions { shell }) => Ok(Command::Completions(shell)),
+            Some(Commands::Version) => Ok(Command::Version),
+        }
+    }
+
+    fn default_hunt_used(&self) -> bool {
+        self.default_hunt.duration.is_some() || self.default_hunt.json || self.default_hunt.explain
     }
 }
 
@@ -305,7 +333,10 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    Cli::try_parse_from(arguments).map(Cli::into_command)
+    let cli = Cli::try_parse_from(arguments)?;
+    cli.try_into_command().map_err(|error| {
+        clap::Error::raw(clap::error::ErrorKind::ArgumentConflict, error.to_string())
+    })
 }
 
 fn parse_duration_value(value: &str) -> Result<u64, String> {
@@ -423,6 +454,52 @@ mod tests {
                 explain: false,
             })
         );
+    }
+
+    #[test]
+    fn default_hunt_accepts_explain_json_and_duration() {
+        assert_eq!(
+            expect_parse(["stallhunt", "--explain"]),
+            Command::Hunt(HuntOptions {
+                duration_ms: DEFAULT_HUNT_DURATION_MS,
+                output: OutputFormat::Text,
+                explain: true,
+            })
+        );
+        assert_eq!(
+            expect_parse(["stallhunt", "--json", "--duration", "500ms"]),
+            Command::Hunt(HuntOptions {
+                duration_ms: 500,
+                output: OutputFormat::Json,
+                explain: false,
+            })
+        );
+        assert_eq!(
+            expect_parse(["stallhunt", "--duration=1.5s", "--explain"]),
+            Command::Hunt(HuntOptions {
+                duration_ms: 1_500,
+                output: OutputFormat::Text,
+                explain: true,
+            })
+        );
+    }
+
+    #[test]
+    fn default_hunt_flags_reject_a_subcommand() {
+        for arguments in [
+            vec!["stallhunt", "--explain", "hunt"],
+            vec!["stallhunt", "--json", "watch"],
+            vec![
+                "stallhunt",
+                "--duration",
+                "1s",
+                "record",
+                "--output",
+                "x.json",
+            ],
+        ] {
+            assert!(parse(arguments.clone()).is_err(), "{arguments:?}");
+        }
     }
 
     #[test]

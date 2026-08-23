@@ -13,12 +13,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `watch --no-tui` forces the classic refreshing text renderer on a terminal.
 - The watch TUI honors `NO_COLOR`; severity words are always rendered so color never carries meaning alone.
 - Deterministic ratatui `TestBackend` render tests for the TUI and golden fixtures for both compact and explained text layouts.
+- Bare `stallhunt` (default hunt) now accepts `--duration`, `--json`, and `--explain`; passing them together with an explicit subcommand is an error.
+- When scoped cgroup collection fails for a watch window, the TUI scoped panel, classic text, and JSON report `scoped cgroup assessment unavailable` with the capability reason instead of claiming no scoped pressure.
 
 ### Changed
 
 - Default `hunt`/`replay` text output is now compact and verdict-first: one headline, one line per host resource with verdict/severity/PSI, leading affected/suspect candidates, prominent scoped pressure, related-evidence lines, and a footer pointing at `--explain`/`--json` (ADR-0014). Scripts parsing the old default text should switch to `--explain` or `--json`.
 - `watch` automatically falls back to classic text when stdout is not a terminal, `TERM=dumb`, `--no-tui` is passed, or terminal setup fails.
 - ADR-0008's presentation clause is superseded by ADR-0013; its lifecycle, history, JSON-stream, and SIGINT contracts are unchanged.
+- The watch TUI footer wording now reads `Ctrl-C: 1st drains, 2nd exits now` (was `(second exits now)`).
 
 ## [0.1.2] - 2026-08-23
 

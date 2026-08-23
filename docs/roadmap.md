@@ -287,8 +287,9 @@ Avoid overclaiming causality.
 
 ## Milestone 9 — Interface redesign
 
-Status: implementation complete on the `stallhunt-qwen` worktree; pending
-local user feedback before release. Not yet tagged or released.
+Status: implementation complete on the `stallhunt-qwen` worktree; the first
+feedback pass (EXP-0009) is folded in, real-user feedback is still pending
+before release. Not yet tagged or released.
 
 Goal:
 

@@ -68,8 +68,13 @@ opt-in Linux acceptance tests unchanged. Man page renders.
 ## What remains
 
 1. Commit is staged on `stallhunt-qwen` — do NOT push or open a PR yet.
-2. Local user feedback round on the redesigned interface (compare TUI vs
-   `--no-tui` vs v0.1.x). Record feedback in `docs/experiments.md` or status.
+2. The first feedback pass (EXP-0009) is done and folded in: bare
+   `stallhunt` accepts `--duration`/`--json`/`--explain`; the TUI footer says
+   `Ctrl-C: 1st drains, 2nd exits now`; watch reports scoped cgroup
+   collection as unavailable instead of claiming no pressure. Real local-user
+   feedback on density, colors, and key bindings is still required (compare
+   TUI vs `--no-tui` vs v0.1.x), ideally on a host where cgroup collection
+   succeeds so the scoped panels can be seen live.
 3. After feedback: finalize wording/layout, then decide the 0.2.0 tag/release.
 4. Remove this handoff file (or fold into `status.md`) when M9 ships.
 

@@ -22,6 +22,11 @@ Bare `stallhunt` runs a default 10-second hunt. Equivalent explicit form:
 stallhunt hunt
 ```
 
+The bare invocation accepts the same options as `hunt`: `--duration`, `--json`,
+and `--explain` apply to the default hunt (`stallhunt --explain` shows the full
+explanatory report). Passing them together with an explicit subcommand is an
+error (`error: ... apply only to the default hunt`).
+
 Defaults:
 
 - bounded observation,
@@ -227,6 +232,11 @@ M9 redesigns the interface (ADR-0013, ADR-0014):
   setup fails.
 - Color reinforces severity in the TUI but never carries meaning alone;
   `NO_COLOR` disables it. Hunt text output stays uncolored.
+- When scoped cgroup collection fails for a window, the TUI scoped panel and
+  classic text say `scoped cgroup assessment unavailable` with the capability
+  reason instead of `no scoped pressure ranked this window`; watch JSON adds
+  `current.cgroup_unavailable_reason`. Absence of scoped findings is never
+  presented as proof that no scoped pressure exists.
 - SIGINT semantics are unchanged: the first SIGINT or Ctrl-C drains the
   in-flight window, the second terminates immediately with status 130. The TUI
   restores the terminal on both paths (best-effort on the immediate path).

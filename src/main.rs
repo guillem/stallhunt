@@ -30,7 +30,15 @@ fn main() -> ExitCode {
         }
     };
 
-    match execute(cli.into_command()) {
+    let command = match cli.try_into_command() {
+        Ok(command) => command,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    match execute(command) {
         Ok(output) => write_stdout(&output),
         Err(error) => {
             eprintln!("error: {error}");

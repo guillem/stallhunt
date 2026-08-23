@@ -125,6 +125,11 @@ pub struct WindowSignals {
     pub observed_cgroup_paths: BTreeSet<String>,
     pub ranking_omitted_cgroup_ids: BTreeSet<FindingId>,
     pub cgroup_tracking_capped: bool,
+    /// Set when scoped cgroup collection failed for this window; the value is
+    /// the shared capability explanation. `None` means collection succeeded
+    /// (or was not attempted for an injected fixture). Never show an empty
+    /// scoped panel as proof that no scoped pressure exists.
+    pub cgroup_unavailable_reason: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -554,7 +559,11 @@ fn watch_text(window: &WatchWindow, refresh: bool) -> String {
         .filter(|(_, signal)| signal.status == ObservationStatus::Pressure)
         .take(8)
         .collect();
-    if cgroup_pressure.is_empty() {
+    if let Some(reason) = window.current.cgroup_unavailable_reason {
+        output.push_str(&format!(
+            "  Cgroup   scoped cgroup assessment unavailable ({reason})\n"
+        ));
+    } else if cgroup_pressure.is_empty() {
         output.push_str("  Cgroup   no scoped pressure ranked this window\n");
     } else {
         for (id, signal) in cgroup_pressure {
@@ -634,6 +643,7 @@ fn watch_json(window: &WatchWindow) -> Result<String, serde_json::Error> {
             io: &window.current.io,
             cgroups: current_cgroups,
             cgroup_tracking_capped: window.current.cgroup_tracking_capped,
+            cgroup_unavailable_reason: window.current.cgroup_unavailable_reason,
         },
         history: &window.history,
     };
@@ -660,6 +670,8 @@ struct CurrentJson<'a> {
     io: &'a ResourceSignal,
     cgroups: Vec<CgroupCurrentJson<'a>>,
     cgroup_tracking_capped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cgroup_unavailable_reason: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -748,6 +760,7 @@ pub fn signals_from_observation(observation: &HuntObservation) -> WindowSignals 
         observed_cgroup_paths: cgroup_signals.observed_cgroup_paths,
         ranking_omitted_cgroup_ids: cgroup_signals.ranking_omitted_cgroup_ids,
         cgroup_tracking_capped: cgroup_signals.capped,
+        cgroup_unavailable_reason: cgroup_signals.unavailable_reason,
     }
 }
 
@@ -870,6 +883,7 @@ struct CgroupSignalBundle {
     observed_cgroup_paths: BTreeSet<String>,
     ranking_omitted_cgroup_ids: BTreeSet<FindingId>,
     capped: bool,
+    unavailable_reason: Option<&'static str>,
 }
 
 fn cgroup_signals(observation: &HuntObservation) -> CgroupSignalBundle {
@@ -879,7 +893,14 @@ fn cgroup_signals(observation: &HuntObservation) -> CgroupSignalBundle {
             observed_cgroup_paths: BTreeSet::new(),
             ranking_omitted_cgroup_ids: BTreeSet::new(),
             capped: false,
+            unavailable_reason: None,
         };
+    };
+    let unavailable_reason = match &cgroup.observation {
+        Ok(_) => None,
+        Err(error) => Some(crate::cgroup::cgroup_capability_explanation(
+            crate::cgroup::cgroup_capability_from_error(error),
+        )),
     };
     let Ok(cgroup) = cgroup.observation.as_ref() else {
         return CgroupSignalBundle {
@@ -887,6 +908,7 @@ fn cgroup_signals(observation: &HuntObservation) -> CgroupSignalBundle {
             observed_cgroup_paths: BTreeSet::new(),
             ranking_omitted_cgroup_ids: BTreeSet::new(),
             capped: false,
+            unavailable_reason,
         };
     };
     let observed_cgroup_paths = cgroup
@@ -917,6 +939,7 @@ fn cgroup_signals(observation: &HuntObservation) -> CgroupSignalBundle {
         observed_cgroup_paths,
         ranking_omitted_cgroup_ids,
         capped,
+        unavailable_reason,
     }
 }
 
@@ -1027,6 +1050,7 @@ mod tests {
             observed_cgroup_paths: BTreeSet::new(),
             ranking_omitted_cgroup_ids: BTreeSet::new(),
             cgroup_tracking_capped: false,
+            cgroup_unavailable_reason: None,
         }
     }
 
@@ -1307,6 +1331,83 @@ mod tests {
         assert_eq!(json["lifecycle"][0]["state"], "new");
         assert_eq!(json["lifecycle"][0]["id"]["scope"], "cpu");
         assert_eq!(json["current"]["cpu"]["status"], "pressure");
+    }
+
+    #[test]
+    fn watch_text_distinguishes_unavailable_cgroup_collection_from_no_pressure() {
+        let options = WatchOptions {
+            interval_ms: 2_000,
+            count: Some(1),
+            output: OutputFormat::Text,
+            no_tui: false,
+        };
+        let mut window = WatchTracker::new().ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        window.count = Some(1);
+        window.interval_ms = 2_000;
+        let healthy_text = render_window(&options, &window, false).expect("text");
+        assert!(healthy_text.contains("no scoped pressure ranked this window"));
+
+        window.current.cgroup_unavailable_reason =
+            Some(crate::cgroup::cgroup_capability_explanation(
+                crate::cgroup::CgroupCapability::Unsupported,
+            ));
+        let unavailable_text = render_window(&options, &window, false).expect("text");
+        assert!(unavailable_text.contains("scoped cgroup assessment unavailable"));
+        assert!(!unavailable_text.contains("no scoped pressure ranked this window"));
+    }
+
+    #[test]
+    fn watch_json_reports_cgroup_collection_unavailable_when_collection_failed() {
+        let options = WatchOptions {
+            interval_ms: 2_000,
+            count: Some(1),
+            output: OutputFormat::Json,
+            no_tui: false,
+        };
+        let mut window = WatchTracker::new().ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        window.count = Some(1);
+        window.interval_ms = 2_000;
+        let available_json: serde_json::Value =
+            serde_json::from_str(&render_window(&options, &window, false).expect("json")).unwrap();
+        assert!(available_json["current"]["cgroup_unavailable_reason"].is_null());
+
+        window.current.cgroup_unavailable_reason =
+            Some(crate::cgroup::cgroup_capability_explanation(
+                crate::cgroup::CgroupCapability::Unsupported,
+            ));
+        let unavailable_json: serde_json::Value =
+            serde_json::from_str(&render_window(&options, &window, false).expect("json")).unwrap();
+        assert_eq!(
+            unavailable_json["current"]["cgroup_unavailable_reason"],
+            "no usable cgroup v2 mount was discovered."
+        );
+    }
+
+    #[test]
+    fn cgroup_collection_error_surfaces_as_unavailable_reason_in_signals() {
+        let observation = crate::observe::HuntObservation {
+            psi: Err(crate::psi::CpuPsiError::Unreadable),
+            cpu: Err(crate::cpu::CpuError::Unreadable),
+            memory: None,
+            io: None,
+            cgroup: Some(crate::observe::CgroupHuntObservation {
+                observation: Err(crate::cgroup::CgroupError::AmbiguousMount),
+            }),
+        };
+        let signals = signals_from_observation(&observation);
+        assert_eq!(
+            signals.cgroup_unavailable_reason,
+            Some("cgroup v2 discovery or collection failed.")
+        );
+        assert!(signals.cgroups.is_empty());
     }
 
     fn sample_cgroup_finding(

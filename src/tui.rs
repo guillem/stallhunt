@@ -400,6 +400,18 @@ fn render_bottom_row(frame: &mut Frame, model: &TuiModel, area: Rect) {
 }
 
 fn render_scoped(frame: &mut Frame, model: &TuiModel, area: Rect) {
+    let unavailable_reason = model
+        .window
+        .as_ref()
+        .and_then(|window| window.current.cgroup_unavailable_reason);
+    if let Some(reason) = unavailable_reason {
+        frame.render_widget(
+            Paragraph::new(format!("scoped cgroup assessment unavailable ({reason})"))
+                .block(Block::bordered().title("Scoped cgroup pressure")),
+            area,
+        );
+        return;
+    }
     let pressured = model
         .window
         .as_ref()
@@ -532,8 +544,7 @@ fn details_panel(model: &TuiModel) -> Paragraph<'static> {
 }
 
 fn footer_line(model: &TuiModel) -> Paragraph<'static> {
-    let mut text =
-        "q quit · e details · ? help · Ctrl-C drains then exits (second exits now)".to_owned();
+    let mut text = "q quit · e details · ? help · Ctrl-C: 1st drains, 2nd exits now".to_owned();
     if model
         .window
         .as_ref()
@@ -664,6 +675,7 @@ mod tests {
                 observed_cgroup_paths: BTreeSet::new(),
                 ranking_omitted_cgroup_ids: BTreeSet::new(),
                 cgroup_tracking_capped: false,
+                cgroup_unavailable_reason: None,
             },
             history: vec![HistoryEntry {
                 window_index: 3,
@@ -717,6 +729,29 @@ mod tests {
         );
         assert!(text.contains("q quit"), "{text}");
         assert!(!text.contains("wall"), "{text}");
+    }
+
+    #[test]
+    fn tui_scoped_panel_marks_unavailable_collection_not_absence_of_pressure() {
+        let mut window = window_fixture();
+        window.current.cgroups.clear();
+        window.current.cgroup_unavailable_reason =
+            Some(crate::cgroup::cgroup_capability_explanation(
+                crate::cgroup::CgroupCapability::Unsupported,
+            ));
+        let model = TuiModel {
+            window: Some(window),
+            ..TuiModel::new(2_000)
+        };
+        let text = render(132, 32, &model);
+        assert!(
+            text.contains("scoped cgroup assessment unavailable"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("no scoped pressure ranked this window"),
+            "{text}"
+        );
     }
 
     #[test]

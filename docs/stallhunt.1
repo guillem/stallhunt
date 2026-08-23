@@ -46,7 +46,13 @@ block I/O, and bounded cgroup-v2 scope.
 Running
 .B stallhunt
 with no subcommand is equivalent to
-.BR "stallhunt hunt" .
+.BR "stallhunt hunt"
+and accepts the same options:
+.B \-\-duration,
+.BR \-\-json ,
+and
+.B \-\-explain
+apply to the default hunt.
 Default human output is compact and verdict-first: one headline, one line per
 resource, and the leading affected/suspect candidates.
 Use
@@ -84,6 +90,9 @@ Use
 for the classic refreshing text renderer; with
 .BR \-\-json ,
 one compact JSON object is printed per window.
+When scoped cgroup collection fails for a window, the scoped panel, classic
+text, and JSON report the assessment as unavailable with the capability reason
+rather than claiming no scoped pressure.
 Watch does not write recordings.
 For an unlimited watch, the first SIGINT (or Ctrl-C) drains the in-flight
 window before exit; a second terminates immediately with status 130.

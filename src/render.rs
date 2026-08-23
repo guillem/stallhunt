@@ -8,7 +8,7 @@ use crate::analysis::{
 };
 use crate::cgroup::{
     CgroupCapability, CgroupObservation, cgroup_capability_explanation,
-    cgroup_capability_from_observation,
+    cgroup_capability_from_error, cgroup_capability_from_observation,
 };
 use crate::cli::{CapabilitiesOptions, HuntOptions, OutputFormat, RedactOptions, ReplayOptions};
 use crate::cpu::{CpuProcessObservation, CpuTelemetryCapabilities};
@@ -1567,11 +1567,7 @@ fn cgroup_json_parts(cgroup: Option<&CgroupHuntObservation>) -> CgroupJsonParts 
         Some(CgroupHuntObservation {
             observation: Err(error),
         }) => {
-            let capability = match error {
-                crate::cgroup::CgroupError::Unsupported => CgroupCapability::Unsupported,
-                crate::cgroup::CgroupError::PermissionDenied => CgroupCapability::PermissionDenied,
-                _ => CgroupCapability::Failed,
-            };
+            let capability = cgroup_capability_from_error(error);
             CgroupJsonParts {
                 observation: None,
                 state: capability.as_str(),
