@@ -278,7 +278,9 @@ findings as new, persistent, or resolved. Scoped cgroup `kind` values name the
 resource and any reclaim, swap, possible-thrashing, or quota-throttle label.
 TTY text refreshes the screen; JSON emits one compact
 `stallhunt.watch_window` object per window. Watch is not a TUI and is not a
-recording. Full evidence remains on `hunt --json` and `record`.
+recording. On an unlimited watch, the first SIGINT drains and writes the
+in-flight window; a second SIGINT terminates immediately. Full evidence remains
+on `hunt --json` and `record`.
 
 M8 adds a conservative evidence chain: when memory reclaim, swap, or possible
 thrashing coexists with I/O pressure, hunt text and JSON may report that the

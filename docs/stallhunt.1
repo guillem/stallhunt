@@ -63,6 +63,8 @@ On a TTY, text output refreshes the screen; with
 .BR \-\-json ,
 one compact JSON object is printed per window.
 Watch is not a TUI and does not write recordings.
+For an unlimited watch, the first SIGINT drains and writes the in-flight
+window; a second SIGINT terminates immediately.
 .TP
 .B capabilities
 Report which telemetry sources are available, partially available, unsupported,
@@ -172,7 +174,7 @@ emit versioned JSON reports with
 1.
 .B watch \-\-json
 emits one
-.B bottleneck.watch_window
+.B stallhunt.watch_window
 object per window.
 .B replay \-\-json
 re-renders the current inference result for a stored recording.
