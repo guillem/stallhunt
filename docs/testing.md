@@ -169,9 +169,9 @@ M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus
 I/O pressure path gated by `memory.events` high/max or `memory.stat`
 direct-reclaim/swap-in, coincident PSI without a mechanism, scan-without-steal,
-cross-scope and CPU–I/O negatives, checked-in related-evidence text
-fixtures, and structural hunt JSON. Chains are not causal claims and are not
-watch identities.
+cross-scope and CPU–I/O negatives, 16-chain rank-then-truncate behavior from 18
+eligible candidates, checked-in related-evidence text fixtures, and structural
+hunt JSON. Chains are not causal claims and are not watch identities.
 
 Scoped cgroup memory findings may be labeled reclaim, swap, or possible
 thrashing from `memory.stat` page deltas. Tests cover reclaim, swap-wins,

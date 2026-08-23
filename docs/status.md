@@ -343,10 +343,7 @@ Validation gaps:
 - host reclaim-only and possible-thrashing remain fixture-validated, while the
   live memory acceptance exercised swap pressure;
 - a controlled live busy-but-not-pressured CPU workload remains unrecorded;
-- severity thresholds are provisional rather than portable guarantees;
-- deterministic coverage does not yet exercise the 16-chain truncation order,
-  schema-1 recording decode without `memory_stat`, host-memory watch kind
-  transitions, or invalid host `full` blocking possible-thrashing.
+- severity thresholds are provisional rather than portable guarantees.
 
 Operational and delivery gaps:
 
