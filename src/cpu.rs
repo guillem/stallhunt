@@ -1195,12 +1195,12 @@ pub fn interval_from_snapshots(
     });
     for (key, end_process) in &end.processes {
         if let Some(start_process) = start.processes.get(key) {
-            for thread in end_process.task_block_io_delay_ticks.keys() {
-                if !start_process.task_block_io_delay_ticks.contains_key(thread) {
+            for thread in &end_process.task_stat_identities {
+                if !start_process.task_stat_identities.contains(thread) {
                     task_stat_collection_issues.task_appeared =
                         task_stat_collection_issues.task_appeared.saturating_add(1);
                 }
-                if start_process.task_block_io_delay_ticks.keys().any(|old| {
+                if start_process.task_stat_identities.iter().any(|old| {
                     old.tid == thread.tid && old.start_time_ticks != thread.start_time_ticks
                 }) {
                     task_stat_collection_issues.task_identity_changed = task_stat_collection_issues
@@ -1208,8 +1208,8 @@ pub fn interval_from_snapshots(
                         .saturating_add(1);
                 }
             }
-            for thread in start_process.task_block_io_delay_ticks.keys() {
-                if !end_process.task_block_io_delay_ticks.contains_key(thread) {
+            for thread in &start_process.task_stat_identities {
+                if !end_process.task_stat_identities.contains(thread) {
                     task_stat_collection_issues.task_exited =
                         task_stat_collection_issues.task_exited.saturating_add(1);
                 }
@@ -1667,6 +1667,32 @@ mod tests {
     }
 
     #[test]
+    fn churn_is_counted_for_threads_missing_the_block_io_delay_field() {
+        let appeared = ThreadKey {
+            tid: 9,
+            start_time_ticks: 1,
+        };
+        let first = process(9, 1, 1);
+        let mut second = process(9, 1, 2);
+        // The kernel stat record omitted delayacct_blkio_ticks, so no entry
+        // exists in task_block_io_delay_ticks, but the identity is still
+        // observed. Churn must still be counted from that identity, not
+        // from the block-I/O ticks map.
+        second.task_stat_identities.insert(appeared);
+        let observation = interval_from_snapshots(
+            snapshot(10, 5, 5, vec![first]),
+            snapshot(20, 10, 10, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(observation.task_stat_collection_issues.task_appeared, 1);
+        assert_eq!(
+            task_stat_capability(&observation),
+            TaskStatCapability::Partial
+        );
+    }
+
+    #[test]
     fn excludes_pid_reuse_and_rejects_regressing_counters() {
         let start = snapshot(100, 60, 40, vec![process(7, 1, 50)]);
         let end = snapshot(110, 70, 40, vec![process(7, 2, 1)]);
@@ -1848,21 +1874,19 @@ mod tests {
     #[test]
     fn task_stat_lifecycle_is_independent_of_schedstat() {
         let mut first = process(7, 1, 10);
-        first.task_block_io_delay_ticks = BTreeMap::from([(
-            ThreadKey {
-                tid: 9,
-                start_time_ticks: 10,
-            },
-            1,
-        )]);
+        let first_thread = ThreadKey {
+            tid: 9,
+            start_time_ticks: 10,
+        };
+        first.task_block_io_delay_ticks = BTreeMap::from([(first_thread, 1)]);
+        first.task_stat_identities = BTreeSet::from([first_thread]);
         let mut second = process(7, 1, 20);
-        second.task_block_io_delay_ticks = BTreeMap::from([(
-            ThreadKey {
-                tid: 9,
-                start_time_ticks: 11,
-            },
-            2,
-        )]);
+        let second_thread = ThreadKey {
+            tid: 9,
+            start_time_ticks: 11,
+        };
+        second.task_block_io_delay_ticks = BTreeMap::from([(second_thread, 2)]);
+        second.task_stat_identities = BTreeSet::from([second_thread]);
         let observation = interval_from_snapshots(
             snapshot(100, 60, 40, vec![first]),
             snapshot(110, 70, 40, vec![second]),

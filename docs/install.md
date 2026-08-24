@@ -52,16 +52,16 @@ tar xzf stallhunt-<version>-x86_64-unknown-linux-gnu.tar.gz
 install -m 0755 stallhunt-<version>-x86_64-unknown-linux-gnu/stallhunt ~/.local/bin/stallhunt
 ```
 
-Verify a published SHA-256 checksum before use. For the prepared v0.4.0
+Verify a published SHA-256 checksum before use. For the prepared v0.4.1
 release, once it is published:
 
 ```bash
-sha256sum -c stallhunt-0.4.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+sha256sum -c stallhunt-0.4.1-x86_64-unknown-linux-gnu.tar.gz.sha256
 ```
 
 Download release tarballs from the
 [GitHub Releases](https://github.com/guillem/stallhunt/releases) page; the
-currently published release is `v0.3.0`. Version `v0.4.0` is prepared in this
+currently published release is `v0.3.0`. Version `v0.4.1` is prepared in this
 source tree but is not published pending explicit owner authorization and the
 normal merge/release workflow. EXP-0010 records the passed controlled-host,
 cleanup, and reviewed dependency-warning gates.

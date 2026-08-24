@@ -1,14 +1,15 @@
 # Project status
 
-Last updated: 2026-08-24
+Last updated: 2026-08-25
 
 ## Current milestone
 
-**v0.4.0 in progress — scoped process attribution and widescreen TUI**
+**v0.4.1 in progress — scoped process attribution and widescreen TUI, plus a
+pre-release code-review bugfix pass**
 
-The package and manual are prepared as 0.4.0; this is not a published release.
+The package and manual are prepared as 0.4.1; this is not a published release.
 The currently published release remains v0.3.0. Controlled-host, cleanup,
-dependency-review, and CI gates pass; do not tag, merge, or publish v0.4.0
+dependency-review, and CI gates pass; do not tag, merge, or publish v0.4.1
 without explicit owner authorization.
 
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
@@ -321,6 +322,16 @@ the test process and does not mutate the hierarchy.
   not establish that a process suffered no I/O delay. EXP-0010 supplies
   controlled-host TASKSTATS acceptance; roles still consume positive counters
   conservatively and expose collection gaps explicitly.
+- TASKSTATS TGID selection is host-wide, lowest-PID-first, and applied before
+  any cgroup scoping. On a host with more than 512 total processes this
+  correctly reports `Partial` taskstats capability (the 512-TGID cap is
+  reached), so completeness is never falsely claimed; but a scoped hunt
+  targeting a higher-PID cgroup can still lose taskstats coverage for exactly
+  the scope being investigated, silently falling back to weaker procfs
+  evidence within an honestly-labeled partial window. Fixing this requires
+  reading cgroup membership before the TGID selection and threading a
+  priority set through the collection pipeline, which is a collection-path
+  restructure, not a v0.4.1 patch; see "Current recommended next task".
 - GitHub Actions runs locked tests on Rust 1.85 and formatting, Clippy, and
   locked tests on stable Rust. The five environment-dependent Linux acceptance
   tests remain opt-in rather than CI workloads.
@@ -390,8 +401,10 @@ the test process and does not mutate the hierarchy.
 
 The approved v0.4.0 vertical slice now has bounded procfs/taskstats evidence,
 host and cgroup six-role attribution, and schema-2 outputs/recording migration.
-Release metadata is prepared. Controlled-host validation passed in EXP-0010.
-Remaining work is explicit owner authorization and the normal PR merge/release
+v0.4.1 is a pre-release code-review bugfix pass on top of that slice (see
+"Last meaningful validation"). Release metadata is prepared. Controlled-host
+validation passed in EXP-0010. Remaining work is explicit owner authorization
+and the normal PR merge/release
 workflow. No additional M8 chain or M7 probe is part of this slice.
 
 Diagnostic and attribution gaps:
@@ -424,7 +437,7 @@ Operational and delivery gaps:
   overhead after safely disambiguating equivalent cgroupfs aliases;
 - deterministic codec, attribution, migration, renderer, TUI, stable/MSRV,
   package, and local PTY gates pass;
-- the v0.4.0 release remains blocked only on explicit owner authorization and
+- the v0.4.1 release remains blocked only on explicit owner authorization and
   the normal merge/release workflow;
 - unlimited watch drains gracefully: the first SIGINT installs a flag so the
   in-flight window completes and is written before exit;
@@ -449,11 +462,23 @@ was reported as `resolved`) was fixed in v0.1.0. Ranking omission now leaves
 the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
+A pre-release code review of the unpublished v0.4.0 tree found and fixed six
+issues, most notably a vacuous-truth completeness bug: an empty-overlap
+taskstats interval (normal process churn between window endpoints) reported
+`Available` capability instead of `Partial`, so a window with zero collected
+taskstats evidence could read as a complete, confirmed clean negative. See
+`## [0.4.1]` in [`CHANGELOG.md`](../CHANGELOG.md) and "Last meaningful
+validation" below for the full list and how each was verified.
+
 ## Current recommended next task
 Obtain explicit owner authorization, then complete the normal PR merge and
-release workflow for the already prepared v0.4.0 metadata. Do not start
-Milestone 7 or add another M8 chain;
-coincident PSI still does not establish a causal path.
+release workflow for the already prepared v0.4.1 metadata. Do not start
+Milestone 7 or add another M8 chain; coincident PSI still does not establish a
+causal path. Separately, and not blocking this release: make TASKSTATS TGID
+selection cgroup-aware (read cgroup membership before the bounded procfs walk
+and prioritize scope members within the 512-TGID cap) so a scoped hunt on a
+busy, high-PID host does not lose taskstats coverage for exactly the scope
+being investigated; see the new bullet under "Known limitations".
 
 ## Current design risks
 
@@ -578,6 +603,23 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-25, a pre-release code review of the unpublished v0.4.0 tree found
+six issues, five confirmed fixable in a v0.4.1 patch and one recorded as a
+known limitation (see "Known limitations" and "Known bugs" above). Each fix
+has a new deterministic test; see `## [0.4.1]` in
+[`CHANGELOG.md`](../CHANGELOG.md) for the list. The one issue not fixed here
+was verified rather than assumed: hosts above the 512-TGID taskstats cap
+already report `Partial` capability (never a false `Available`) via the
+existing `tgid_limit_reached` path, so the host-wide-before-cgroup-scoping TGID
+selection is a coverage/fairness gap with honest completeness signaling, not a
+silent correctness bug — fixing it needs cgroup membership threaded through
+the collection pipeline ahead of the bounded procfs walk, a collection-path
+restructure out of scope for a patch release. `cargo fmt --all -- --check`,
+locked offline Clippy, and locked offline tests all passed (266 unit tests, up
+from 262; 15 CLI, three documentation, and three replay-fixture integration
+tests; five Linux acceptance tests remain ignored). No release build, manual,
+or tarball re-validation was performed as part of this pass.
 
 On 2026-08-24, operator-provided `CAP_NET_ADMIN` enabled bounded TASKSTATS GET
 without Stallhunt performing elevation. Controlled CPU, memory, and I/O

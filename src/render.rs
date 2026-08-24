@@ -1166,10 +1166,10 @@ pub(crate) fn terminal_scope_identifier(value: &str, width: usize) -> String {
             }
         })
         .collect();
-    if sanitized.is_empty() {
-        "<unnamed-scope>".to_owned()
-    } else if width == 0 {
+    if width == 0 {
         String::new()
+    } else if sanitized.is_empty() {
+        "<unnamed-scope>".to_owned()
     } else if sanitized.width() <= width {
         sanitized
     } else {
@@ -2024,6 +2024,12 @@ pub(crate) mod tests {
         assert!(!rendered.contains('\u{1b}'));
         assert!(rendered.contains('�'));
         assert!(unicode_width::UnicodeWidthStr::width(rendered.as_str()) <= 8);
+    }
+
+    #[test]
+    fn scope_identifier_honors_a_zero_width_budget_even_when_unnamed() {
+        assert_eq!(terminal_scope_identifier("", 0), "");
+        assert_eq!(terminal_scope_identifier("/some/path", 0), "");
     }
 
     fn render_hunt<F>(options: &HuntOptions, observe: F) -> String
