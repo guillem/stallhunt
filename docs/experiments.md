@@ -521,9 +521,9 @@ locked Clippy, the full locked suite, and live collection of 97 groups passed.
 
 The temporary file capability was removed by cleaning and rebuilding only
 Cargo's release artifacts; `getcap target/release/stallhunt` is empty. All
-owned workload children and temporary directories were removed. Delay
-accounting remains enabled pending operator restoration of the original
-`kernel.task_delayacct=0` state. Normal PR/release authorization remains open.
+owned workload children and temporary directories were removed. The operator
+restored the original `kernel.task_delayacct=0` state after the workloads, and
+Stallhunt verified it. Normal PR/release authorization remains open.
 
 ## EXP-0009: v0.4 taskstats and terminal-validation status
 

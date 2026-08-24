@@ -50,9 +50,10 @@ Optional TASKSTATS GET collection is also observational and bounded: it never
 enables `kernel.task_delayacct`, changes a sysctl, elevates privileges, or
 subscribes to task-exit events. Kernel permission denial or disabled accounting
 reduces only that evidence source; procfs-based diagnosis remains available.
-The v0.4 release remains blocked pending an operator-approved host where delay
-accounting was enabled before owned workloads began and GET permission was
-granted without Stallhunt changing either condition.
+EXP-0010 records an operator-approved v0.4 run where delay accounting was
+enabled before owned workloads, GET permission was granted without Stallhunt
+changing either condition, the temporary binary capability was removed, and
+the original sysctl state was restored afterward.
 
 Cgroup paths and inferred unit names can disclose service, user, or container
 structure. They are sensitive collection output alongside process names and

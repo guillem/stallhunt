@@ -7,8 +7,9 @@ Last updated: 2026-08-24
 **v0.4.0 in progress — scoped process attribution and widescreen TUI**
 
 The package and manual are prepared as 0.4.0; this is not a published release.
-The currently published release remains v0.3.0. Do not tag, merge, or publish
-v0.4.0 until the operator restores the delay-accounting sysctl.
+The currently published release remains v0.3.0. Controlled-host, cleanup,
+dependency-review, and CI gates pass; do not tag, merge, or publish v0.4.0
+without explicit owner authorization.
 
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
@@ -29,8 +30,8 @@ host/cgroup roles on the right; compact terminals show six role summaries and
 can explicitly expand Detail. EXP-0010 records successful controlled-host
 rootless degradation, permitted CPU/block-I/O/memory taskstats evidence in host
 and cgroup scopes, and capable 512-TGID/member-ceiling overhead. The temporary
-binary capability was removed; operator sysctl restoration remains pending.
-Do not start
+binary capability was removed and the operator restored the sysctl. Do not
+start
 M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -390,8 +391,8 @@ the test process and does not mutate the hierarchy.
 The approved v0.4.0 vertical slice now has bounded procfs/taskstats evidence,
 host and cgroup six-role attribution, and schema-2 outputs/recording migration.
 Release metadata is prepared. Controlled-host validation passed in EXP-0010.
-Remaining work is operator delay-accounting restoration and normal PR/release
-authorization. No additional M8 chain or M7 probe is part of this slice.
+Remaining work is explicit owner authorization and the normal PR merge/release
+workflow. No additional M8 chain or M7 probe is part of this slice.
 
 Diagnostic and attribution gaps:
 
@@ -423,8 +424,8 @@ Operational and delivery gaps:
   overhead after safely disambiguating equivalent cgroupfs aliases;
 - deterministic codec, attribution, migration, renderer, TUI, stable/MSRV,
   package, and local PTY gates pass;
-- the v0.4.0 release remains blocked until the operator restores the original
-  delay-accounting state;
+- the v0.4.0 release remains blocked only on explicit owner authorization and
+  the normal merge/release workflow;
 - unlimited watch drains gracefully: the first SIGINT installs a flag so the
   in-flight window completes and is written before exit;
 - `MANIFEST.txt` (tracked-file byte sizes) predates several source files,
@@ -449,9 +450,9 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Have the operator restore `kernel.task_delayacct=0`, then complete the normal
-PR authorization, merge, and release workflow for the already prepared v0.4.0
-metadata. Do not start Milestone 7 or add another M8 chain;
+Obtain explicit owner authorization, then complete the normal PR merge and
+release workflow for the already prepared v0.4.0 metadata. Do not start
+Milestone 7 or add another M8 chain;
 coincident PSI still does not establish a causal path.
 
 ## Current design risks
@@ -591,8 +592,8 @@ budgets. Three release runs took 1.20–1.23 s wall, 0.04–0.05 s user,
 mounts were safely disambiguated by commit `5699fd4`; different device/root
 views remain rejected. All owned workloads and generated cgroups/directories
 were cleaned, and rebuilding the release binary removed its temporary file
-capability. The operator still must restore `kernel.task_delayacct=0`. See
-EXP-0010.
+capability. The operator then restored `kernel.task_delayacct=0`, which
+Stallhunt verified. See EXP-0010.
 
 On 2026-08-24, the operator enabled `kernel.task_delayacct` before owned
 workloads on Linux 7.2.0-ogc4.1.fc44.x86_64. Rootless Stallhunt correctly

@@ -6,9 +6,9 @@ The repository contains completed Milestone 1 CPU, M2 host-memory, M3
 block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, the v0.4
 scoped-attribution/TUI implementation, and the first two Milestone 8
 evidence-chain slices. The source package is prepared as 0.4.0, but the
-published release remains v0.3.0 until the operator restores the controlled-
-host delay-accounting sysctl. EXP-0010 records the passed taskstats and
-512-TGID/member-ceiling gates and the reviewed dependency-warning disposition.
+published release remains v0.3.0 pending explicit owner authorization and the
+normal merge/release workflow. EXP-0010 records the passed taskstats,
+512-TGID/member-ceiling, cleanup, and dependency-review gates.
 
 Build and run it from the repository root:
 

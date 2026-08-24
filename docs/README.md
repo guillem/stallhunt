@@ -4,10 +4,10 @@ This directory is the durable design and project-memory layer.
 
 Milestones 1–6 are functionally complete. The source tree is prepared for the
 v0.4 scoped-attribution and responsive-TUI release, including schema 2 and
-bounded optional taskstats evidence. Publication remains blocked on the
-operator's controlled-host delay-accounting restoration recorded in
-`status.md`; EXP-0010 records the passed taskstats/512-TGID/member-ceiling
-validation and reviewed dependency-warning disposition. Milestone 8's first two conservative
+bounded optional taskstats evidence. Publication awaits explicit owner
+authorization and the normal merge/release workflow; EXP-0010 records the
+passed taskstats/512-TGID/member-ceiling validation, cleanup, and reviewed
+dependency-warning disposition. Milestone 8's first two conservative
 evidence-chain slices relate memory mechanism pressure to I/O pressure, first
 host-wide and then same-cgroup, without claiming causality. `experiments.md`
 retains controlled validation, overhead evidence, and precise open gaps.

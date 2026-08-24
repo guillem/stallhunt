@@ -246,8 +246,9 @@ Deliver:
 
 Status: implementation, deterministic/local validation, and EXP-0010
 controlled-host taskstats/512-TGID/member-ceiling validation complete; release
-blocked on operator sysctl restoration. The dependency-warning disposition is
-reviewed and recorded in `status.md` and `experiments.md`.
+awaits explicit owner authorization and the normal merge/release workflow. The
+cleanup and dependency-warning disposition are recorded in `status.md` and
+`experiments.md`.
 
 This vertical slice adds bounded procfs/taskstats process evidence, six
 analyzer-owned roles for matching host and cgroup PSI scopes, schema-2
