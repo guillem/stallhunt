@@ -4,13 +4,13 @@ Last updated: 2026-08-25
 
 ## Current milestone
 
-**v0.4.1 in progress — scoped process attribution and widescreen TUI, plus a
+**v0.4.1 published — scoped process attribution and widescreen TUI, plus a
 pre-release code-review bugfix pass**
 
-The package and manual are prepared as 0.4.1; this is not a published release.
-The currently published release remains v0.3.0. Controlled-host, cleanup,
-dependency-review, and CI gates pass; do not tag, merge, or publish v0.4.1
-without explicit owner authorization.
+The owner authorized the release on 2026-08-25. PR #9 merged into `main`, the
+`v0.4.1` tag was pushed, and `release.yml` published the GitHub Release with
+the `x86_64-unknown-linux-gnu` tarball and checksum. `v0.4.1` is now the
+currently published release.
 
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
@@ -401,11 +401,9 @@ the test process and does not mutate the hierarchy.
 
 The approved v0.4.0 vertical slice now has bounded procfs/taskstats evidence,
 host and cgroup six-role attribution, and schema-2 outputs/recording migration.
-v0.4.1 is a pre-release code-review bugfix pass on top of that slice (see
-"Last meaningful validation"). Release metadata is prepared. Controlled-host
-validation passed in EXP-0010. Remaining work is explicit owner authorization
-and the normal PR merge/release
-workflow. No additional M8 chain or M7 probe is part of this slice.
+v0.4.1 was a pre-release code-review bugfix pass on top of that slice (see
+"Last meaningful validation") and is now published. No additional M8 chain or
+M7 probe is part of this slice.
 
 Diagnostic and attribution gaps:
 
@@ -437,8 +435,7 @@ Operational and delivery gaps:
   overhead after safely disambiguating equivalent cgroupfs aliases;
 - deterministic codec, attribution, migration, renderer, TUI, stable/MSRV,
   package, and local PTY gates pass;
-- the v0.4.1 release remains blocked only on explicit owner authorization and
-  the normal merge/release workflow;
+- v0.4.1 released 2026-08-25 via the normal PR merge/tag workflow (PR #9);
 - unlimited watch drains gracefully: the first SIGINT installs a flag so the
   in-flight window completes and is written before exit;
 - `MANIFEST.txt` (tracked-file byte sizes) predates several source files,
@@ -471,14 +468,13 @@ taskstats evidence could read as a complete, confirmed clean negative. See
 validation" below for the full list and how each was verified.
 
 ## Current recommended next task
-Obtain explicit owner authorization, then complete the normal PR merge and
-release workflow for the already prepared v0.4.1 metadata. Do not start
-Milestone 7 or add another M8 chain; coincident PSI still does not establish a
-causal path. Separately, and not blocking this release: make TASKSTATS TGID
-selection cgroup-aware (read cgroup membership before the bounded procfs walk
-and prioritize scope members within the 512-TGID cap) so a scoped hunt on a
-busy, high-PID host does not lose taskstats coverage for exactly the scope
-being investigated; see the new bullet under "Known limitations".
+v0.4.1 is released; do not start Milestone 7 or add another M8 chain without a
+concrete diagnostic gap driving it, as coincident PSI still does not establish
+a causal path. The recommended next task is making TASKSTATS TGID selection
+cgroup-aware (read cgroup membership before the bounded procfs walk and
+prioritize scope members within the 512-TGID cap) so a scoped hunt on a busy,
+high-PID host does not lose taskstats coverage for exactly the scope being
+investigated; see the bullet under "Known limitations".
 
 ## Current design risks
 
@@ -603,6 +599,13 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-25, the owner authorized the v0.4.1 release. PR #9 (the code-review
+bugfix pass below) passed CI (`msrv` and `stable` jobs) and was merged into
+`main`; the `v0.4.1` tag was pushed and `release.yml` built the release
+binary, packaged the `x86_64-unknown-linux-gnu` tarball and SHA-256 sidecar,
+and published the GitHub Release. See
+<https://github.com/guillem/stallhunt/releases/tag/v0.4.1>.
 
 On 2026-08-25, a pre-release code review of the unpublished v0.4.0 tree found
 six issues, five confirmed fixable in a v0.4.1 patch and one recorded as a

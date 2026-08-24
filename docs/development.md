@@ -5,12 +5,10 @@
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
 block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, the v0.4
 scoped-attribution/TUI implementation, and the first two Milestone 8
-evidence-chain slices. v0.4.1 is a pre-release code-review bugfix pass on top
-of the v0.4.0 slice (see `docs/status.md`). The source package is prepared as
-0.4.1, but the published release remains v0.3.0 pending explicit owner
-authorization and the normal merge/release workflow. EXP-0010 records the
-passed taskstats, 512-TGID/member-ceiling, cleanup, and dependency-review
-gates.
+evidence-chain slices. v0.4.1 was a pre-release code-review bugfix pass on top
+of the v0.4.0 slice (see `docs/status.md`) and is the currently published
+release. EXP-0010 records the passed taskstats, 512-TGID/member-ceiling,
+cleanup, and dependency-review gates.
 
 Build and run it from the repository root:
 
