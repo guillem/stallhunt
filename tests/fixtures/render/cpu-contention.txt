@@ -11,3 +11,11 @@ Context and limitations:
   Runnable tasks exceeded logical CPU count; this is supporting context, not the contention verdict.
   Suspects consumed CPU in the same window; this correlation does not prove causality.
 Timing: requested 10s; PSI measured 10s; CPU/process measured 10s
+
+Process roles (host scope)
+  CPU victims: worker�next [21]: observed_runnable_delay_victim_candidate (High; RunnableDelay { runnable_wait_ns: 500000000, runnable_delay_fraction: 0.05, stable_task_count: 1, taskstats_cpu_delay_ns: None })
+  CPU suspects: build�[31m [20]: same_window_cpu_consumer_suspect (Medium; CpuConsumption { cpu_fraction_of_one: 0.8, cpu_ticks: 80 }), worker [21]: same_window_cpu_consumer_suspect (Medium; CpuConsumption { cpu_fraction_of_one: 0.3, cpu_ticks: 30 })
+  Memory victims: not assessed
+  Memory suspects: not assessed
+  I/O victims: not assessed
+  I/O suspects: not assessed

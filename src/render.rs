@@ -110,7 +110,7 @@ pub fn capabilities(
             cgroup_capability_explanation(cgroup),
         )),
         OutputFormat::Json => to_json(&CapabilitiesJson {
-            schema_version: 1,
+            schema_version: 2,
             tool_version: env!("CARGO_PKG_VERSION"),
             status: "observed",
             capabilities: CapabilitiesJsonValue {
@@ -154,6 +154,7 @@ pub(crate) struct HuntAnalyses {
     pub(crate) memory: Option<crate::analysis::MemoryAnalysisResult>,
     pub(crate) io: Option<crate::analysis::IoAnalysisResult>,
     pub(crate) cgroup: Option<crate::analysis::CgroupAnalysisResult>,
+    pub(crate) process_scopes: Vec<crate::analysis::ProcessScope>,
 }
 
 pub(crate) fn analyze_hunt(result: &HuntObservation) -> HuntAnalyses {
@@ -173,11 +174,44 @@ pub(crate) fn analyze_hunt(result: &HuntObservation) -> HuntAnalyses {
         .as_ref()
         .and_then(|cgroup| cgroup.observation.as_ref().ok())
         .map(|observation| analysis::analyze_cgroups(Some(observation)));
+    let cpu_pressure = cpu.findings.first().and_then(|finding| {
+        (finding.kind == AssessmentKind::CpuContention).then_some(finding.resource_confidence)
+    });
+    let memory_pressure = memory
+        .as_ref()
+        .and_then(|result| result.findings.first())
+        .and_then(|finding| {
+            matches!(
+                finding.kind,
+                crate::analysis::MemoryAssessmentKind::Pressure
+                    | crate::analysis::MemoryAssessmentKind::ReclaimPressure
+                    | crate::analysis::MemoryAssessmentKind::SwapPressure
+                    | crate::analysis::MemoryAssessmentKind::PossibleThrashing
+            )
+            .then_some(finding.resource_confidence)
+        });
+    let io_pressure = io
+        .as_ref()
+        .and_then(|result| result.findings.first())
+        .and_then(|finding| {
+            (finding.kind == IoAssessmentKind::Pressure).then_some(finding.resource_confidence)
+        });
+    let process_io = result
+        .io
+        .as_ref()
+        .and_then(|value| value.processes.as_ref().ok());
     HuntAnalyses {
         cpu,
         memory,
         io,
         cgroup,
+        process_scopes: vec![analysis::host_process_scope(
+            result.cpu.as_ref().ok(),
+            process_io,
+            cpu_pressure,
+            memory_pressure,
+            io_pressure,
+        )],
     }
 }
 
@@ -239,7 +273,78 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
         }
         text.push_str(&chain_text);
     }
+    // Legacy text continues to render the existing finding fields; schema-2
+    // JSON carries the canonical complete role collection.
+    text.push_str(&process_scope_hunt_text(&analyses.process_scopes));
     text
+}
+
+/// Legacy/piped hunt and replay output is intentionally less dense than JSON,
+/// but it still exposes every canonical role instead of silently dropping new
+/// attribution classes.
+fn process_scope_hunt_text(scopes: &[crate::analysis::ProcessScope]) -> String {
+    use crate::analysis::{ProcessCandidateAvailability, ProcessRole};
+    let Some(scope) = scopes.first() else {
+        return "\nProcess roles\n  unavailable\n".into();
+    };
+    let mut output = String::from("\nProcess roles (host scope)\n");
+    for role in [
+        ProcessRole::CpuVictim,
+        ProcessRole::CpuSuspect,
+        ProcessRole::MemoryVictim,
+        ProcessRole::MemorySuspect,
+        ProcessRole::IoVictim,
+        ProcessRole::IoSuspect,
+    ] {
+        let list = scope.roles.iter().find(|list| list.role == role);
+        let title = match role {
+            ProcessRole::CpuVictim => "CPU victims",
+            ProcessRole::CpuSuspect => "CPU suspects",
+            ProcessRole::MemoryVictim => "Memory victims",
+            ProcessRole::MemorySuspect => "Memory suspects",
+            ProcessRole::IoVictim => "I/O victims",
+            ProcessRole::IoSuspect => "I/O suspects",
+        };
+        match list {
+            Some(list) if !list.candidates.is_empty() => {
+                let candidates = list
+                    .candidates
+                    .iter()
+                    .map(|candidate| {
+                        format!(
+                            "{} [{}]: {} ({:?}; {:?})",
+                            crate::cpu::sanitized_process_name(&candidate.name),
+                            candidate.key.pid,
+                            candidate.label,
+                            candidate.confidence,
+                            candidate.evidence
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                output.push_str(&format!(
+                    "  {title}{}: {candidates}\n",
+                    if list.completeness == crate::analysis::ProcessRoleCompleteness::Partial {
+                        " (partial)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            Some(list) => {
+                let state = match list.availability {
+                    ProcessCandidateAvailability::Available => "no positive candidates",
+                    ProcessCandidateAvailability::UnavailableOrIncomplete => {
+                        "unavailable or incomplete"
+                    }
+                    ProcessCandidateAvailability::NotAssessed => "not assessed",
+                };
+                output.push_str(&format!("  {title}: {state}\n"));
+            }
+            None => output.push_str(&format!("  {title}: unavailable\n")),
+        }
+    }
+    output
 }
 
 fn evidence_chain_hunt_text(analyses: &HuntAnalyses) -> Option<String> {
@@ -1044,6 +1149,36 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
         &cgroup.analysis.findings,
     );
     let findings = analysis::ranked_findings_with_io(cpu.analysis, memory.analysis, io.analysis);
+    let process_scopes = vec![analysis::host_process_scope(
+        cpu.cpu.as_ref(),
+        io.processes.as_ref(),
+        findings.iter().find_map(|finding| match finding {
+            crate::analysis::Finding::Cpu(value) if value.kind == AssessmentKind::CpuContention => {
+                Some(value.resource_confidence)
+            }
+            _ => None,
+        }),
+        findings.iter().find_map(|finding| match finding {
+            crate::analysis::Finding::Memory(value)
+                if matches!(
+                    value.kind,
+                    crate::analysis::MemoryAssessmentKind::Pressure
+                        | crate::analysis::MemoryAssessmentKind::ReclaimPressure
+                        | crate::analysis::MemoryAssessmentKind::SwapPressure
+                        | crate::analysis::MemoryAssessmentKind::PossibleThrashing
+                ) =>
+            {
+                Some(value.resource_confidence)
+            }
+            _ => None,
+        }),
+        findings.iter().find_map(|finding| match finding {
+            crate::analysis::Finding::Io(value) if value.kind == IoAssessmentKind::Pressure => {
+                Some(value.resource_confidence)
+            }
+            _ => None,
+        }),
+    )];
     let mut qualifiers = cpu.qualifiers;
     qualifiers.extend(memory.qualifiers);
     qualifiers.extend(io.qualifiers);
@@ -1070,7 +1205,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
         None
     };
     to_json(&HuntJson {
-        schema_version: 1,
+        schema_version: 2,
         tool_version: env!("CARGO_PKG_VERSION"),
         status,
         requested_observation: RequestedObservation {
@@ -1108,6 +1243,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
         findings,
         evidence_chains,
         cgroup_findings: cgroup.analysis.findings,
+        process_scopes,
         qualifiers,
     })
 }
@@ -1453,6 +1589,7 @@ struct HuntJson<'a> {
     findings: Vec<crate::analysis::Finding>,
     evidence_chains: Vec<crate::analysis::EvidenceChain>,
     cgroup_findings: Vec<crate::analysis::CgroupFinding>,
+    process_scopes: Vec<crate::analysis::ProcessScope>,
     qualifiers: Vec<QualifierJson<'a>>,
 }
 
@@ -1474,6 +1611,14 @@ struct ObservationJson {
     process_collection_issues: Option<crate::cpu::ProcessCollectionIssues>,
     scheduler_delay_candidates: Option<Vec<crate::cpu::ProcessSchedulerDelayInterval>>,
     schedstat_collection_issues: Option<crate::cpu::SchedstatCollectionIssues>,
+    process_resource_evidence: Option<Vec<crate::cpu::ProcessResourceInterval>>,
+    task_stat_collection_issues: Option<crate::cpu::TaskStatCollectionIssues>,
+    taskstats: Option<Vec<crate::taskstats::TaskstatsInterval>>,
+    taskstats_collection_issues: Option<crate::taskstats::TaskstatsCollectionIssues>,
+    taskstats_capability: Option<crate::taskstats::TaskstatsCapability>,
+    delay_accounting: Option<crate::taskstats::DelayAccountingState>,
+    process_resource_capability: Option<crate::cpu::ProcessResourceCapability>,
+    task_stat_capability: Option<crate::cpu::TaskStatCapability>,
     memory_psi_duration_us: Option<u128>,
     memory_psi: Option<MemoryPsiJson>,
     memory_context_duration_us: Option<u128>,
@@ -1597,31 +1742,43 @@ impl ObservationJson {
         let process_io_duration_us = process_io.as_ref().map(|value| value.elapsed.as_micros());
         let cgroup_duration_us = cgroup.as_ref().map(|value| value.elapsed.as_micros());
         match cpu {
-            Some(cpu) => Self {
-                psi_duration_us,
-                cpu_psi,
-                cpu_duration_us: Some(cpu.elapsed.as_micros()),
-                host_cpu: Some(cpu.host),
-                loadavg: cpu.load,
-                loadavg_availability: Some(cpu.load_availability),
-                clock_ticks_per_second: Some(cpu.clock_ticks_per_second),
-                processes: Some(cpu.processes),
-                process_collection_issues: Some(cpu.collection_issues),
-                scheduler_delay_candidates: Some(cpu.scheduler_delay_candidates),
-                schedstat_collection_issues: Some(cpu.schedstat_collection_issues),
-                memory_psi_duration_us,
-                memory_psi,
-                memory_context_duration_us,
-                memory_context,
-                io_psi_duration_us,
-                io_psi,
-                diskstats_duration_us,
-                diskstats,
-                process_io_duration_us,
-                process_io,
-                cgroup_duration_us,
-                cgroup,
-            },
+            Some(cpu) => {
+                let process_resource_capability = crate::cpu::process_resource_capability(&cpu);
+                let task_stat_capability = crate::cpu::task_stat_capability(&cpu);
+                Self {
+                    psi_duration_us,
+                    cpu_psi,
+                    cpu_duration_us: Some(cpu.elapsed.as_micros()),
+                    host_cpu: Some(cpu.host),
+                    loadavg: cpu.load,
+                    loadavg_availability: Some(cpu.load_availability),
+                    clock_ticks_per_second: Some(cpu.clock_ticks_per_second),
+                    processes: Some(cpu.processes),
+                    process_collection_issues: Some(cpu.collection_issues),
+                    scheduler_delay_candidates: Some(cpu.scheduler_delay_candidates),
+                    schedstat_collection_issues: Some(cpu.schedstat_collection_issues),
+                    process_resource_evidence: Some(cpu.process_resource_evidence),
+                    task_stat_collection_issues: Some(cpu.task_stat_collection_issues),
+                    taskstats: Some(cpu.taskstats),
+                    taskstats_collection_issues: Some(cpu.taskstats_collection_issues),
+                    taskstats_capability: Some(cpu.taskstats_capability),
+                    delay_accounting: Some(cpu.delay_accounting),
+                    process_resource_capability: Some(process_resource_capability),
+                    task_stat_capability: Some(task_stat_capability),
+                    memory_psi_duration_us,
+                    memory_psi,
+                    memory_context_duration_us,
+                    memory_context,
+                    io_psi_duration_us,
+                    io_psi,
+                    diskstats_duration_us,
+                    diskstats,
+                    process_io_duration_us,
+                    process_io,
+                    cgroup_duration_us,
+                    cgroup,
+                }
+            }
             None => Self {
                 psi_duration_us,
                 cpu_psi,
@@ -1634,6 +1791,14 @@ impl ObservationJson {
                 process_collection_issues: None,
                 scheduler_delay_candidates: None,
                 schedstat_collection_issues: None,
+                process_resource_evidence: None,
+                task_stat_collection_issues: None,
+                taskstats: None,
+                taskstats_collection_issues: None,
+                taskstats_capability: None,
+                delay_accounting: None,
+                process_resource_capability: None,
+                task_stat_capability: None,
                 memory_psi_duration_us,
                 memory_psi,
                 memory_context_duration_us,

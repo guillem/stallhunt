@@ -31,7 +31,7 @@ use crate::psi::{
 
 pub const RECORDING_KIND: &str = "stallhunt.recording";
 pub const LEGACY_RECORDING_KIND: &str = "bottleneck.recording";
-pub const RECORDING_SCHEMA_VERSION: u32 = 1;
+pub const RECORDING_SCHEMA_VERSION: u32 = 2;
 pub const MAX_RECORDING_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -193,7 +193,7 @@ pub fn recording_from_observation(
         requested_duration_ms,
         observation: RecordedHunt {
             cpu_psi: Collected::from_result(observation.psi),
-            cpu: record_cpu(observation.cpu.clone()),
+            cpu: Collected::from_result(observation.cpu.clone()),
             memory: observation.memory.as_ref().map(record_memory),
             io: observation.io.as_ref().map(record_io),
             cgroup: observation.cgroup.as_ref().map(record_cgroup),
@@ -205,21 +205,12 @@ pub fn recording_from_observation(
     Ok(recording)
 }
 
-fn record_cpu(
-    mut cpu: Result<CpuProcessObservation, CpuError>,
-) -> Collected<CpuProcessObservation, CpuError> {
-    // Schema 1 recordings predate this raw evidence. Omit it until schema 2
-    // defines persisted replay semantics.
-    if let Ok(value) = &mut cpu {
-        strip_schema1_cpu(value);
-    }
-    Collected::from_result(cpu)
-}
-
 pub fn observation_from_recording(recording: &Recording) -> Result<HuntObservation, RecordError> {
     validate_header(recording)?;
     let mut cpu = result_from_collected(&recording.observation.cpu);
-    if let Ok(value) = &mut cpu {
+    if recording.schema_version == 1
+        && let Ok(value) = &mut cpu
+    {
         // Future fields injected into a schema-1 document have no schema-1
         // meaning and must not leak into replay.
         strip_schema1_cpu(value);
@@ -247,6 +238,7 @@ fn strip_schema1_cpu(value: &mut CpuProcessObservation) {
     value.collection_issues.resource_counter_regressed = 0;
     value.collection_issues.task_block_io_counter_regressed = 0;
     value.collection_issues.task_block_io_aggregate_overflow = 0;
+    value.collection_issues.task_block_io_field_missing = 0;
     value.collection_issues.resource_value_overflow = 0;
     value.taskstats.clear();
     value.taskstats_collection_issues = Default::default();
@@ -326,6 +318,14 @@ pub fn read_recording(path: &Path) -> Result<Recording, RecordError> {
 }
 
 pub fn redact_recording(recording: &mut Recording) {
+    // Schema-1 cannot represent the v0.4 normalized evidence.  Preserve the
+    // input version while preventing injected schema-2 fields from leaking
+    // through a redact round trip.
+    if recording.schema_version == 1 {
+        if let Collected::Observed { value } = &mut recording.observation.cpu {
+            strip_schema1_cpu(value);
+        }
+    }
     recording.redaction = Redaction::Identifiers;
     let mut paths = PathRedactor::default();
     if let Collected::Observed { value } = &mut recording.observation.cpu {
@@ -334,6 +334,9 @@ pub fn redact_recording(recording: &mut Recording) {
         }
         for candidate in &mut value.scheduler_delay_candidates {
             candidate.name = process_placeholder(candidate.key.pid);
+        }
+        for evidence in &mut value.process_resource_evidence {
+            evidence.name = process_placeholder(evidence.key.pid);
         }
     }
     if let Some(io) = recording.observation.io.as_mut() {
@@ -372,9 +375,9 @@ fn validate_header(recording: &Recording) -> Result<(), RecordError> {
             recording.kind
         )));
     }
-    if recording.schema_version != RECORDING_SCHEMA_VERSION {
+    if !matches!(recording.schema_version, 1 | RECORDING_SCHEMA_VERSION) {
         return Err(RecordError::new(format!(
-            "unsupported recording schema_version {}; this tool reads version {RECORDING_SCHEMA_VERSION}",
+            "unsupported recording schema_version {}; this tool reads versions 1 and {RECORDING_SCHEMA_VERSION}",
             recording.schema_version
         )));
     }
@@ -966,13 +969,9 @@ mod tests {
         assert_eq!(original_cpu.kind, restored_cpu.kind);
         assert_eq!(original_cpu.severity, restored_cpu.severity);
         assert_eq!(restored.cpu.as_ref().unwrap().processes[0].name, "pid-42");
-        assert!(
-            restored
-                .cpu
-                .as_ref()
-                .unwrap()
-                .process_resource_evidence
-                .is_empty()
+        assert_eq!(
+            restored.cpu.as_ref().unwrap().process_resource_evidence[0].name,
+            "pid-42"
         );
         assert_eq!(
             restored
@@ -981,7 +980,7 @@ mod tests {
                 .unwrap()
                 .collection_issues
                 .resource_counter_regressed,
-            0
+            1
         );
         assert_eq!(
             restored
@@ -990,16 +989,16 @@ mod tests {
                 .unwrap()
                 .task_stat_collection_issues
                 .tasks_read,
-            0
+            1
         );
         assert!(
-            !encode_recording(&recording)
+            encode_recording(&recording)
                 .expect("json")
                 .contains("process_resource_evidence")
         );
         let encoded = encode_recording(&recording).expect("json");
-        assert!(!encoded.contains("task_stat_collection_issues"));
-        assert!(!encoded.contains("resource_counter_regressed"));
+        assert!(encoded.contains("task_stat_collection_issues"));
+        assert!(encoded.contains("resource_counter_regressed"));
         let mut injected = recording.clone();
         if let Collected::Observed { value } = &mut injected.observation.cpu {
             value
@@ -1020,11 +1019,11 @@ mod tests {
             value.collection_issues.resource_counter_regressed = 1;
             value.task_stat_collection_issues.tasks_read = 1;
         }
-        let injected_restored = observation_from_recording(&injected).expect("strip schema 1");
+        let injected_restored = observation_from_recording(&injected).expect("restore schema 2");
         let injected_cpu = injected_restored.cpu.unwrap();
-        assert!(injected_cpu.process_resource_evidence.is_empty());
-        assert_eq!(injected_cpu.collection_issues.resource_counter_regressed, 0);
-        assert_eq!(injected_cpu.task_stat_collection_issues.tasks_read, 0);
+        assert_eq!(injected_cpu.process_resource_evidence.len(), 2);
+        assert_eq!(injected_cpu.collection_issues.resource_counter_regressed, 1);
+        assert_eq!(injected_cpu.task_stat_collection_issues.tasks_read, 1);
         assert_eq!(
             restored
                 .io
@@ -1117,6 +1116,58 @@ mod tests {
                 state: CgroupFileState::Missing,
                 value: None,
             }
+        );
+    }
+
+    #[test]
+    fn schema_2_round_trip_retains_taskstats_and_schema_1_strips_injected_evidence() {
+        let mut observation = sample_observation();
+        let cpu = observation.cpu.as_mut().unwrap();
+        cpu.taskstats_capability = crate::taskstats::TaskstatsCapability::Available;
+        cpu.delay_accounting = crate::taskstats::DelayAccountingState::Enabled;
+        cpu.taskstats.push(crate::taskstats::TaskstatsInterval {
+            key: cpu.processes[0].key,
+            min_uapi_version: 13,
+            field_support: crate::taskstats::TaskstatsFieldSupport {
+                cpu_delay: true,
+                block_io_delay: true,
+                swapin_delay: true,
+                reclaim_delay: true,
+                thrashing_delay: true,
+                compaction_delay: true,
+                write_protect_copy_delay: true,
+            },
+            cpu_delay_ns: Some(1),
+            block_io_delay_ns: Some(2),
+            swapin_delay_ns: Some(3),
+            reclaim_delay_ns: Some(4),
+            thrashing_delay_ns: Some(5),
+            compaction_delay_ns: Some(6),
+            write_protect_copy_delay_ns: Some(7),
+        });
+        let mut recording =
+            recording_from_observation(&observation, 10_000, Redaction::None).unwrap();
+        assert_eq!(recording.schema_version, 2);
+        assert!(
+            encode_recording(&recording)
+                .unwrap()
+                .contains("field_support")
+        );
+        assert_eq!(
+            observation_from_recording(&recording)
+                .unwrap()
+                .cpu
+                .unwrap()
+                .taskstats
+                .len(),
+            1
+        );
+        recording.schema_version = 1;
+        let restored = observation_from_recording(&recording).unwrap().cpu.unwrap();
+        assert!(restored.taskstats.is_empty());
+        assert_eq!(
+            restored.taskstats_capability,
+            crate::taskstats::TaskstatsCapability::NotRecorded
         );
     }
 

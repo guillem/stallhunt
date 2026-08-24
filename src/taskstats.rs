@@ -42,12 +42,14 @@ const TASKSTATS_TYPE_AGGR_TGID: u16 = 5;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskstatsCapability {
+    /// The recording schema did not retain TASKSTATS evidence.
+    #[default]
+    NotRecorded,
     Available,
     Partial,
     Unsupported,
     PermissionDenied,
     TimedOut,
-    #[default]
     Failed,
 }
 
@@ -92,6 +94,13 @@ pub struct TaskstatsRaw {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskstatsInterval {
     pub key: ProcessKey,
+    /// The oldest TASKSTATS UAPI version observed at both ends of this
+    /// interval.  A field introduced later than this cannot support a
+    /// complete negative result, even when its decoded value is zero.
+    #[serde(default)]
+    pub min_uapi_version: u16,
+    #[serde(default)]
+    pub field_support: TaskstatsFieldSupport,
     pub cpu_delay_ns: Option<u64>,
     pub block_io_delay_ns: Option<u64>,
     pub swapin_delay_ns: Option<u64>,
@@ -99,6 +108,34 @@ pub struct TaskstatsInterval {
     pub thrashing_delay_ns: Option<u64>,
     pub compaction_delay_ns: Option<u64>,
     pub write_protect_copy_delay_ns: Option<u64>,
+}
+
+/// Per-field TASKSTATS support, retained independently from transport state.
+/// `false` means the kernel version did not define the counter for this
+/// interval (or an endpoint did not carry it); it is not a measured zero.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskstatsFieldSupport {
+    pub cpu_delay: bool,
+    pub block_io_delay: bool,
+    pub swapin_delay: bool,
+    pub reclaim_delay: bool,
+    pub thrashing_delay: bool,
+    pub compaction_delay: bool,
+    pub write_protect_copy_delay: bool,
+}
+
+impl TaskstatsFieldSupport {
+    fn for_version(version: u16) -> Self {
+        Self {
+            cpu_delay: version >= 1,
+            block_io_delay: version >= 1,
+            swapin_delay: version >= 1,
+            reclaim_delay: version >= 7,
+            thrashing_delay: version >= 9,
+            compaction_delay: version >= 11,
+            write_protect_copy_delay: version >= 13,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -243,6 +280,8 @@ pub fn intervals(
         };
         values.push(TaskstatsInterval {
             key: *key,
+            min_uapi_version: left.version.min(right.version),
+            field_support: TaskstatsFieldSupport::for_version(left.version.min(right.version)),
             cpu_delay_ns: delta(left.cpu_delay_ns, right.cpu_delay_ns, &mut issues),
             block_io_delay_ns: delta(left.block_io_delay_ns, right.block_io_delay_ns, &mut issues),
             swapin_delay_ns: delta(left.swapin_delay_ns, right.swapin_delay_ns, &mut issues),
@@ -724,6 +763,44 @@ mod tests {
         future.pop();
         assert!(parse_taskstats(&future).is_err());
     }
+    #[test]
+    fn interval_retains_version_gated_field_support() {
+        for (version, reclaim, thrashing, compaction, wpc) in [
+            (1, false, false, false, false),
+            (7, true, false, false, false),
+            (9, true, true, false, false),
+            (11, true, true, true, false),
+            (13, true, true, true, true),
+        ] {
+            let support = TaskstatsFieldSupport::for_version(version);
+            assert!(support.cpu_delay && support.block_io_delay && support.swapin_delay);
+            assert_eq!(support.reclaim_delay, reclaim);
+            assert_eq!(support.thrashing_delay, thrashing);
+            assert_eq!(support.compaction_delay, compaction);
+            assert_eq!(support.write_protect_copy_delay, wpc);
+        }
+    }
+    macro_rules! support_case {
+        ($name:ident, $version:expr, $field:ident) => {
+            #[test]
+            fn $name() {
+                assert!(TaskstatsFieldSupport::for_version($version).$field);
+            }
+        };
+    }
+    support_case!(version_one_supports_baseline_cpu_delay, 1, cpu_delay);
+    support_case!(version_seven_supports_reclaim_delay, 7, reclaim_delay);
+    support_case!(version_nine_supports_thrashing_delay, 9, thrashing_delay);
+    support_case!(
+        version_eleven_supports_compaction_delay,
+        11,
+        compaction_delay
+    );
+    support_case!(
+        version_thirteen_supports_write_protect_copy_delay,
+        13,
+        write_protect_copy_delay
+    );
     #[test]
     fn attributes_reject_truncation_and_bad_padding() {
         assert!(attrs(&[4, 0, 1, 0, 1]).is_err());

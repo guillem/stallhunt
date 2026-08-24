@@ -12,11 +12,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::style::{self, ColorMode};
-use crate::watch::{
-    self, LifecycleState, ObservationStatus, ProcessCandidate, ProcessCandidateAvailability,
-    ProcessCandidateEvidence, ProcessRole, ResourceSignal, WatchWindow,
+use crate::analysis::{
+    ProcessCandidate, ProcessCandidateAvailability, ProcessCandidateEvidence, ProcessRole,
 };
+use crate::style::{self, ColorMode};
+use crate::watch::{self, LifecycleState, ObservationStatus, ResourceSignal, WatchWindow};
 
 use super::app::App;
 
@@ -174,6 +174,9 @@ fn draw_process_column<'a>(
         match role {
             ProcessRole::CpuVictim => "CPU vic. (last observed)".to_owned(),
             ProcessRole::CpuSuspect => "CPU sus. (last observed)".to_owned(),
+            ProcessRole::MemoryVictim => "Mem vic. (last observed)".to_owned(),
+            ProcessRole::MemorySuspect => "Mem sus. (last observed)".to_owned(),
+            ProcessRole::IoVictim => "I/O vic. (last observed)".to_owned(),
             ProcessRole::IoSuspect => "I/O sus. (last observed)".to_owned(),
         }
     } else {
@@ -226,6 +229,23 @@ fn compact_evidence(candidate: &ProcessCandidate) -> String {
             known_accounted_bytes,
             ..
         } => format_bytes(*known_accounted_bytes),
+        ProcessCandidateEvidence::TaskstatsCpuDelay { cpu_delay_ns } => format_ns(*cpu_delay_ns),
+        ProcessCandidateEvidence::MemoryDelay {
+            largest_delay_ns, ..
+        } => format_ns(*largest_delay_ns),
+        ProcessCandidateEvidence::MajorFaults { major_faults } => {
+            format_count(u128::from(*major_faults))
+        }
+        ProcessCandidateEvidence::RssGrowth { rss_growth_bytes } => {
+            format_bytes(u128::from(*rss_growth_bytes))
+        }
+        ProcessCandidateEvidence::BlockIoDelay {
+            block_io_delay_ns,
+            procfs_block_io_delay_ticks,
+        } => block_io_delay_ns.filter(|value| *value > 0).map_or_else(
+            || format!("{} ticks", procfs_block_io_delay_ticks.unwrap_or(0)),
+            format_ns,
+        ),
     }
 }
 
@@ -236,6 +256,7 @@ fn detail_candidate(candidate: &ProcessCandidate, width: u16) -> String {
             runnable_wait_ns,
             runnable_delay_fraction,
             stable_task_count,
+            ..
         } => format!(
             "wait {} · window {} · {stable_task_count} tasks",
             format_ns(*runnable_wait_ns),
@@ -261,6 +282,32 @@ fn detail_candidate(candidate: &ProcessCandidate, width: u16) -> String {
             write_bytes.map_or_else(|| "n/a".into(), |value| format_bytes(u128::from(value))),
             cancelled_write_bytes
                 .map_or_else(|| "n/a".into(), |value| format_bytes(u128::from(value))),
+        ),
+        ProcessCandidateEvidence::TaskstatsCpuDelay { cpu_delay_ns } => {
+            format!("taskstats CPU {}", format_ns(*cpu_delay_ns))
+        }
+        ProcessCandidateEvidence::MemoryDelay {
+            largest_component,
+            largest_delay_ns,
+            ..
+        } => format!("{largest_component} {}", format_ns(*largest_delay_ns)),
+        ProcessCandidateEvidence::MajorFaults { major_faults } => {
+            format!("{} major faults", format_count(u128::from(*major_faults)))
+        }
+        ProcessCandidateEvidence::RssGrowth { rss_growth_bytes } => {
+            format!("RSS +{}", format_bytes(u128::from(*rss_growth_bytes)))
+        }
+        ProcessCandidateEvidence::BlockIoDelay {
+            block_io_delay_ns,
+            procfs_block_io_delay_ticks,
+        } => block_io_delay_ns.filter(|value| *value > 0).map_or_else(
+            || {
+                format!(
+                    "block I/O {} ticks",
+                    procfs_block_io_delay_ticks.unwrap_or(0)
+                )
+            },
+            |value| format!("block I/O {}", format_ns(value)),
         ),
     };
     let prefix = format!("PID {} ", candidate.key.pid);
@@ -293,6 +340,9 @@ const fn role_label(role: ProcessRole) -> &'static str {
     match role {
         ProcessRole::CpuVictim => "victim",
         ProcessRole::CpuSuspect => "suspect",
+        ProcessRole::MemoryVictim => "memory victim",
+        ProcessRole::MemorySuspect => "memory suspect",
+        ProcessRole::IoVictim => "I/O victim",
         ProcessRole::IoSuspect => "I/O",
     }
 }
@@ -819,6 +869,7 @@ mod tests {
                     runnable_wait_ns,
                     runnable_delay_fraction,
                     stable_task_count,
+                    ..
                 } => {
                     *runnable_wait_ns = u64::MAX;
                     *runnable_delay_fraction = f64::MAX;
@@ -842,6 +893,11 @@ mod tests {
                     *cancelled_write_bytes = Some(u64::MAX);
                     *known_accounted_bytes = u128::from(u64::MAX) * 2;
                 }
+                ProcessCandidateEvidence::TaskstatsCpuDelay { .. }
+                | ProcessCandidateEvidence::MemoryDelay { .. }
+                | ProcessCandidateEvidence::MajorFaults { .. }
+                | ProcessCandidateEvidence::RssGrowth { .. }
+                | ProcessCandidateEvidence::BlockIoDelay { .. } => {}
             }
             let line = detail_candidate(candidate, 78);
             assert!(line.chars().count() <= 78, "{line}");

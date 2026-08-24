@@ -15,10 +15,13 @@ use serde::Serialize;
 use crate::analysis::{
     self, AssessmentKind, CgroupAssessmentKind, CgroupFinding, CgroupMechanism, CgroupResourceKind,
     Confidence, CpuFinding, IoAssessmentKind, IoFinding, MemoryAssessmentKind, MemoryFinding,
-    Qualifier, Severity,
+    ProcessCandidate, ProcessCandidateAvailability, ProcessCandidateEvidence, ProcessRole,
+    ProcessRoleList, ProcessScope, Qualifier, Severity,
 };
 use crate::cli::{OutputFormat, WatchOptions};
-use crate::cpu::{ProcessKey, sanitized_process_name};
+#[cfg(test)]
+use crate::cpu::ProcessKey;
+use crate::cpu::sanitized_process_name;
 use crate::observe::{
     HuntObservation, observation_from_endpoints, read_end_endpoint, read_start_endpoint,
 };
@@ -107,59 +110,10 @@ pub enum ObservationStatus {
     Unconfirmed,
 }
 
-/// Bounded, resource-specific process context retained by watch. These are
-/// candidates from one observation window, not proof that a process caused a
-/// finding or (for CPU victims) that it suffered user-visible harm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProcessRole {
-    CpuVictim,
-    CpuSuspect,
-    IoSuspect,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ProcessCandidateAvailability {
-    Available,
-    UnavailableOrIncomplete,
-    NotAssessed,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProcessRoleAvailability {
     pub role: ProcessRole,
     pub availability: ProcessCandidateAvailability,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ProcessCandidateEvidence {
-    RunnableDelay {
-        runnable_wait_ns: u64,
-        runnable_delay_fraction: f64,
-        stable_task_count: u32,
-    },
-    CpuConsumption {
-        cpu_fraction_of_one: f64,
-        cpu_ticks: u64,
-    },
-    IoActivity {
-        read_bytes: Option<u64>,
-        write_bytes: Option<u64>,
-        cancelled_write_bytes: Option<u64>,
-        known_accounted_bytes: u128,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct ProcessCandidate {
-    pub role: ProcessRole,
-    pub key: ProcessKey,
-    pub name: String,
-    pub confidence: Confidence,
-    pub label: &'static str,
-    pub evidence: ProcessCandidateEvidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -177,6 +131,8 @@ pub struct ResourceSignal {
     /// Additive machine-readable distinction between a supported empty role,
     /// incomplete telemetry, and a role not assessed outside pressure.
     pub process_candidate_availability: Vec<ProcessRoleAvailability>,
+    /// Exact analyzer-owned lists for this resource's victim/suspect roles.
+    pub process_role_lists: Vec<ProcessRoleList>,
     /// Full qualifier messages backing this signal, for the watch TUI's
     /// detail pane. Not part of the watch JSON stream contract (ADR-0008):
     /// that stream is a compact lifecycle document, not a full-evidence
@@ -194,6 +150,9 @@ pub struct WindowSignals {
     pub observed_cgroup_paths: BTreeSet<String>,
     pub ranking_omitted_cgroup_ids: BTreeSet<FindingId>,
     pub cgroup_tracking_capped: bool,
+    /// Exact analyzer-owned scoped role lists for this window.  The legacy
+    /// flat candidate fields remain for compatibility only.
+    pub process_scopes: Vec<ProcessScope>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -212,6 +171,7 @@ pub struct TrackedFinding {
     /// `true` means candidates were retained from the last confirmed pressure
     /// window because this finding is unconfirmed or resolved in this window.
     pub process_candidates_stale: bool,
+    pub process_role_lists: Vec<ProcessRoleList>,
     /// Full qualifier messages, for the watch TUI's detail pane. Not part
     /// of the watch JSON stream contract — see `ResourceSignal::qualifiers`.
     #[serde(skip_serializing)]
@@ -250,7 +210,19 @@ struct ActiveRecord {
     summary: String,
     psi_some_fraction: Option<f64>,
     process_candidates: Vec<ProcessCandidate>,
+    process_role_lists: Vec<ProcessRoleList>,
     qualifiers: Vec<Qualifier>,
+}
+
+fn stale_role_lists(lists: &[ProcessRoleList]) -> Vec<ProcessRoleList> {
+    lists
+        .iter()
+        .cloned()
+        .map(|mut list| {
+            list.stale = true;
+            list
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -309,6 +281,7 @@ impl WatchTracker {
                         psi_some_fraction: signal.psi_some_fraction,
                         process_candidates: signal.process_candidates.clone(),
                         process_candidates_stale: false,
+                        process_role_lists: signal.process_role_lists.clone(),
                         qualifiers: signal.qualifiers.clone(),
                     });
                     still_active.insert(
@@ -321,6 +294,7 @@ impl WatchTracker {
                             summary: signal.summary.clone(),
                             psi_some_fraction: signal.psi_some_fraction,
                             process_candidates: signal.process_candidates.clone(),
+                            process_role_lists: signal.process_role_lists.clone(),
                             qualifiers: signal.qualifiers.clone(),
                         },
                     );
@@ -339,6 +313,7 @@ impl WatchTracker {
                         psi_some_fraction: record.psi_some_fraction,
                         process_candidates: record.process_candidates.clone(),
                         process_candidates_stale: true,
+                        process_role_lists: stale_role_lists(&record.process_role_lists),
                         qualifiers: record.qualifiers.clone(),
                     });
                     still_active.insert(id.clone(), record.clone());
@@ -360,6 +335,7 @@ impl WatchTracker {
                         psi_some_fraction: signal.and_then(|signal| signal.psi_some_fraction),
                         process_candidates: record.process_candidates.clone(),
                         process_candidates_stale: true,
+                        process_role_lists: stale_role_lists(&record.process_role_lists),
                         qualifiers: record.qualifiers.clone(),
                     });
                 }
@@ -391,6 +367,7 @@ impl WatchTracker {
                 psi_some_fraction: signal.psi_some_fraction,
                 process_candidates: signal.process_candidates.clone(),
                 process_candidates_stale: false,
+                process_role_lists: signal.process_role_lists.clone(),
                 qualifiers: signal.qualifiers.clone(),
             });
             still_active.insert(
@@ -403,6 +380,7 @@ impl WatchTracker {
                     summary: signal.summary.clone(),
                     psi_some_fraction: signal.psi_some_fraction,
                     process_candidates: signal.process_candidates.clone(),
+                    process_role_lists: signal.process_role_lists.clone(),
                     qualifiers: signal.qualifiers.clone(),
                 },
             );
@@ -658,20 +636,40 @@ fn watch_text(window: &WatchWindow) -> String {
     );
     process_role_text(
         &mut output,
+        "Memory victims",
+        ProcessRole::MemoryVictim,
+        &window.current.memory,
+        "taskstats delay or major-fault fallback",
+    );
+    process_role_text(
+        &mut output,
+        "Memory suspects",
+        ProcessRole::MemorySuspect,
+        &window.current.memory,
+        "positive RSS growth",
+    );
+    process_role_text(
+        &mut output,
+        "I/O victims",
+        ProcessRole::IoVictim,
+        &window.current.io,
+        "taskstats/procfs block-I/O delay",
+    );
+    process_role_text(
+        &mut output,
         "I/O suspects",
         ProcessRole::IoSuspect,
         &window.current.io,
         "same-window process-I/O",
     );
-    output
-        .push_str("  I/O victims: unavailable (process I/O does not identify stalled workloads)\n");
-    output.push_str("  Memory and cgroup process roles: unavailable\n");
     output.push_str(
         "  Qualification: CPU and I/O suspects are same-window correlation; this does not prove causality. CPU victims are runnable-delay candidates, not confirmed harm.\n",
     );
-    for finding in window.lifecycle.iter().filter(|finding| {
-        finding.process_candidates_stale && !finding.process_candidates.is_empty()
-    }) {
+    for finding in window
+        .lifecycle
+        .iter()
+        .filter(|finding| finding.process_candidates_stale)
+    {
         output.push_str(&format!(
             "  Last observed for {} ({}):\n",
             id_label(&finding.id),
@@ -683,6 +681,18 @@ fn watch_text(window: &WatchWindow) -> String {
         ));
         for candidate in &finding.process_candidates {
             output.push_str(&format!("    {}\n", process_candidate_text(candidate)));
+        }
+        if finding.process_candidates.is_empty() {
+            for list in &finding.process_role_lists {
+                let state = match list.availability {
+                    ProcessCandidateAvailability::Available => "no positive candidates",
+                    ProcessCandidateAvailability::UnavailableOrIncomplete => {
+                        "unavailable or incomplete"
+                    }
+                    ProcessCandidateAvailability::NotAssessed => "not assessed",
+                };
+                output.push_str(&format!("    {:?}: {state} (stale)\n", list.role));
+            }
         }
     }
     output.push_str("\nRecent history (oldest first)\n");
@@ -747,7 +757,17 @@ fn process_role_text(
         };
         output.push_str(&format!("  {title}: {state} ({evidence})\n"));
     } else {
-        output.push_str(&format!("  {title}:\n"));
+        let partial = signal
+            .process_role_lists
+            .iter()
+            .find(|list| list.role == role)
+            .is_some_and(|list| {
+                list.completeness == crate::analysis::ProcessRoleCompleteness::Partial
+            });
+        output.push_str(&format!(
+            "  {title}{}:\n",
+            if partial { " (partial)" } else { "" }
+        ));
         for candidate in candidates {
             output.push_str(&format!("    {}\n", process_candidate_text(candidate)));
         }
@@ -761,6 +781,9 @@ fn attribution_incomplete(role: ProcessRole, qualifiers: &[Qualifier]) -> bool {
         }
         ProcessRole::CpuSuspect => {
             ["attribution_unavailable", "suspect_attribution_limited"].as_slice()
+        }
+        ProcessRole::MemoryVictim | ProcessRole::MemorySuspect | ProcessRole::IoVictim => {
+            ["attribution_unavailable"].as_slice()
         }
         ProcessRole::IoSuspect => ["process_io_unavailable", "process_io_partial"].as_slice(),
     };
@@ -776,6 +799,7 @@ fn process_candidate_text(candidate: &ProcessCandidate) -> String {
             runnable_wait_ns,
             runnable_delay_fraction,
             stable_task_count,
+            ..
         } => format!(
             "{runnable_wait_ns}ns runnable delay ({:.2}% of window; {stable_task_count} stable task(s))",
             runnable_delay_fraction * 100.0
@@ -798,6 +822,34 @@ fn process_candidate_text(candidate: &ProcessCandidate) -> String {
             optional_u64(write_bytes),
             optional_u64(cancelled_write_bytes)
         ),
+        ProcessCandidateEvidence::TaskstatsCpuDelay { cpu_delay_ns } => {
+            format!("{cpu_delay_ns}ns taskstats CPU delay")
+        }
+        ProcessCandidateEvidence::MemoryDelay {
+            largest_component,
+            largest_delay_ns,
+            ..
+        } => {
+            format!("{largest_delay_ns}ns taskstats {largest_component} delay")
+        }
+        ProcessCandidateEvidence::MajorFaults { major_faults } => {
+            format!("{major_faults} major faults")
+        }
+        ProcessCandidateEvidence::RssGrowth { rss_growth_bytes } => {
+            format!("{rss_growth_bytes}B RSS growth")
+        }
+        ProcessCandidateEvidence::BlockIoDelay {
+            block_io_delay_ns,
+            procfs_block_io_delay_ticks,
+        } => block_io_delay_ns
+            .filter(|value| *value > 0)
+            .map(|value| format!("{value}ns taskstats block-I/O delay"))
+            .or_else(|| {
+                procfs_block_io_delay_ticks
+                    .filter(|value| *value > 0)
+                    .map(|value| format!("{value} procfs block-I/O ticks"))
+            })
+            .unwrap_or_else(|| "block-I/O delay unavailable".into()),
     };
     format!(
         "{name} [{}] — {evidence} ({}; {})",
@@ -831,7 +883,7 @@ fn watch_json(window: &WatchWindow) -> Result<String, serde_json::Error> {
         .collect();
     let payload = WatchWindowJson {
         kind: WATCH_WINDOW_KIND,
-        schema_version: 1,
+        schema_version: 2,
         tool_version: env!("CARGO_PKG_VERSION"),
         window_index: window.index,
         window_count: window.count,
@@ -845,6 +897,7 @@ fn watch_json(window: &WatchWindow) -> Result<String, serde_json::Error> {
             cgroup_tracking_capped: window.current.cgroup_tracking_capped,
         },
         history: &window.history,
+        process_scopes: window.current.process_scopes.clone(),
     };
     Ok(format!("{}\n", serde_json::to_string(&payload)?))
 }
@@ -860,6 +913,7 @@ struct WatchWindowJson<'a> {
     lifecycle: &'a [TrackedFinding],
     current: CurrentJson<'a>,
     history: &'a [HistoryEntry],
+    process_scopes: Vec<ProcessScope>,
 }
 
 #[derive(Serialize)]
@@ -919,9 +973,29 @@ pub(crate) fn format_ms(duration_ms: u64) -> String {
 }
 
 pub fn signals_from_observation(observation: &HuntObservation) -> WindowSignals {
-    let cpu = cpu_signal(observation);
-    let memory = memory_signal(observation);
-    let io = io_signal(observation);
+    let mut cpu = cpu_signal(observation);
+    let mut memory = memory_signal(observation);
+    let mut io = io_signal(observation);
+    let process_scopes = vec![analysis::host_process_scope(
+        observation.cpu.as_ref().ok(),
+        observation
+            .io
+            .as_ref()
+            .and_then(|value| value.processes.as_ref().ok()),
+        (cpu.status == ObservationStatus::Pressure).then_some(cpu.confidence),
+        (memory.status == ObservationStatus::Pressure).then_some(memory.confidence),
+        (io.status == ObservationStatus::Pressure).then_some(io.confidence),
+    )];
+    let roles = &process_scopes[0].roles;
+    cpu.process_role_lists =
+        roles_for_resource(roles, ProcessRole::CpuVictim, ProcessRole::CpuSuspect);
+    memory.process_role_lists =
+        roles_for_resource(roles, ProcessRole::MemoryVictim, ProcessRole::MemorySuspect);
+    io.process_role_lists =
+        roles_for_resource(roles, ProcessRole::IoVictim, ProcessRole::IoSuspect);
+    populate_role_candidates(&mut cpu);
+    populate_role_candidates(&mut memory);
+    populate_role_candidates(&mut io);
     let cgroup_signals = cgroup_signals(observation);
     WindowSignals {
         cpu,
@@ -931,7 +1005,36 @@ pub fn signals_from_observation(observation: &HuntObservation) -> WindowSignals 
         observed_cgroup_paths: cgroup_signals.observed_cgroup_paths,
         ranking_omitted_cgroup_ids: cgroup_signals.ranking_omitted_cgroup_ids,
         cgroup_tracking_capped: cgroup_signals.capped,
+        process_scopes,
     }
+}
+
+fn populate_role_candidates(signal: &mut ResourceSignal) {
+    signal.process_candidates = signal
+        .process_role_lists
+        .iter()
+        .flat_map(|list| list.candidates.iter().cloned())
+        .collect();
+    signal.process_candidate_availability = signal
+        .process_role_lists
+        .iter()
+        .map(|list| ProcessRoleAvailability {
+            role: list.role,
+            availability: list.availability,
+        })
+        .collect();
+}
+
+fn roles_for_resource(
+    roles: &[ProcessRoleList],
+    first: ProcessRole,
+    second: ProcessRole,
+) -> Vec<ProcessRoleList> {
+    roles
+        .iter()
+        .filter(|role| role.role == first || role.role == second)
+        .cloned()
+        .collect()
 }
 
 fn cpu_signal(observation: &HuntObservation) -> ResourceSignal {
@@ -962,6 +1065,7 @@ fn cpu_finding_signal(finding: &CpuFinding) -> ResourceSignal {
         psi_some_fraction: Some(finding.evidence.psi_some_fraction),
         process_candidates: cpu_candidates(finding),
         process_candidate_availability: cpu_role_availability(status, &finding.qualifiers),
+        process_role_lists: Vec::new(),
         qualifiers: finding.qualifiers.clone(),
     }
 }
@@ -978,6 +1082,7 @@ fn cpu_candidates(finding: &CpuFinding) -> Vec<ProcessCandidate> {
             runnable_wait_ns: victim.runnable_wait_ns,
             runnable_delay_fraction: victim.runnable_delay_fraction,
             stable_task_count: victim.stable_task_count,
+            taskstats_cpu_delay_ns: None,
         },
     }));
     candidates.extend(finding.suspects.iter().map(|suspect| ProcessCandidate {
@@ -1042,6 +1147,7 @@ fn memory_finding_signal(finding: &MemoryFinding) -> ResourceSignal {
         psi_some_fraction: Some(finding.evidence.psi_some_fraction),
         process_candidates: Vec::new(),
         process_candidate_availability: Vec::new(),
+        process_role_lists: Vec::new(),
         qualifiers: finding.qualifiers.clone(),
     }
 }
@@ -1094,6 +1200,7 @@ fn io_finding_signal(finding: &IoFinding) -> ResourceSignal {
         psi_some_fraction: Some(finding.evidence.psi_some_fraction),
         process_candidates: io_candidates(finding),
         process_candidate_availability: io_role_availability(status, &finding.qualifiers),
+        process_role_lists: Vec::new(),
         qualifiers: finding.qualifiers.clone(),
     }
 }
@@ -1216,6 +1323,7 @@ fn cgroup_pressure_signal(finding: CgroupFinding) -> Option<(FindingId, Resource
             psi_some_fraction: finding.evidence.psi_some_fraction,
             process_candidates: Vec::new(),
             process_candidate_availability: Vec::new(),
+            process_role_lists: Vec::new(),
             qualifiers: finding.qualifiers,
         },
     ))
@@ -1252,6 +1360,7 @@ fn unconfirmed_signal(kind: &'static str, summary: &str) -> ResourceSignal {
         psi_some_fraction: None,
         process_candidates: Vec::new(),
         process_candidate_availability: Vec::new(),
+        process_role_lists: Vec::new(),
         qualifiers: Vec::new(),
     }
 }
@@ -1294,6 +1403,7 @@ pub(crate) mod test_support {
             psi_some_fraction: Some(psi),
             process_candidates: Vec::new(),
             process_candidate_availability: Vec::new(),
+            process_role_lists: Vec::new(),
             qualifiers,
         }
     }
@@ -1308,6 +1418,7 @@ pub(crate) mod test_support {
             psi_some_fraction: Some(0.001),
             process_candidates: Vec::new(),
             process_candidate_availability: Vec::new(),
+            process_role_lists: Vec::new(),
             qualifiers: Vec::new(),
         }
     }
@@ -1329,6 +1440,7 @@ pub(crate) mod test_support {
             observed_cgroup_paths: BTreeSet::new(),
             ranking_omitted_cgroup_ids: BTreeSet::new(),
             cgroup_tracking_capped: false,
+            process_scopes: Vec::new(),
         }
     }
 
@@ -1369,6 +1481,7 @@ pub(crate) mod test_support {
                     runnable_wait_ns: 500_000_000,
                     runnable_delay_fraction: 0.05,
                     stable_task_count: 2,
+                    taskstats_cpu_delay_ns: None,
                 },
             },
             ProcessCandidate {
@@ -1497,6 +1610,79 @@ mod tests {
             healthy("io_no_meaningful_contention"),
         ));
         assert!(fourth.lifecycle.is_empty());
+    }
+
+    #[test]
+    fn lifecycle_retains_exact_two_resource_role_lists_and_marks_stale() {
+        let roles = vec![
+            ProcessRoleList {
+                role: ProcessRole::CpuVictim,
+                availability: ProcessCandidateAvailability::Available,
+                completeness: crate::analysis::ProcessRoleCompleteness::Complete,
+                stale: false,
+                candidates: Vec::new(),
+            },
+            ProcessRoleList {
+                role: ProcessRole::CpuSuspect,
+                availability: ProcessCandidateAvailability::UnavailableOrIncomplete,
+                completeness: crate::analysis::ProcessRoleCompleteness::Unavailable,
+                stale: false,
+                candidates: Vec::new(),
+            },
+        ];
+        let mut tracker = WatchTracker::new();
+        let mut confirmed = pressure("cpu_scheduling_contention", Severity::High, 0.2);
+        confirmed.process_role_lists = roles.clone();
+        let first = tracker.ingest_signals(host_signals(
+            confirmed.clone(),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(first.lifecycle[0].process_role_lists, roles);
+
+        let refreshed = tracker.ingest_signals(host_signals(
+            confirmed,
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(refreshed.lifecycle[0].process_role_lists.len(), 2);
+        assert!(
+            refreshed.lifecycle[0]
+                .process_role_lists
+                .iter()
+                .all(|list| !list.stale)
+        );
+
+        let unconfirmed = tracker.ingest_signals(host_signals(
+            unconfirmed(),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(unconfirmed.lifecycle[0].process_role_lists.len(), 2);
+        assert!(
+            unconfirmed.lifecycle[0]
+                .process_role_lists
+                .iter()
+                .all(|list| list.stale)
+        );
+        assert_eq!(
+            unconfirmed.lifecycle[0].process_role_lists[1].availability,
+            ProcessCandidateAvailability::UnavailableOrIncomplete
+        );
+
+        let resolved = tracker.ingest_signals(host_signals(
+            healthy("cpu_no_meaningful_contention"),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(resolved.lifecycle[0].state, LifecycleState::Resolved);
+        assert_eq!(resolved.lifecycle[0].process_role_lists.len(), 2);
+        assert!(
+            resolved.lifecycle[0]
+                .process_role_lists
+                .iter()
+                .all(|list| list.stale)
+        );
     }
 
     #[test]
@@ -1726,7 +1912,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(json["kind"], WATCH_WINDOW_KIND);
-        assert_eq!(json["schema_version"], 1);
+        assert_eq!(json["schema_version"], 2);
         assert_eq!(json["window_index"], 1);
         assert_eq!(json["lifecycle"][0]["state"], "new");
         assert_eq!(json["lifecycle"][0]["id"]["scope"], "cpu");
@@ -1854,6 +2040,7 @@ mod tests {
                 runnable_wait_ns: 10,
                 runnable_delay_fraction: 0.1,
                 stable_task_count: 1,
+                taskstats_cpu_delay_ns: None,
             },
         };
         let mut tracker = WatchTracker::new();
@@ -1943,7 +2130,7 @@ mod tests {
         assert!(text.contains("restic [7712]"));
 
         let json: serde_json::Value = serde_json::from_str(&watch_json(&window).unwrap()).unwrap();
-        assert_eq!(json["schema_version"], 1);
+        assert_eq!(json["schema_version"], 2);
         assert_eq!(
             json["current"]["cpu"]["process_candidates"][0]["role"],
             "cpu_suspect"

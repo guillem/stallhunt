@@ -183,8 +183,10 @@ snapshot or controller files are incomplete; this also makes the top-level hunt
 status `incomplete`, without discarding valid host findings.
 
 M5 adds `record`, `replay`, and `redact`. Recordings are not hunt JSON: they
-store normalized observations under `kind` `stallhunt.recording` schema
-version 1. Legacy `bottleneck.recording` files are accepted on replay. Replay
+store normalized observations under `kind` `stallhunt.recording`. New files
+use schema version 2; schema-1 and legacy `bottleneck.recording` files are
+accepted on replay, with schema-1 process-resource/taskstats evidence treated
+as unavailable. Replay
 uses the same text/JSON renderers as `hunt`, with the recorded requested
 duration. Invalid recordings exit 1. Missing `--output` or an invalid invocation
 still exits 2. New recording files are created mode 0600 and are not
@@ -209,6 +211,12 @@ identity remains path plus resource, so a mechanism change stays `persistent`. U
 `hunt --json` or `record` when the full evidence payload is required. Invalid
 `--count` still exits 2.
 
+Schema-2 hunt/replay JSON and watch JSON include canonical host
+`process_scopes` with all six process roles. Legacy hunt/replay text and watch
+text show each role or an explicit unavailable/not-assessed state. Candidate
+lists are bounded and may be marked partial; retained lifecycle lists are
+explicitly stale rather than presented as current evidence.
+
 Tracked watch pressure kinds are:
 
 - host: `cpu_scheduling_contention`, `memory_pressure`,
@@ -224,22 +232,20 @@ window summary but do not create tracked identities. A mechanism change updates
 the lifecycle row's `kind` while preserving host-resource identity or cgroup
 path-plus-resource identity.
 
-Every watch surface includes a Processes section/object. Current CPU signals
-may contain ranked `cpu_victim` candidates with runnable-delay evidence and
-`cpu_suspect` candidates with same-window CPU-consumption evidence. Current
-I/O signals may contain ranked `io_suspect` candidates with same-window
-process-I/O evidence. Each candidate carries a stable process key, terminal-safe
-name, confidence, typed evidence, and its analyzer label. CPU victims, CPU
-suspects, and I/O suspects are correlation-qualified candidates, not proof of
-harm or causality. I/O victims and process attribution for memory or cgroup
-findings are explicitly unsupported.
+Every watch surface includes analyzer-owned CPU, memory, and I/O victim and
+suspect lists for the host scope. Each candidate carries a stable process key,
+terminal-safe name, confidence, typed evidence, and its analyzer label. Direct
+delay evidence and heuristic fallbacks remain distinguishable, and candidates
+are correlation-qualified rather than proof of harm or causality. Cgroup role
+lists are the next v0.4.0 slice.
 
 Lifecycle findings repeat their last observed process candidates. A confirmed
 persistent finding refreshes those candidates from the current window; an
 unconfirmed persistent or resolved finding labels them as **last observed** so
 they cannot be mistaken for current activity. Empty and unavailable role lists
-are rendered explicitly rather than omitted. This additive JSON field keeps
-`schema_version: 1`; consumers must tolerate absent fields from older producers.
+are rendered explicitly rather than omitted. Watch JSON uses schema version 2
+and exposes the canonical `process_scopes` collection while retaining the
+earlier flat candidate fields.
 
 ## Human output structure
 
@@ -386,8 +392,8 @@ Representative Milestone 1 finding shape (optional context fields are omitted he
 
 ```json
 {
-  "schema_version": 1,
-  "tool_version": "0.3.0",
+  "schema_version": 2,
+  "tool_version": "0.4.0",
   "requested_observation": {
     "duration_ms": 10000
   },

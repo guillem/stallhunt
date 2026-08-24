@@ -6,3 +6,11 @@ Independent evidence: cgroup /workload.service; memory PSI some 8.00%; I/O PSI s
   The relation is limited to one cgroup path. It does not link host findings to cgroup findings or one cgroup to another, including ancestors and children.
   memory.events high/max and memory.stat direct-reclaim or swap-in deltas are cgroup-scoped signals, not host vmstat proof, and may include descendant activity.
   The chain does not map processes to devices or identify which I/O was reclaim or swap traffic.
+
+Process roles (host scope)
+  CPU victims: not assessed
+  CPU suspects: not assessed
+  Memory victims: not assessed
+  Memory suspects: not assessed
+  I/O victims: not assessed
+  I/O suspects: not assessed

@@ -62,3 +62,11 @@ Independent evidence: cgroup /workload.service; memory PSI some 8.00%; I/O PSI s
   The relation is limited to one cgroup path. It does not link host findings to cgroup findings or one cgroup to another, including ancestors and children.
   memory.events high/max and memory.stat direct-reclaim or swap-in deltas are cgroup-scoped signals, not host vmstat proof, and may include descendant activity.
   The chain does not map processes to devices or identify which I/O was reclaim or swap traffic.
+
+Process roles (host scope)
+  CPU victims: worker [21]: observed_runnable_delay_victim_candidate (High; RunnableDelay { runnable_wait_ns: 500000000, runnable_delay_fraction: 0.05, stable_task_count: 1, taskstats_cpu_delay_ns: None })
+  CPU suspects: build [20]: same_window_cpu_consumer_suspect (Medium; CpuConsumption { cpu_fraction_of_one: 0.8, cpu_ticks: 80 }), worker [21]: same_window_cpu_consumer_suspect (Medium; CpuConsumption { cpu_fraction_of_one: 0.3, cpu_ticks: 30 })
+  Memory victims: unavailable or incomplete
+  Memory suspects: unavailable or incomplete
+  I/O victims: unavailable or incomplete
+  I/O suspects: writer [42]: same_window_process_io_activity_suspect (Medium; IoActivity { read_bytes: Some(1024), write_bytes: Some(8192), cancelled_write_bytes: Some(0), known_accounted_bytes: 9216 })

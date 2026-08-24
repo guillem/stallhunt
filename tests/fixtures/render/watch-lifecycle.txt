@@ -13,9 +13,10 @@ Current window
 Processes
   CPU victims: no positive candidates ranked (runnable-delay)
   CPU suspects: no positive candidates ranked (same-window CPU-consumption)
+  Memory victims: not assessed (no current pressure finding) (taskstats delay or major-fault fallback)
+  Memory suspects: not assessed (no current pressure finding) (positive RSS growth)
+  I/O victims: not assessed (no current pressure finding) (taskstats/procfs block-I/O delay)
   I/O suspects: not assessed (no current pressure finding) (same-window process-I/O)
-  I/O victims: unavailable (process I/O does not identify stalled workloads)
-  Memory and cgroup process roles: unavailable
   Qualification: CPU and I/O suspects are same-window correlation; this does not prove causality. CPU victims are runnable-delay candidates, not confirmed harm.
 
 Recent history (oldest first)

@@ -9,23 +9,15 @@ Last updated: 2026-08-24
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
 explicit-`hunt` parity, and rejects root hunt flags mixed with a subcommand.
-Watch now transports the analyzers' bounded CPU victim/suspect and I/O suspect
-candidates through current signals, lifecycle findings, piped text, additive
-schema-1 JSON, and the TUI. Unconfirmed and resolved findings label retained
-candidates as last observed. Memory/cgroup process roles and I/O victims remain
-unsupported. ADR-0014 records both contracts. No analyzer rule, telemetry
-source, pressure finding kind, remaining M8 chain, or M7 probe was added, and
-the repository remains parked otherwise.
-ADR-0015 and ADR-0016 define the next proposed vertical slice: bounded procfs
-evidence plus optional taskstats delay evidence will support six independently
-ranked host/cgroup process roles, schema version 2, and a responsive wide TUI.
-The first procfs-normalization slice is implemented: the existing bounded walk
-now retains leader RSS/RSS growth in bytes, fault deltas, and stable-task
-block-I/O delay ticks. The bounded optional TASKSTATS GET collector now also
-normalizes version-gated delay counters behind typed transport and
-delay-accounting states; its evidence remains internal and is stripped from
-schema-1 recordings. Roles, schema migration, presentation, controlled-host
-validation, and release gates are still pending. Do not start
+The existing bounded walk now retains leader RSS/RSS growth in bytes, fault
+deltas, and stable-task block-I/O delay ticks. The optional bounded TASKSTATS
+GET collector normalizes version-gated delays behind separate transport and
+delay-accounting states. Host-scoped analyzer-owned six-role attribution emits
+canonical schema-2 `process_scopes` in hunt and watch JSON, with PSI gating,
+deterministic top-five ranking, typed completeness, and explicit stale lifecycle
+retention. Schema-2 recordings persist normalized procfs/taskstats evidence while
+schema-1 replay deliberately strips it. Cgroup-scoped roles, the wide TUI grid,
+controlled-host validation, and release gates remain pending. Do not start
 M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -55,14 +47,14 @@ the test process and does not mutate the hierarchy.
   assumed on an arbitrary host.
 - **M5 complete within its exit condition:** versioned normalized-observation
   recordings, `record`/`replay`/`redact`, identifier redaction, 0600 file
-  creation, and deterministic re-analysis are implemented. Pre-1.0 recordings
-  have no compatibility promise (ADR-0007). There is still no multi-window
-  recording.
+  creation, and deterministic re-analysis are implemented. New recordings use
+  schema 2; schema 1 remains readable and redactable (ADR-0016). There is still
+  no multi-window recording.
 - **M6 complete within its exit condition:** `watch` classifies host and
   bounded cgroup pressure findings as new, persistent, or resolved across
   contiguous rolling windows, keeps 16 history windows, and does not store full
-  finding evidence in its JSON stream. Piped text and additive schema-1 JSON
-  expose bounded CPU victim/suspect and I/O suspect candidates. Per
+  finding evidence in its JSON stream. Piped text and schema-2 JSON expose six
+  bounded analyzer-owned host role lists. Per
   ADR-0013, a TTY renders an interactive TUI over that same lifecycle model
   (not a utilization dashboard) instead of the earlier screen-clearing text.
   A second SIGINT while draining terminates immediately with the conventional
@@ -246,12 +238,11 @@ the test process and does not mutate the hierarchy.
   finding. History is capped at 16 compact windows. A TTY renders an
   interactive TUI (ADR-0013); piped text appends `--- window N ---` frames
   and JSON emits one `stallhunt.watch_window` object per window. Every surface
-  exposes bounded CPU runnable-delay victims, same-window CPU-consumption
-  suspects, and same-window process-I/O suspects when supported. Confirmed
-  lifecycle findings refresh candidates; unconfirmed or resolved findings
-  retain them with a stale/last-observed label. Current JSON also distinguishes
-  available, unavailable, and not-assessed candidate roles while retaining
-  schema version 1. Watch JSON is not hunt JSON and not a recording. Scoped
+  exposes bounded CPU, memory, and I/O victim/suspect roles when supported.
+  Confirmed lifecycle findings refresh candidates; unconfirmed or resolved
+  findings retain them with a stale/last-observed label. Schema-2 JSON
+  distinguishes available, partial, unavailable, and not-assessed roles. Watch
+  JSON is not hunt JSON and not a recording. Scoped
   cgroup lifecycle `kind` values name the resource and any
   reclaim, swap, possible-thrashing, or quota-throttle label; identity
   remains path plus resource.
@@ -311,8 +302,8 @@ the test process and does not mutate the hierarchy.
 - The new procfs resource evidence is raw normalized context only. Delayacct
   block-I/O ticks can be absent or disabled, and zero or unavailable values do
   not establish that a process suffered no I/O delay. Optional TASKSTATS has
-  no controlled-host acceptance yet; its counters remain internal until the
-  schema-2 role slice consumes them.
+  no controlled-host acceptance yet; host roles consume positive counters
+  conservatively and expose collection gaps explicitly.
 - GitHub Actions runs locked tests on Rust 1.85 and formatting, Clippy, and
   locked tests on stable Rust. The five environment-dependent Linux acceptance
   tests remain opt-in rather than CI workloads.
@@ -349,10 +340,10 @@ the test process and does not mutate the hierarchy.
   interval. Recordings do not include extra host identity such as hostname or
   kernel version.
 - Watch JSON carries bounded process-candidate evidence but still omits full
-  observations, raw resource evidence, and qualifiers. CPU suspects and I/O
-  suspects are same-window correlation, while CPU victims are observed summed
-  runnable delay rather than proof of user-visible harm. I/O victims and
-  memory/cgroup process roles remain unsupported. A disappeared cgroup finding
+  observations, raw resource evidence, and qualifiers. Schema-2 also carries
+  canonical host six-role lists. CPU suspects and I/O suspects are same-window
+  correlation, while CPU victims are observed summed runnable delay rather
+  than proof of user-visible harm. Cgroup-scoped roles remain pending. A disappeared cgroup finding
   stays unconfirmed until that scope is observed without ranked pressure.
   Unlimited `watch` without `--count` samples until interrupted and drains the
   current window after the first SIGINT; a second SIGINT exits immediately.
@@ -378,17 +369,15 @@ the test process and does not mutate the hierarchy.
 
 ## Pending work
 
-The approved v0.4.0 vertical slice now has bounded procfs normalization and
-optional taskstats delay evidence. Remaining work adds six analyzer-owned
-host/cgroup roles, schema-2 outputs and recording migration, and
-the responsive wide TUI specified by ADR-0015 and ADR-0016. No additional M8
-chain or M7 probe is part of this slice.
+The approved v0.4.0 vertical slice now has bounded procfs/taskstats evidence,
+host six-role attribution, and schema-2 outputs/recording migration. Remaining
+work adds cgroup-scoped roles and the responsive wide TUI specified by ADR-0015
+and ADR-0016. No additional M8 chain or M7 probe is part of this slice.
 
 Diagnostic and attribution gaps:
 
-- host memory findings still have no process attribution;
-- I/O findings still have no affected-workload attribution or process-to-device
-  mapping;
+- host memory and I/O roles remain conservative candidates rather than causal
+  proof; process-to-device mapping remains unsupported;
 - event-level scheduler, off-CPU, block-request, lock, and network evidence is
   absent because M7 has not started;
 - CPU–I/O, host–cgroup, cross-cgroup, and process-device chains remain
@@ -439,9 +428,9 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Implement host process-role inference and schema-2 recording/output migration,
-reusing normalized procfs and optional taskstats evidence as the
-ordinary-user baseline. Do not start Milestone 7 or add another M8 chain as part of v0.4.0;
+Implement cgroup-scoped process roles by filtering the shared normalized host
+evidence through stable direct/descendant membership. Do not start Milestone 7
+or add another M8 chain as part of v0.4.0;
 coincident PSI still does not establish a causal path.
 
 ## Current design risks
@@ -541,8 +530,8 @@ Decided in ADR-0013:
 Decided in ADR-0014:
 
 - root hunt options have explicit-`hunt` parity and conflict with subcommands;
-- watch carries additive typed process candidates in schema version 1 and
-  labels retained lifecycle candidates as last observed.
+- the earlier schema-1 watch attribution contract is historical and is
+  superseded by ADR-0016's schema-2 scoped role model.
 
 These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.

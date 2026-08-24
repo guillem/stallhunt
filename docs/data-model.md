@@ -59,20 +59,26 @@ ticks. RSS is leader-only and is never summed across threads; as a gauge, a
 valid RSS decrease yields zero growth. Components can be unavailable
 independently when a kernel omits a trailing `stat` field, a negative RSS cannot
 be represented as bytes, a task changes identity, or a monotonic counter
-regresses or overflows. This is normalized observation data, not a
-finding, role, or causal claim. It is currently internal collector state: it is
-not emitted in hunt JSON or schema-1 recordings, and its persisted form remains
-pending schema 2.
+regresses or overflows. This is normalized observation data, not a causal
+claim. Schema-2 hunt JSON and recordings retain it so replay re-runs current
+role inference; schema-1 recordings restore it as unavailable.
 
 This distinction is essential for replay and testing.
 
-The next internal-only normalized extension is a stable-leader TASKSTATS
+The stable-leader TASKSTATS
 interval. It preserves individual optional cumulative-delay deltas for CPU,
 block I/O, swap-in, reclaim, thrashing, compaction, and write-protect-copy,
 plus typed collection completeness and a distinct delay-accounting state.
 These counters are not summed because their categories can overlap. They are
-currently omitted from JSON and schema-1 recordings; schema 2 will make their
-persistence contract explicit.
+emitted in schema-2 JSON and recordings. Schema-1 recordings omit them.
+
+Schema-2 analyzer output also contains canonical host `process_scopes`: CPU,
+memory, and I/O victim/suspect lists. Each list is capped and carries separate
+availability, completeness, and lifecycle-stale state. TASKSTATS intervals
+retain the minimum UAPI version and per-field support; a zero is a complete
+negative only when that field was supported, delay accounting was enabled, and
+the bounded process window was complete. Positive counters remain evidence
+when transport or coverage is partial.
 
 ## Identity
 
@@ -365,7 +371,7 @@ Current recording envelope:
 ```json
 {
   "kind": "stallhunt.recording",
-  "schema_version": 1,
+  "schema_version": 2,
   "tool_version": "0.3.0",
   "recorded_at_unix_ms": 0,
   "redaction": "none",
@@ -378,9 +384,9 @@ Durations are integer microseconds. Each resource is `observed` or
 `unavailable` with a typed error. Wall-clock `recorded_at_unix_ms` is metadata
 only.
 
-Schema-1 recordings deliberately omit v0.4 procfs resource evidence. The
-evidence remains internal and is not yet exposed in hunt JSON. Replay therefore
-treats it as unavailable until schema 2 defines its persisted form.
+Schema-1 recordings deliberately omit v0.4 procfs resource evidence and replay
+treats it as unavailable. Schema-2 persists procfs/taskstats evidence and
+re-runs the current analyzer; derived process candidates are never recorded.
 
 Pre-1.0 recordings have no compatibility promise. Legacy recordings with
 `kind` `bottleneck.recording` are accepted on replay. Unknown `kind` or
@@ -409,16 +415,11 @@ reclaim, swap, and possible-thrashing pressure while preserving the single host
 memory identity. The complete pressure-kind catalog is in `cli-ux.md`.
 
 Watch JSON `kind` is `stallhunt.watch_window`. It is not replayable as a
-recording and does not carry full finding evidence. It does carry additive,
-typed `process_candidates` on supported current signals and lifecycle findings:
-CPU runnable-delay victims, CPU-consumption suspects, and process-I/O suspects.
-Each candidate has a process key, name, role, confidence, label, and typed
-same-window evidence. Current signals also carry typed role availability so an
-empty supported ranking is distinct from incomplete telemetry and a role not
-assessed without pressure. A lifecycle candidate list is marked stale when it
-is retained from the last confirmed pressure window. Memory, cgroup, and
-I/O-victim process roles remain unsupported. `schema_version` remains 1 because
-these are additive pre-1.0 fields.
+recording and does not carry full finding evidence. Schema 2 carries canonical
+host `process_scopes` with all six bounded roles, typed evidence, availability,
+completeness, and explicit stale lifecycle retention. An empty supported
+ranking is therefore distinct from incomplete telemetry and a role not assessed
+without pressure.
 
 ## Evidence chains
 

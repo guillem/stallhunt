@@ -65,7 +65,7 @@ fn root_hunt_options_execute_like_hunt() {
         String::from_utf8_lossy(&output.stderr)
     );
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("hunt JSON should parse");
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["requested_observation"]["duration_ms"], 100);
 }
 
@@ -113,7 +113,7 @@ fn hunt_json_structurally_reports_observed_or_incomplete_cpu_psi() {
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("hunt JSON should parse");
 
     assert!(output.status.success());
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["requested_observation"]["duration_ms"], 100);
     assert!(json["findings"].is_array());
     assert!(json["cgroup_findings"].is_array());
@@ -278,13 +278,13 @@ fn record_replay_and_redact_round_trip() {
         String::from_utf8_lossy(&recorded.stderr)
     );
     assert!(stdout.contains("Wrote recording"));
-    assert!(stdout.contains("schema 1"));
+    assert!(stdout.contains("schema 2"));
 
     let json: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&path).expect("recording should be readable"))
             .expect("recording JSON should parse");
     assert_eq!(json["kind"], "stallhunt.recording");
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["redaction"], "none");
     assert_eq!(json["requested_duration_ms"], 100);
 
@@ -304,7 +304,7 @@ fn record_replay_and_redact_round_trip() {
     );
     let replay_json: serde_json::Value =
         serde_json::from_str(&replay_stdout).expect("replay JSON should parse");
-    assert_eq!(replay_json["schema_version"], 1);
+    assert_eq!(replay_json["schema_version"], 2);
     assert!(replay_json["findings"].is_array());
 
     let duplicate = stallhunt(&[
@@ -372,7 +372,7 @@ fn watch_emits_one_lifecycle_window_and_json_stream_object() {
     let json: serde_json::Value =
         serde_json::from_str(json_stdout.trim()).expect("watch JSON should parse");
     assert_eq!(json["kind"], "stallhunt.watch_window");
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["window_index"], 1);
     assert_eq!(json["window_count"], 1);
     assert_eq!(json["interval_ms"], 100);

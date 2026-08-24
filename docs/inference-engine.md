@@ -248,6 +248,20 @@ pressure evidence.
 
 ## Confidence model
 
+## Implemented v0.4 host process roles
+
+Schema-2 analysis owns one host `process_scopes` entry with six independently
+bounded role lists. Lists are assessed only when the matching host PSI finding
+is pressure. Scheduler delay is the CPU-victim primary evidence; TASKSTATS CPU
+delay is corroboration or a per-process fallback. Memory-delay components are
+kept separate and ranked by their largest component, while major faults are a
+low-confidence per-process fallback. Positive RSS growth is the only memory
+suspect signal. TASKSTATS block-I/O delay precedes positive procfs task-delay
+ticks, and positive process I/O accounting remains an I/O-suspect signal.
+Candidates are capped at five, direct evidence sorts before fallback, and a
+candidate never appears twice for one role. Collection gaps make only their
+affected list partial or unavailable; they do not weaken independent roles.
+
 Confidence reflects evidence quality.
 
 Possible evidence weights:

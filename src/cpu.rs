@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -41,6 +41,9 @@ pub struct ProcessRaw {
     /// Delay-accounting block-I/O ticks are task-scoped, unlike RSS. Entries
     /// are captured only when the task stat identity was stable while read.
     pub task_block_io_delay_ticks: BTreeMap<ThreadKey, u64>,
+    /// Stable task-stat identities, including tasks whose kernel stat record
+    /// omitted `delayacct_blkio_ticks`. Kept independent from schedstat.
+    pub task_stat_identities: BTreeSet<ThreadKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -97,13 +100,17 @@ pub struct ProcessCollectionIssues {
     pub unreadable: u32,
     pub malformed: u32,
     pub counter_regressed: u32,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub resource_counter_regressed: u32,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub task_block_io_counter_regressed: u32,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub task_block_io_aggregate_overflow: u32,
-    #[serde(default, skip_serializing)]
+    /// Stable task-stat pairs where Linux omitted the `delayacct_blkio_ticks`
+    /// trailing field. This is distinct from a measured zero.
+    #[serde(default)]
+    pub task_block_io_field_missing: u32,
+    #[serde(default)]
     pub resource_value_overflow: u32,
     pub appeared: u32,
     pub exited: u32,
@@ -215,23 +222,23 @@ pub struct CpuProcessObservation {
     pub load: Option<LoadAverageRaw>,
     pub load_availability: LoadAverageAvailability,
     pub processes: Vec<ProcessCpuInterval>,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub process_resource_evidence: Vec<ProcessResourceInterval>,
     pub collection_issues: ProcessCollectionIssues,
     pub scheduler_delay_candidates: Vec<ProcessSchedulerDelayInterval>,
     pub schedstat_collection_issues: SchedstatCollectionIssues,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub task_stat_collection_issues: TaskStatCollectionIssues,
     pub schedstat_capability: SchedstatCapability,
     /// Optional generic-netlink delay-accounting evidence. Schema-1 recording
     /// deliberately strips this field until schema 2 owns replay semantics.
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub taskstats: Vec<TaskstatsInterval>,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub taskstats_collection_issues: TaskstatsCollectionIssues,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub taskstats_capability: TaskstatsCapability,
-    #[serde(default, skip_serializing)]
+    #[serde(default)]
     pub delay_accounting: DelayAccountingState,
 }
 
@@ -258,6 +265,92 @@ pub enum SchedstatCapability {
     Unsupported,
     PermissionDenied,
     Failed,
+}
+
+/// Availability of normalized leader resource fields (RSS/faults/task delay).
+/// This is intentionally separate from the CPU-process baseline capability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessResourceCapability {
+    Available,
+    Partial,
+    Unavailable,
+    NotRecorded,
+}
+
+/// Availability of task-stat reads used for procfs block-I/O delay ticks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatCapability {
+    Available,
+    Partial,
+    Unavailable,
+    NotRecorded,
+}
+
+pub fn process_resource_capability(
+    observation: &CpuProcessObservation,
+) -> ProcessResourceCapability {
+    if observation.process_resource_evidence.is_empty()
+        && observation.taskstats_capability == TaskstatsCapability::NotRecorded
+    {
+        return ProcessResourceCapability::NotRecorded;
+    }
+    if observation.process_resource_evidence.is_empty() {
+        return ProcessResourceCapability::Unavailable;
+    }
+    if observation.collection_issues.limit_reached
+        || observation.collection_issues.enumeration_failed
+        || observation.collection_issues.enumeration_errors > 0
+        || observation.collection_issues.disappeared > 0
+        || observation.collection_issues.permission_denied > 0
+        || observation.collection_issues.unreadable > 0
+        || observation.collection_issues.malformed > 0
+        || observation.collection_issues.appeared > 0
+        || observation.collection_issues.exited > 0
+        || observation.collection_issues.resource_counter_regressed > 0
+        || observation.collection_issues.resource_value_overflow > 0
+    {
+        ProcessResourceCapability::Partial
+    } else {
+        ProcessResourceCapability::Available
+    }
+}
+
+pub fn task_stat_capability(observation: &CpuProcessObservation) -> TaskStatCapability {
+    let issues = &observation.task_stat_collection_issues;
+    if observation.process_resource_evidence.is_empty()
+        && observation.taskstats_capability == TaskstatsCapability::NotRecorded
+    {
+        return TaskStatCapability::NotRecorded;
+    }
+    if issues.tasks_read == 0 && observation.process_resource_evidence.is_empty() {
+        return TaskStatCapability::Unavailable;
+    }
+    if issues.task_enumeration_failed > 0
+        || issues.task_enumeration_errors > 0
+        || issues.task_disappeared > 0
+        || issues.task_appeared > 0
+        || issues.task_exited > 0
+        || issues.task_identity_changed > 0
+        || issues.task_permission_denied > 0
+        || issues.task_unreadable > 0
+        || issues.task_malformed > 0
+        || issues.task_limit_reached
+        || observation
+            .collection_issues
+            .task_block_io_counter_regressed
+            > 0
+        || observation
+            .collection_issues
+            .task_block_io_aggregate_overflow
+            > 0
+        || observation.collection_issues.task_block_io_field_missing > 0
+    {
+        TaskStatCapability::Partial
+    } else {
+        TaskStatCapability::Available
+    }
 }
 impl SchedstatCapability {
     pub fn as_str(self) -> &'static str {
@@ -552,6 +645,7 @@ pub fn parse_process_stat(input: &str) -> Result<ProcessRaw, CpuError> {
         block_io_delay_ticks: optional_stat_counter(&fields, 39)?,
         schedstat: BTreeMap::new(),
         task_block_io_delay_ticks: BTreeMap::new(),
+        task_stat_identities: BTreeSet::new(),
     })
 }
 
@@ -623,15 +717,17 @@ fn collect_processes(
         match fs::read_to_string(proc_root.join(pid.to_string()).join("stat")) {
             Ok(contents) => match parse_process_stat(&contents) {
                 Ok(mut process) => {
-                    let (schedstat, task_block_io_delay_ticks) = collect_process_schedstat(
-                        proc_root,
-                        pid,
-                        &mut remaining_tasks,
-                        &mut schedstat_issues,
-                        &mut task_stat_issues,
-                    );
+                    let (schedstat, task_block_io_delay_ticks, task_stat_identities) =
+                        collect_process_schedstat(
+                            proc_root,
+                            pid,
+                            &mut remaining_tasks,
+                            &mut schedstat_issues,
+                            &mut task_stat_issues,
+                        );
                     process.schedstat = schedstat;
                     process.task_block_io_delay_ticks = task_block_io_delay_ticks;
+                    process.task_stat_identities = task_stat_identities;
                     processes.insert(process.key, process);
                 }
                 Err(_) => issues.malformed += 1,
@@ -652,11 +748,15 @@ fn collect_process_schedstat(
     remaining_tasks: &mut usize,
     schedstat_issues: &mut SchedstatCollectionIssues,
     task_stat_issues: &mut TaskStatCollectionIssues,
-) -> (BTreeMap<ThreadKey, SchedstatRaw>, BTreeMap<ThreadKey, u64>) {
+) -> (
+    BTreeMap<ThreadKey, SchedstatRaw>,
+    BTreeMap<ThreadKey, u64>,
+    BTreeSet<ThreadKey>,
+) {
     if *remaining_tasks == 0 {
         schedstat_issues.task_limit_reached = true;
         task_stat_issues.task_limit_reached = true;
-        return (BTreeMap::new(), BTreeMap::new());
+        return (BTreeMap::new(), BTreeMap::new(), BTreeSet::new());
     }
     let task_root = proc_root.join(pid.to_string()).join("task");
     let entries = match fs::read_dir(task_root) {
@@ -664,21 +764,21 @@ fn collect_process_schedstat(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             task_stat_issues.task_disappeared = task_stat_issues.task_disappeared.saturating_add(1);
             schedstat_issues.task_disappeared = schedstat_issues.task_disappeared.saturating_add(1);
-            return (BTreeMap::new(), BTreeMap::new());
+            return (BTreeMap::new(), BTreeMap::new(), BTreeSet::new());
         }
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
             task_stat_issues.task_permission_denied =
                 task_stat_issues.task_permission_denied.saturating_add(1);
             schedstat_issues.task_permission_denied =
                 schedstat_issues.task_permission_denied.saturating_add(1);
-            return (BTreeMap::new(), BTreeMap::new());
+            return (BTreeMap::new(), BTreeMap::new(), BTreeSet::new());
         }
         Err(_) => {
             task_stat_issues.task_enumeration_failed =
                 task_stat_issues.task_enumeration_failed.saturating_add(1);
             schedstat_issues.task_enumeration_failed =
                 schedstat_issues.task_enumeration_failed.saturating_add(1);
-            return (BTreeMap::new(), BTreeMap::new());
+            return (BTreeMap::new(), BTreeMap::new(), BTreeSet::new());
         }
     };
     let mut tids = BinaryHeap::new();
@@ -714,6 +814,7 @@ fn collect_process_schedstat(
     tids.sort_unstable();
     let mut result = BTreeMap::new();
     let mut task_block_io_delay_ticks = BTreeMap::new();
+    let mut task_stat_identities = BTreeSet::new();
     for tid in tids {
         *remaining_tasks -= 1;
         let task_base = proc_root
@@ -804,6 +905,7 @@ fn collect_process_schedstat(
                 schedstat_issues.task_identity_changed.saturating_add(1);
             continue;
         }
+        task_stat_identities.insert(task_key);
         if let Some(ticks) = end_stat.block_io_delay_ticks {
             task_block_io_delay_ticks.insert(task_key, ticks);
         }
@@ -833,7 +935,7 @@ fn collect_process_schedstat(
             }
         }
     }
-    (result, task_block_io_delay_ticks)
+    (result, task_block_io_delay_ticks, task_stat_identities)
 }
 
 fn insert_lowest_pid(pids: &mut BinaryHeap<u32>, pid: u32, issues: &mut ProcessCollectionIssues) {
@@ -980,15 +1082,34 @@ pub fn interval_from_snapshots(
             stable_task_count = stable_task_count.saturating_add(1);
             has_block_io_delay = true;
         }
+        // A task that was stable across the window but omitted this trailing
+        // stat field leaves block-delay coverage partial; never turn it into
+        // a zero-delay measurement.
+        collection_issues.task_block_io_field_missing = collection_issues
+            .task_block_io_field_missing
+            .saturating_add(
+                u32::try_from(
+                    end_process
+                        .task_stat_identities
+                        .iter()
+                        .filter(|thread| {
+                            start_process.task_stat_identities.contains(*thread)
+                                && (!end_process.task_block_io_delay_ticks.contains_key(*thread)
+                                    || !start_process
+                                        .task_block_io_delay_ticks
+                                        .contains_key(*thread))
+                        })
+                        .count(),
+                )
+                .unwrap_or(u32::MAX),
+            );
         task_stat_collection_issues.stable_tasks =
             task_stat_collection_issues.stable_tasks.saturating_add(
                 u32::try_from(
                     end_process
-                        .task_block_io_delay_ticks
-                        .keys()
-                        .filter(|thread| {
-                            start_process.task_block_io_delay_ticks.contains_key(thread)
-                        })
+                        .task_stat_identities
+                        .iter()
+                        .filter(|thread| start_process.task_stat_identities.contains(*thread))
                         .count(),
                 )
                 .unwrap_or(u32::MAX),
@@ -1285,6 +1406,9 @@ fn merge_issues(
         task_block_io_aggregate_overflow: start
             .task_block_io_aggregate_overflow
             .saturating_add(end.task_block_io_aggregate_overflow),
+        task_block_io_field_missing: start
+            .task_block_io_field_missing
+            .saturating_add(end.task_block_io_field_missing),
         resource_value_overflow: start
             .resource_value_overflow
             .saturating_add(end.resource_value_overflow),
@@ -1496,6 +1620,7 @@ mod tests {
             block_io_delay_ticks: None,
             schedstat: BTreeMap::new(),
             task_block_io_delay_ticks: BTreeMap::new(),
+            task_stat_identities: BTreeSet::new(),
         }
     }
 
@@ -1510,6 +1635,35 @@ mod tests {
         assert_eq!(observation.processes[0].cpu_ticks, 25);
         assert_eq!(observation.collection_issues.appeared, 1);
         assert_eq!(observation.collection_issues.exited, 1);
+    }
+
+    #[test]
+    fn stable_task_stat_identity_marks_missing_block_field_without_schedstat() {
+        let thread = ThreadKey {
+            tid: 7,
+            start_time_ticks: 1,
+        };
+        let mut first = process(7, 1, 1);
+        first.task_stat_identities.insert(thread);
+        first.task_block_io_delay_ticks.insert(thread, 5);
+        let mut second = process(7, 1, 2);
+        second.task_stat_identities.insert(thread);
+        // No schedstat and no block-delay field at the second endpoint.
+        let observation = interval_from_snapshots(
+            snapshot(10, 5, 5, vec![first]),
+            snapshot(20, 10, 10, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(observation.collection_issues.task_block_io_field_missing, 1);
+        assert_eq!(
+            observation.process_resource_evidence[0].block_io_delay_ticks,
+            None
+        );
+        assert_eq!(
+            task_stat_capability(&observation),
+            TaskStatCapability::Partial
+        );
     }
 
     #[test]
