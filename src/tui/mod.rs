@@ -38,7 +38,7 @@ use crate::style;
 use crate::watch::WatchTracker;
 
 use app::App;
-use draw::draw;
+use draw::{detail_scroll_max, draw};
 
 /// How often the event loop wakes up even with no input, so it notices an
 /// external-signal interrupt and the next window's deadline promptly
@@ -50,14 +50,40 @@ const POLL_TICK: Duration = Duration::from_millis(250);
 /// re-raising, so a panic anywhere in the event loop or `draw` cannot leave
 /// the terminal broken. `restore` is idempotent and safe to call before an
 /// explicit `std::process::exit` (which skips `Drop`).
+struct RestorationGuard<F: FnOnce()> {
+    action: Option<F>,
+}
+
+impl<F: FnOnce()> RestorationGuard<F> {
+    fn new(action: F) -> Self {
+        Self {
+            action: Some(action),
+        }
+    }
+
+    fn restore(&mut self) {
+        if let Some(action) = self.action.take() {
+            action();
+        }
+    }
+}
+
+impl<F: FnOnce()> Drop for RestorationGuard<F> {
+    fn drop(&mut self) {
+        self.restore();
+    }
+}
+
 struct TerminalGuard {
     terminal: Option<ratatui::DefaultTerminal>,
+    restoration: RestorationGuard<Box<dyn FnOnce()>>,
 }
 
 impl TerminalGuard {
     fn new() -> io::Result<Self> {
         Ok(Self {
             terminal: Some(ratatui::try_init()?),
+            restoration: RestorationGuard::new(Box::new(ratatui::restore)),
         })
     }
 
@@ -69,7 +95,7 @@ impl TerminalGuard {
 
     fn restore(&mut self) {
         if self.terminal.take().is_some() {
-            ratatui::restore();
+            self.restoration.restore();
         }
     }
 }
@@ -100,13 +126,17 @@ pub fn run(options: &WatchOptions) -> io::Result<()> {
     // interrupt counter.
     let interrupt = Arc::new(AtomicU8::new(0));
     let handler_flag = Arc::clone(&interrupt);
-    let _ = ctrlc::set_handler(move || {
+    ctrlc::set_handler(move || {
         handler_flag.fetch_add(1, Ordering::SeqCst);
-    });
+    })
+    .map_err(|error| io::Error::other(format!("install Ctrl-C handler: {error}")))?;
 
     let mut guard = TerminalGuard::new()?;
     let color = style::resolve_color(options.no_color, true);
     let mut app = App::new(color, Arc::clone(&interrupt));
+    let size = guard.terminal_mut().size()?;
+    app.set_viewport(size.width, size.height);
+    app.update_detail_scroll_max(detail_scroll_max(&app, size.width, size.height));
 
     let mut start = read_start_endpoint();
     let mut tracker = WatchTracker::new();
@@ -132,9 +162,14 @@ pub fn run(options: &WatchOptions) -> io::Result<()> {
         let now = Instant::now();
         let timeout = deadline.saturating_duration_since(now).min(POLL_TICK);
         if !timeout.is_zero() && event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                app.handle_key(key);
+            match event::read()? {
+                Event::Key(key) => app.handle_key(key),
+                Event::Resize(width, height) => app.set_viewport(width, height),
+                _ => {}
             }
+            let size = guard.terminal_mut().size()?;
+            app.set_viewport(size.width, size.height);
+            app.update_detail_scroll_max(detail_scroll_max(&app, size.width, size.height));
             guard.terminal_mut().draw(|frame| draw(frame, &app))?;
         }
 
@@ -147,6 +182,9 @@ pub fn run(options: &WatchOptions) -> io::Result<()> {
             window.count = options.count;
             window.interval_ms = options.interval_ms;
             app.on_window(window);
+            let size = guard.terminal_mut().size()?;
+            app.set_viewport(size.width, size.height);
+            app.update_detail_scroll_max(detail_scroll_max(&app, size.width, size.height));
             guard.terminal_mut().draw(|frame| draw(frame, &app))?;
             deadline += requested;
             if draining {
@@ -157,4 +195,39 @@ pub fn run(options: &WatchOptions) -> io::Result<()> {
 
     guard.restore();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    use super::RestorationGuard;
+
+    #[test]
+    fn restoration_guard_runs_once_on_explicit_restore_and_drop() {
+        let calls = Arc::new(AtomicU8::new(0));
+        let observed = Arc::clone(&calls);
+        let mut guard = RestorationGuard::new(move || {
+            observed.fetch_add(1, Ordering::SeqCst);
+        });
+        guard.restore();
+        drop(guard);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn restoration_guard_runs_during_unwinding() {
+        let calls = Arc::new(AtomicU8::new(0));
+        let observed = Arc::clone(&calls);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = RestorationGuard::new(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+            });
+            panic!("exercise unwind cleanup");
+        }));
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
 }

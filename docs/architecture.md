@@ -144,6 +144,9 @@ text/JSON renderer (`watch::render_window`) and the terminal UI
 rather than re-deriving it. The TUI's `draw` function is pure over `App`
 state (no terminal access, no clock reads), so it is testable against
 `ratatui::backend::TestBackend`; only `tui::run` touches the real terminal.
+The pinned ratatui 0.29 build enables `unstable-rendered-line-info` solely so
+detail scrolling uses the widget's exact `WordWrapper` line count; this avoids
+an independently approximated scroll bound diverging from rendered wrapping.
 Severity color in the TUI shares its vocabulary with the compact report's
 ANSI painting through `style::SeverityTone`/`style::severity_tone` — one
 mapping from severity to visual weight, expressed as two backends
@@ -157,7 +160,9 @@ resource-matching lists from canonical six-role scopes. Cgroup ranking filters
 the full stable direct-or-descendant membership set by `ProcessKey`, while host
 ranking remains independent; no renderer uses the five displayed cgroup
 members as inference input. Schema-2 and lifecycle transport are implemented;
-the human cgroup-role panels remain a presentation-slice responsibility. The
+presentation renders those host and cgroup role lists without recalculating
+them: wide watch uses the selected scope's exact path/resource identity, while
+compact views retain summaries plus navigable detail. The
 tracker refreshes candidates on confirmed pressure windows and marks retained
 last-observed candidates stale on unconfirmed or resolved lifecycle findings.
 Text, JSON, and TUI therefore expose the same candidate evidence and cannot

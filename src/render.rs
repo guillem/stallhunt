@@ -293,64 +293,73 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
 /// attribution classes.
 fn process_scope_hunt_text(scopes: &[crate::analysis::ProcessScope]) -> String {
     use crate::analysis::{ProcessCandidateAvailability, ProcessRole};
-    let Some(scope) = scopes.first() else {
+    if scopes.is_empty() {
         return "\nProcess roles\n  unavailable\n".into();
-    };
-    let mut output = String::from("\nProcess roles (host scope)\n");
-    for role in [
-        ProcessRole::CpuVictim,
-        ProcessRole::CpuSuspect,
-        ProcessRole::MemoryVictim,
-        ProcessRole::MemorySuspect,
-        ProcessRole::IoVictim,
-        ProcessRole::IoSuspect,
-    ] {
-        let list = scope.roles.iter().find(|list| list.role == role);
-        let title = match role {
-            ProcessRole::CpuVictim => "CPU victims",
-            ProcessRole::CpuSuspect => "CPU suspects",
-            ProcessRole::MemoryVictim => "Memory victims",
-            ProcessRole::MemorySuspect => "Memory suspects",
-            ProcessRole::IoVictim => "I/O victims",
-            ProcessRole::IoSuspect => "I/O suspects",
+    }
+    let mut output = String::new();
+    for scope in scopes {
+        let label = match &scope.scope {
+            crate::analysis::ProcessScopeKind::Host => "host scope".to_owned(),
+            crate::analysis::ProcessScopeKind::Cgroup { path } => {
+                format!("cgroup scope {}", terminal_scope_identifier(path, 80))
+            }
         };
-        match list {
-            Some(list) if !list.candidates.is_empty() => {
-                let candidates = list
-                    .candidates
-                    .iter()
-                    .map(|candidate| {
-                        format!(
-                            "{} [{}]: {} ({:?}; {:?})",
-                            crate::cpu::sanitized_process_name(&candidate.name),
-                            candidate.key.pid,
-                            candidate.label,
-                            candidate.confidence,
-                            candidate.evidence
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                output.push_str(&format!(
-                    "  {title}{}: {candidates}\n",
-                    if list.completeness == crate::analysis::ProcessRoleCompleteness::Partial {
-                        " (partial)"
-                    } else {
-                        ""
-                    }
-                ));
+        output.push_str(&format!("\nProcess roles ({label})\n"));
+        for role in [
+            ProcessRole::CpuVictim,
+            ProcessRole::CpuSuspect,
+            ProcessRole::MemoryVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+            ProcessRole::IoSuspect,
+        ] {
+            let list = scope.roles.iter().find(|list| list.role == role);
+            let title = match role {
+                ProcessRole::CpuVictim => "CPU victims",
+                ProcessRole::CpuSuspect => "CPU suspects",
+                ProcessRole::MemoryVictim => "Memory victims",
+                ProcessRole::MemorySuspect => "Memory suspects",
+                ProcessRole::IoVictim => "I/O victims",
+                ProcessRole::IoSuspect => "I/O suspects",
+            };
+            match list {
+                Some(list) if !list.candidates.is_empty() => {
+                    let candidates = list
+                        .candidates
+                        .iter()
+                        .map(|candidate| {
+                            format!(
+                                "{} [{}]: {} ({:?}; {:?})",
+                                crate::cpu::sanitized_process_name(&candidate.name),
+                                candidate.key.pid,
+                                candidate.label,
+                                candidate.confidence,
+                                candidate.evidence
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    output.push_str(&format!(
+                        "  {title}{}: {candidates}\n",
+                        if list.completeness == crate::analysis::ProcessRoleCompleteness::Partial {
+                            " (partial)"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
+                Some(list) => {
+                    let state = match list.availability {
+                        ProcessCandidateAvailability::Available => "no positive candidates",
+                        ProcessCandidateAvailability::UnavailableOrIncomplete => {
+                            "unavailable or incomplete"
+                        }
+                        ProcessCandidateAvailability::NotAssessed => "not assessed",
+                    };
+                    output.push_str(&format!("  {title}: {state}\n"));
+                }
+                None => output.push_str(&format!("  {title}: unavailable\n")),
             }
-            Some(list) => {
-                let state = match list.availability {
-                    ProcessCandidateAvailability::Available => "no positive candidates",
-                    ProcessCandidateAvailability::UnavailableOrIncomplete => {
-                        "unavailable or incomplete"
-                    }
-                    ProcessCandidateAvailability::NotAssessed => "not assessed",
-                };
-                output.push_str(&format!("  {title}: {state}\n"));
-            }
-            None => output.push_str(&format!("  {title}: unavailable\n")),
         }
     }
     output
@@ -395,7 +404,7 @@ pub(crate) fn evidence_chains_from_analyses(
 pub(crate) fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
     let mut parts = Vec::new();
     if let Some(path) = &evidence.path {
-        parts.push(format!("cgroup {path}"));
+        parts.push(format!("cgroup {}", terminal_scope_identifier(path, 80)));
     }
     parts.push(format!(
         "memory PSI some {:.2}%",
@@ -455,7 +464,7 @@ fn cgroup_hunt_text(analysis: Option<&crate::analysis::CgroupAnalysisResult>) ->
     for finding in pressured {
         output.push_str(&format!(
             "- {} · {} · severity {} · confidence {}",
-            finding.path,
+            terminal_scope_identifier(&finding.path, 80),
             finding.summary,
             severity_name(finding.severity),
             confidence_name(finding.resource_confidence)
@@ -1139,6 +1148,44 @@ pub(crate) fn terminal_name(name: &str) -> String {
         "<unnamed>".to_owned()
     } else {
         rendered
+    }
+}
+
+/// Safe bounded presentation for scope identifiers (especially cgroup paths).
+/// Bounds use terminal display cells rather than bytes, and controls cannot
+/// alter terminal state.
+pub(crate) fn terminal_scope_identifier(value: &str, width: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    let sanitized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                '\u{fffd}'
+            } else {
+                character
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "<unnamed-scope>".to_owned()
+    } else if width == 0 {
+        String::new()
+    } else if sanitized.width() <= width {
+        sanitized
+    } else {
+        let content_width = width.saturating_sub('…'.width().unwrap_or(1));
+        let mut output = String::new();
+        let mut used = 0;
+        for character in sanitized.chars() {
+            let cell_width = character.width().unwrap_or(0);
+            if used + cell_width > content_width {
+                break;
+            }
+            output.push(character);
+            used += cell_width;
+        }
+        output.push('…');
+        output
     }
 }
 
@@ -1969,6 +2016,14 @@ pub(crate) mod tests {
         CpuPsiInterval, CpuPsiRaw, IoPsiInterval, IoPsiLine, IoPsiLineInterval, IoPsiRaw,
         MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval, MemoryPsiRaw,
     };
+
+    #[test]
+    fn scope_identifiers_replace_controls_and_truncate_by_display_width() {
+        let rendered = terminal_scope_identifier("/界\u{1b}[31m/control", 8);
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(rendered.contains('�'));
+        assert!(unicode_width::UnicodeWidthStr::width(rendered.as_str()) <= 8);
+    }
 
     fn render_hunt<F>(options: &HuntOptions, observe: F) -> String
     where

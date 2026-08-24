@@ -212,9 +212,12 @@ identity remains path plus resource, so a mechanism change stays `persistent`. U
 `--count` still exits 2.
 
 Schema-2 hunt/replay JSON and watch JSON include canonical host and
-PSI-pressured cgroup `process_scopes` with all six process roles. Current
-legacy hunt/replay text and watch text render host roles; cgroup role panels
-are deferred to the responsive presentation slice. Candidate
+PSI-pressured cgroup `process_scopes` with all six process roles. Legacy
+hunt/replay text and watch text render every host and cgroup scope explicitly.
+On a terminal, hunt/replay presents compact per-scope role counts and top
+candidates. `watch` renders all five retained candidates in a responsive role
+grid at 120×30 or larger; smaller terminals retain six role summaries and
+expandable, scrollable detail. Candidate
 lists are bounded and may be marked partial; retained lifecycle lists are
 explicitly stale rather than presented as current evidence.
 
@@ -242,7 +245,8 @@ are correlation-qualified rather than proof of harm or causality. Cgroup
 lifecycle findings carry their matching victim/suspect pair; stale retention is
 matched by cgroup path plus resource identity.
 
-Lifecycle findings repeat their last observed process candidates. A confirmed
+Lifecycle findings repeat their last observed process candidates and role-list
+availability. A confirmed
 persistent finding refreshes those candidates from the current window; an
 unconfirmed persistent or resolved finding labels them as **last observed** so
 they cannot be mistaken for current activity. Empty and unavailable role lists
@@ -549,20 +553,19 @@ alongside the lifecycle panels, never the centerpiece.
 
 The differentiator is diagnosis.
 
-Panels: a title bar (window index, interval, key hints); a **Processes** panel
-with CPU victims, CPU suspects, and I/O suspects; a **Lifecycle**
-list of tracked findings (state, identity, kind, severity, age, and prior
-severity on a change); a **Current window** summary of CPU/memory/I-O
-status plus a scoped-cgroup-pressure count; a **History** strip mapping the
-last windows' severity to a glyph ramp per resource; a **Detail** pane for
-the selected finding, shown on request, with its full qualifier
-messages — the "Context and limitations" detail is not behind `--verbose`
-in the TUI, because the interaction model has no static "less verbose"
-default to begin with; a help overlay; and a persistent footer restating
-that watch tracks findings, not utilization.
+At 120×30 or larger, a 55% left column keeps the **Lifecycle** list, **Current
+window**, **History**, and scrollable **Detail** pane visible. The remaining
+right column is a two-column/three-row process-role grid: CPU, memory, and I/O
+victim/suspect lists, with all five retained candidates in each cell. It follows
+the exact selected host or cgroup path. Compact terminals show six role
+summaries and collapse Detail by default; an explicit Detail choice survives a
+resize and can replace Current/History. Detail includes every role plus full
+qualifiers; it is not behind `--verbose`. A help overlay and persistent footer
+restate that watch tracks findings, not utilization.
 
 Keys: `q`/`Esc` quit; `↑`/`k` and `↓`/`j` select a lifecycle row;
-`Enter`/`Space` toggle that row's detail pane; `h`/`?` toggle the help
+`Enter`/`Space` toggle detail visibility; `PageUp`/`PageDown` and `Home`/`End`
+scroll the wrapped detail content; `h`/`?` toggle the help
 overlay; `Ctrl-C` is the same two-stage interrupt described above for
 unlimited `watch` runs — the first drains the in-flight window before
 exiting, the second exits immediately — except that in raw mode a local

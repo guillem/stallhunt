@@ -79,6 +79,10 @@ Watch does not write recordings.
 For an unlimited watch, the first SIGINT (or, in the TUI, the first
 Ctrl-C key press) drains and writes the in-flight window; a second SIGINT
 (or Ctrl-C) terminates immediately.
+Enter or Space toggles detail based on the current responsive layout: the first
+toggle shows it on compact terminals and hides it at 120x30 or larger.
+PageUp, PageDown, Home, and End scroll detail. Wide mode presents all six
+bounded host or selected-cgroup role lists beside lifecycle/current/history.
 .TP
 .B capabilities
 Report which telemetry sources are available, partially available, unsupported,
@@ -225,12 +229,14 @@ is not given.
 It shows the same finding-lifecycle model as the piped text output \(em
 new, persistent, and resolved findings across rolling windows \(em not
 host or per-process utilization.
-Panels: a title bar; a lifecycle list; an always-visible three-column Processes
-panel for CPU victims, CPU suspects, and I/O suspects; a current-window resource
-summary; a bounded history strip; and, on request, a detail pane with the
-selected finding's complete candidate evidence before its full context and
-limitations text. Empty, unavailable, and retained last-observed candidate
-states are labeled explicitly.
+At 120x30 or larger, panels are a title bar; lifecycle list; current-window
+summary; history strip; scrollable detail pane; and a two-column, three-row
+process-role grid with CPU, memory, and I/O victim/suspect lists for the exact
+selected host or cgroup scope. Each list retains at most five candidates. On
+smaller terminals the grid becomes six summaries; detail is collapsed by
+default and can replace current/history when explicitly shown. Empty,
+unavailable, partial, and retained last-observed role states are labeled
+explicitly.
 Keys:
 .BR q " or " Esc
 to quit,
@@ -238,6 +244,8 @@ to quit,
 to move the selection,
 .B "Enter or Space"
 to toggle the detail pane, and
+.BR PageUp , " " PageDown , " " Home , " " End
+to scroll it,
 .B "h or ?"
 for a help overlay.
 Piped or redirected output, and
@@ -250,16 +258,16 @@ and
 .B capabilities
 emit versioned JSON reports with
 .B schema_version
-1.
+2.
 .B watch \-\-json
 emits one
 .B stallhunt.watch_window
 object per window. Current signals and lifecycle findings add bounded, typed
-CPU runnable-delay victims, CPU-consumption suspects, and process-I/O suspects
-where supported. Candidate availability distinguishes an empty supported role
-from incomplete telemetry; candidates retained on unconfirmed or resolved
-findings are marked stale. I/O victims and memory/cgroup process roles remain
-unsupported. The additive stream remains schema version 1.
+all six bounded process-role lists under canonical
+.B process_scopes
+for the host and PSI-pressured cgroups. Role availability distinguishes an empty
+supported role from incomplete telemetry; retained roles on unconfirmed or
+resolved findings are marked stale. The additive stream is schema version 2.
 .B replay \-\-json
 re-renders the current inference result for a stored recording.
 .SS Recordings
@@ -268,7 +276,7 @@ writes a normalized observation file with kind
 .B stallhunt.recording
 and
 .B schema_version
-1.
+2.
 Recordings store analyzer input so
 .B replay
 can re-run current inference.

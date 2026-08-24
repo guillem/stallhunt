@@ -14,3 +14,11 @@ Process roles (host scope)
   Memory suspects: not assessed
   I/O victims: not assessed
   I/O suspects: not assessed
+
+Process roles (cgroup scope /workload.service)
+  CPU victims: not assessed
+  CPU suspects: not assessed
+  Memory victims: unavailable or incomplete
+  Memory suspects: unavailable or incomplete
+  I/O victims: unavailable or incomplete
+  I/O suspects: unavailable or incomplete

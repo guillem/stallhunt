@@ -238,7 +238,13 @@ component-boundary rejection, independent host/cgroup ranking, five-candidate
 limits and stable keys, and membership-cap partial completeness. Cgroup watch
 signals obtain their exact two matching role lists from the selected
 path-plus-resource scope so stale lifecycle retention cannot cross resources.
-Human cgroup-role rendering is covered by the following presentation slice.
+Presentation tests cover host/cgroup role rendering, exact scoped lifecycle
+matching, responsive 120×30 and 160×45 grids, compact 119×29/80×24 fallback,
+detail preference across resize, layout-derived Unicode-aware scrolling, and
+terminal-safe identifiers. Unit tests exercise the one-shot terminal
+restoration guard on explicit cleanup and panic unwinding. A real PTY
+raw-mode/alternate-screen restoration check remains a controlled-host release
+gate because it is not deterministic in the ordinary test runner.
 
 M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus

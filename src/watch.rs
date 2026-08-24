@@ -662,6 +662,35 @@ fn watch_text(window: &WatchWindow) -> String {
         &window.current.io,
         "same-window process-I/O",
     );
+    for scope in window.current.process_scopes.iter().filter(|scope| {
+        matches!(
+            scope.scope,
+            crate::analysis::ProcessScopeKind::Cgroup { .. }
+        )
+    }) {
+        let label = match &scope.scope {
+            crate::analysis::ProcessScopeKind::Cgroup { path } => format!(
+                "cgroup scope {}",
+                crate::render::terminal_scope_identifier(path, 80)
+            ),
+            crate::analysis::ProcessScopeKind::Host => "host scope".to_owned(),
+        };
+        output.push_str(&format!("  Process roles ({label}):\n"));
+        for role in [
+            ProcessRole::CpuVictim,
+            ProcessRole::CpuSuspect,
+            ProcessRole::MemoryVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+            ProcessRole::IoSuspect,
+        ] {
+            scoped_process_role_text(
+                &mut output,
+                role,
+                scope.roles.iter().find(|list| list.role == role),
+            );
+        }
+    }
     output.push_str(
         "  Qualification: CPU and I/O suspects are same-window correlation; this does not prove causality. CPU victims are runnable-delay candidates, not confirmed harm.\n",
     );
@@ -679,20 +708,22 @@ fn watch_text(window: &WatchWindow) -> String {
                 "unconfirmed"
             }
         ));
-        for candidate in &finding.process_candidates {
-            output.push_str(&format!("    {}\n", process_candidate_text(candidate)));
-        }
-        if finding.process_candidates.is_empty() {
-            for list in &finding.process_role_lists {
-                let state = match list.availability {
-                    ProcessCandidateAvailability::Available => "no positive candidates",
-                    ProcessCandidateAvailability::UnavailableOrIncomplete => {
-                        "unavailable or incomplete"
-                    }
-                    ProcessCandidateAvailability::NotAssessed => "not assessed",
-                };
-                output.push_str(&format!("    {:?}: {state} (stale)\n", list.role));
-            }
+        for role in [
+            ProcessRole::CpuVictim,
+            ProcessRole::CpuSuspect,
+            ProcessRole::MemoryVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+            ProcessRole::IoSuspect,
+        ] {
+            scoped_process_role_text(
+                &mut output,
+                role,
+                finding
+                    .process_role_lists
+                    .iter()
+                    .find(|list| list.role == role),
+            );
         }
     }
     output.push_str("\nRecent history (oldest first)\n");
@@ -727,6 +758,47 @@ fn watch_text(window: &WatchWindow) -> String {
         "\nLifecycle tracks pressure findings only. Healthy windows resolve a previous finding; missing data does not.\n",
     );
     output
+}
+
+fn scoped_process_role_text(
+    output: &mut String,
+    role: ProcessRole,
+    list: Option<&ProcessRoleList>,
+) {
+    let title = match role {
+        ProcessRole::CpuVictim => "CPU victims",
+        ProcessRole::CpuSuspect => "CPU suspects",
+        ProcessRole::MemoryVictim => "Memory victims",
+        ProcessRole::MemorySuspect => "Memory suspects",
+        ProcessRole::IoVictim => "I/O victims",
+        ProcessRole::IoSuspect => "I/O suspects",
+    };
+    match list {
+        Some(list) if !list.candidates.is_empty() => {
+            output.push_str(&format!(
+                "    {title}{}:\n",
+                if list.completeness == crate::analysis::ProcessRoleCompleteness::Partial {
+                    " (partial)"
+                } else {
+                    ""
+                }
+            ));
+            for candidate in &list.candidates {
+                output.push_str(&format!("      {}\n", process_candidate_text(candidate)));
+            }
+        }
+        Some(list) => {
+            let state = match list.availability {
+                ProcessCandidateAvailability::Available => "no positive candidates",
+                ProcessCandidateAvailability::UnavailableOrIncomplete => {
+                    "unavailable or incomplete"
+                }
+                ProcessCandidateAvailability::NotAssessed => "not assessed",
+            };
+            output.push_str(&format!("    {title}: {state}\n"));
+        }
+        None => output.push_str(&format!("    {title}: unavailable\n")),
+    }
 }
 
 fn process_role_text(
@@ -950,7 +1022,10 @@ pub(crate) fn id_label(id: &FindingId) -> String {
                 CgroupResourceKind::Memory => "memory",
                 CgroupResourceKind::Io => "io",
             };
-            format!("{path} ({resource})")
+            format!(
+                "{} ({resource})",
+                crate::render::terminal_scope_identifier(path, 80)
+            )
         }
     }
 }
@@ -1554,6 +1629,55 @@ pub(crate) mod test_support {
             },
         }];
         let mut signals = host_signals(cpu, healthy("memory_no_harmful_pressure"), io);
+        let mut roles = Vec::new();
+        for role in [
+            ProcessRole::CpuVictim,
+            ProcessRole::CpuSuspect,
+            ProcessRole::MemoryVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+            ProcessRole::IoSuspect,
+        ] {
+            let candidates = signals
+                .cpu
+                .process_candidates
+                .iter()
+                .chain(&signals.io.process_candidates)
+                .filter(|candidate| candidate.role == role)
+                .cloned()
+                .collect();
+            roles.push(ProcessRoleList {
+                role,
+                availability: ProcessCandidateAvailability::Available,
+                completeness: crate::analysis::ProcessRoleCompleteness::Complete,
+                stale: false,
+                candidates,
+            });
+        }
+        signals.cpu.process_role_lists = roles
+            .iter()
+            .filter(|list| matches!(list.role, ProcessRole::CpuVictim | ProcessRole::CpuSuspect))
+            .cloned()
+            .collect();
+        signals.memory.process_role_lists = roles
+            .iter()
+            .filter(|list| {
+                matches!(
+                    list.role,
+                    ProcessRole::MemoryVictim | ProcessRole::MemorySuspect
+                )
+            })
+            .cloned()
+            .collect();
+        signals.io.process_role_lists = roles
+            .iter()
+            .filter(|list| matches!(list.role, ProcessRole::IoVictim | ProcessRole::IoSuspect))
+            .cloned()
+            .collect();
+        signals.process_scopes.push(ProcessScope {
+            scope: crate::analysis::ProcessScopeKind::Host,
+            roles,
+        });
         let cgroup_id = FindingId::Cgroup {
             path: "/system.slice/db.service".to_owned(),
             resource: CgroupResourceKind::Io,

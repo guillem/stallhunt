@@ -16,7 +16,18 @@ use crate::watch::WatchWindow;
 pub struct App {
     pub window: Option<WatchWindow>,
     pub selected: usize,
-    pub expanded: bool,
+    /// User intent for the detail pane.  Automatic follows the responsive
+    /// layout (shown on a wide terminal, hidden on a compact one); an
+    /// explicit choice survives a resize.
+    pub detail_preference: DetailPreference,
+    /// First wrapped detail line to show.  Rendering clamps this naturally
+    /// when a new finding/window has less content.
+    pub detail_scroll: u16,
+    /// Last layout-derived maximum detail offset.  The event loop refreshes
+    /// this before dispatching a scroll key, so End and PageDown cannot move
+    /// beyond content that the current viewport can actually show.
+    detail_max_scroll: u16,
+    viewport: (u16, u16),
     pub help: bool,
     pub quit: bool,
     pub color: ColorMode,
@@ -27,12 +38,22 @@ pub struct App {
     interrupt: Arc<AtomicU8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailPreference {
+    Automatic,
+    ExplicitShown,
+    ExplicitHidden,
+}
+
 impl App {
     pub fn new(color: ColorMode, interrupt: Arc<AtomicU8>) -> Self {
         Self {
             window: None,
             selected: 0,
-            expanded: false,
+            detail_preference: DetailPreference::Automatic,
+            detail_scroll: 0,
+            detail_max_scroll: 0,
+            viewport: (80, 24),
             help: false,
             quit: false,
             color,
@@ -53,13 +74,32 @@ impl App {
 
     /// Replace the current window and keep the selection in bounds.
     pub fn on_window(&mut self, window: WatchWindow) {
+        let selected_id = self.selected_finding().map(|finding| finding.id.clone());
         let len = window.lifecycle.len();
         self.window = Some(window);
-        self.selected = if len == 0 {
-            0
-        } else {
-            self.selected.min(len - 1)
-        };
+        self.selected = selected_id
+            .as_ref()
+            .and_then(|id| {
+                self.window
+                    .as_ref()?
+                    .lifecycle
+                    .iter()
+                    .position(|finding| finding.id == *id)
+            })
+            .unwrap_or_else(|| {
+                if len == 0 {
+                    0
+                } else {
+                    self.selected.min(len - 1)
+                }
+            });
+        if selected_id.is_none_or(|id| {
+            self.selected_finding()
+                .is_none_or(|finding| finding.id != id)
+        }) {
+            self.detail_scroll = 0;
+            self.detail_max_scroll = 0;
+        }
     }
 
     /// Handle one key event. Ignores non-press kinds (key repeat/release,
@@ -77,7 +117,16 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
             KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
-            KeyCode::Enter | KeyCode::Char(' ') => self.expanded = !self.expanded,
+            KeyCode::Enter | KeyCode::Char(' ') => self.toggle_detail(),
+            KeyCode::PageUp => self.detail_scroll = self.detail_scroll.saturating_sub(5),
+            KeyCode::PageDown => {
+                self.detail_scroll = self
+                    .detail_scroll
+                    .saturating_add(5)
+                    .min(self.detail_max_scroll)
+            }
+            KeyCode::Home => self.detail_scroll = 0,
+            KeyCode::End => self.detail_scroll = self.detail_max_scroll(),
             KeyCode::Char('h') | KeyCode::Char('?') => self.help = !self.help,
             _ => {}
         }
@@ -91,7 +140,44 @@ impl App {
         }
         let current = self.selected as i64;
         let next = (current + delta).clamp(0, len as i64 - 1);
-        self.selected = next as usize;
+        let next = next as usize;
+        if next != self.selected {
+            self.selected = next;
+            self.detail_scroll = 0;
+            self.detail_max_scroll = 0;
+        }
+    }
+
+    pub const fn detail_visible(&self, width: u16, height: u16) -> bool {
+        match self.detail_preference {
+            DetailPreference::Automatic => width >= 120 && height >= 30,
+            DetailPreference::ExplicitShown => true,
+            DetailPreference::ExplicitHidden => false,
+        }
+    }
+
+    pub fn set_viewport(&mut self, width: u16, height: u16) {
+        self.viewport = (width, height);
+    }
+
+    fn toggle_detail(&mut self) {
+        self.detail_preference = if self.detail_visible(self.viewport.0, self.viewport.1) {
+            DetailPreference::ExplicitHidden
+        } else {
+            DetailPreference::ExplicitShown
+        };
+        self.detail_scroll = 0;
+        self.detail_max_scroll = 0;
+    }
+
+    pub const fn detail_max_scroll(&self) -> u16 {
+        self.detail_max_scroll
+    }
+
+    /// Accept the current renderer's actual wrapped-content bound.
+    pub fn update_detail_scroll_max(&mut self, max_scroll: u16) {
+        self.detail_max_scroll = max_scroll;
+        self.detail_scroll = self.detail_scroll.min(max_scroll);
     }
 
     pub fn selected_finding(&self) -> Option<&crate::watch::TrackedFinding> {
@@ -169,13 +255,63 @@ mod tests {
     }
 
     #[test]
-    fn enter_and_space_toggle_expanded() {
+    fn on_window_preserves_selected_identity_across_reordering() {
         let mut app = new_app();
-        assert!(!app.expanded);
+        let first = three_finding_window();
+        let selected_id = first.lifecycle[2].id.clone();
+        app.on_window(first);
+        app.selected = 2;
+        app.detail_scroll = 4;
+        let mut reordered = three_finding_window();
+        reordered.lifecycle.swap(0, 2);
+        app.on_window(reordered);
+        assert_eq!(
+            app.selected_finding().map(|finding| &finding.id),
+            Some(&selected_id)
+        );
+        assert_eq!(app.detail_scroll, 4);
+    }
+
+    #[test]
+    fn enter_and_space_make_an_explicit_detail_choice() {
+        let mut app = new_app();
+        assert_eq!(app.detail_preference, DetailPreference::Automatic);
         app.handle_key(key(KeyCode::Enter));
-        assert!(app.expanded);
+        assert_eq!(app.detail_preference, DetailPreference::ExplicitShown);
         app.handle_key(key(KeyCode::Char(' ')));
-        assert!(!app.expanded);
+        assert_eq!(app.detail_preference, DetailPreference::ExplicitHidden);
+    }
+
+    #[test]
+    fn automatic_detail_follows_terminal_size_but_explicit_choice_survives_resize() {
+        let mut app = new_app();
+        assert!(app.detail_visible(120, 30));
+        assert!(!app.detail_visible(119, 30));
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.detail_visible(160, 45));
+        app.handle_key(key(KeyCode::Enter));
+        assert!(!app.detail_visible(80, 24));
+    }
+
+    #[test]
+    fn detail_scroll_keys_scroll_and_reset_on_selection() {
+        let mut app = new_app();
+        app.on_window(three_finding_window());
+        app.update_detail_scroll_max(9);
+        app.handle_key(key(KeyCode::PageDown));
+        assert_eq!(app.detail_scroll, 5);
+        app.handle_key(key(KeyCode::PageDown));
+        assert_eq!(
+            app.detail_scroll, 9,
+            "PageDown clamps to the rendered bound"
+        );
+        app.handle_key(key(KeyCode::End));
+        assert_eq!(app.detail_scroll, 9);
+        app.handle_key(key(KeyCode::Home));
+        assert_eq!(app.detail_scroll, 0);
+        app.handle_key(key(KeyCode::PageDown));
+        app.handle_key(key(KeyCode::Down));
+        assert_eq!(app.detail_scroll, 0);
     }
 
     #[test]

@@ -17,9 +17,13 @@ canonical schema-2 `process_scopes` in hunt and watch JSON, with PSI gating,
 deterministic top-five ranking, typed completeness, and explicit stale lifecycle
 retention. Cgroup roles rank full stable direct/descendant membership independently
 of host rankings and make only their scope partial on membership gaps. Schema-2 recordings persist normalized procfs/taskstats evidence while
-schema-1 replay deliberately strips it. Cgroup roles are currently exposed in
-schema-2 and lifecycle transport; their dedicated text/TUI panels and the wide grid,
-controlled-host validation, and release gates remain pending. Do not start
+schema-1 replay deliberately strips it. Cgroup roles are exposed in schema-2,
+legacy/compact text, lifecycle detail, and the responsive watch TUI. At 120×30
+or larger, watch keeps Lifecycle, Current, History, and a layout-derived,
+Unicode-aware scrollable Detail on the left while rendering all six selected
+host/cgroup roles on the right; compact terminals show six role summaries and
+can explicitly expand Detail. Controlled-host validation and
+release gates remain pending. Do not start
 M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -373,8 +377,8 @@ the test process and does not mutate the hierarchy.
 
 The approved v0.4.0 vertical slice now has bounded procfs/taskstats evidence,
 host and cgroup six-role attribution, and schema-2 outputs/recording migration.
-Remaining work is the responsive wide TUI and human cgroup-role presentation
-specified by ADR-0016. No additional
+Remaining work is controlled-host validation and release preparation specified
+by ADR-0016. No additional
 M8 chain or M7 probe is part of this slice.
 
 Diagnostic and attribution gaps:
@@ -431,9 +435,10 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Implement the responsive wide TUI role grid and compact fallback from ADR-0016.
-Do not start Milestone 7 or add another M8 chain as part of v0.4.0; coincident
-PSI still does not establish a causal path.
+Complete the deterministic taskstats/bounds and observer-overhead validation,
+then run the separately approved controlled-host acceptance gate and prepare
+the v0.4.0 release metadata. Do not start Milestone 7 or add another M8 chain;
+coincident PSI still does not establish a causal path.
 
 ## Current design risks
 

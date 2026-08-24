@@ -70,3 +70,11 @@ Process roles (host scope)
   Memory suspects: unavailable or incomplete
   I/O victims: unavailable or incomplete
   I/O suspects: writer [42]: same_window_process_io_activity_suspect (Medium; IoActivity { read_bytes: Some(1024), write_bytes: Some(8192), cancelled_write_bytes: Some(0), known_accounted_bytes: 9216 })
+
+Process roles (cgroup scope /workload.service)
+  CPU victims: not assessed
+  CPU suspects: not assessed
+  Memory victims: unavailable or incomplete
+  Memory suspects: unavailable or incomplete
+  I/O victims: unavailable or incomplete
+  I/O suspects: no positive candidates

@@ -49,7 +49,9 @@ stallhunt redact incident.json --output incident.redacted.json
 
 Follow finding lifecycle for a bounded number of rolling windows. On a
 terminal this opens a full-screen TUI (`q` quit, arrows/`jk` select,
-`Enter`/`Space` expand a finding's detail, `h`/`?` help); piped output or
+`Enter`/`Space` show or hide detail, `PageUp`/`PageDown`/`Home`/`End` scroll,
+`h`/`?` help). At 120×30 or larger it also shows the selected host/cgroup's
+six process-role lists beside the lifecycle panels; piped output or
 `--json` are unchanged append-only text/JSON:
 
 ```bash
