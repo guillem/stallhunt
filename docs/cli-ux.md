@@ -159,15 +159,17 @@ the nested capability state is authoritative and may still be `unsupported`,
 M2 extends the same `hunt` with a separate host-memory assessment and reports
 memory PSI, meminfo, and vmstat capabilities. Exact-interval memory PSI `some`
 controls the memory verdict; memory `full` is displayed as separately-qualified
-all-non-idle-task stall context and is not added to `some`. Text makes the
-host-wide/no-process-attribution limit explicit. JSON retains memory
-observation, evidence, counter availability, and qualifiers even where the
-concise text renders only the relevant finding/context.
+all-non-idle-task stall context and is not added to `some`. Text distinguishes
+the host-wide resource finding from v0.4's separate PSI-gated scoped process
+roles. JSON retains memory observation, evidence, counter availability,
+qualifiers, and canonical process scopes even where concise text renders only
+the relevant finding/context.
 
 M3 adds a separately ranked I/O assessment. Its text explicitly distinguishes
-the PSI verdict from disk and process I/O-accounting activity candidates, labels
-them same-window/non-causal, and states that affected workloads and
-process-to-device mapping are unavailable. JSON adds I/O observation, PSI/full
+the PSI verdict from disk and process I/O-accounting activity candidates and
+labels them same-window/non-causal. v0.4 separately reports scoped delay-based
+victim roles while preserving the caveat that process-to-device mapping and
+causality are unavailable. JSON adds I/O observation, PSI/full
 state, diskstats/process-I/O context, candidates, capabilities, and qualifiers
 without changing prior resource objects.
 

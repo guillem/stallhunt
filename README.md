@@ -52,7 +52,7 @@ terminal this opens a full-screen TUI (`q` quit, arrows/`jk` select,
 `Enter`/`Space` show or hide detail, `PageUp`/`PageDown`/`Home`/`End` scroll,
 `h`/`?` help). At 120×30 or larger it also shows the selected host/cgroup's
 six process-role lists beside the lifecycle panels; piped output or
-`--json` are unchanged append-only text/JSON:
+`--json` remain append-only text/JSON and carry the same scoped roles:
 
 ```bash
 stallhunt watch --interval 2s --count 3

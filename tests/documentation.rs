@@ -163,7 +163,7 @@ fn inline_legacy_commands_and_placeholder_typos_are_not_blind_spots() {
         normalize_commands("cargo biuld --release", true),
         vec!["cargo biuld --release"]
     );
-    assert!(normalize_commands("The binary printed `stallhunt 0.3.0`.", false).is_empty());
+    assert!(normalize_commands("The binary printed `stallhunt 0.4.0`.", false).is_empty());
 
     let raw = ["hunt", "[--jsoon]"];
     let arguments = materialize_placeholders(&raw);

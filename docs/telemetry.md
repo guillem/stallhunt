@@ -395,7 +395,7 @@ Possible staged collection:
 
 1. enumerate process identity and CPU counters cheaply,
 2. rank relevant processes,
-3. read richer scheduler/I/O data for a bounded candidate set.
+3. read richer scheduler/I/O/taskstats data for a bounded candidate set.
 
 However, do not optimize prematurely if simple full sampling is already cheap enough on realistic hosts.
 

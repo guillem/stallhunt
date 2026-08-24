@@ -852,6 +852,51 @@ mod tests {
     }
 
     #[test]
+    fn compact_report_shows_positive_memory_and_io_scoped_roles() {
+        let mut observation = render::tests::hunt_legacy_full_fixture_observation();
+        observation
+            .cpu
+            .as_mut()
+            .unwrap()
+            .process_resource_evidence
+            .push(crate::cpu::ProcessResourceInterval {
+                key: crate::cpu::ProcessKey {
+                    pid: 99,
+                    start_time_ticks: 7,
+                },
+                name: "delayed-worker".into(),
+                leader_rss_bytes: Some(8_192),
+                rss_growth_bytes: Some(4_096),
+                minor_faults: Some(3),
+                major_faults: Some(2),
+                stable_task_count: 1,
+                block_io_delay_ticks: Some(5),
+            });
+        let output = render(
+            observation,
+            ReportLayout {
+                width: 100,
+                color: ColorMode::Never,
+                verbose: true,
+            },
+        );
+        assert!(
+            output.contains("Memory victims  1 · delayed-worker"),
+            "{output}"
+        );
+        assert!(
+            output.contains("Memory suspects 1 · delayed-worker"),
+            "{output}"
+        );
+        assert!(
+            output.contains("I/O victims     1 · delayed-worker"),
+            "{output}"
+        );
+        assert!(!output.contains("this slice does not identify affected or contributing"));
+        assert!(!output.contains("This host-wide I/O slice does not identify"));
+    }
+
+    #[test]
     fn compact_cgroup_verdict_sanitizes_and_budgets_the_entire_header() {
         let observation = render::tests::hunt_legacy_full_fixture_observation();
         let mut analyses = render::analyze_hunt(&observation);

@@ -253,9 +253,11 @@ each CPU PSI, memory PSI, CPU/process, and memory-context pair has its own
 monotonic interval because the reads are sequential. Memory PSI `some` is the
 resource-verdict boundary. Memory `full` is a separately validated subset of
 `some`, never additive evidence. `/proc/meminfo` and `/proc/vmstat` only add
-mechanism/context qualifiers. The collector performs no PID walk for memory, so
-the initial host-wide finding deliberately has no process attribution. VM rates
-use the independently measured memory-context interval; mechanism confidence is
+mechanism/context qualifiers. Memory collection adds no independent PID walk;
+v0.4's analyzer instead reuses normalized evidence from the bounded CPU/process
+walk to build separate PSI-gated host/cgroup memory role lists. The original
+host-wide memory finding remains distinct from those roles. VM rates use the
+independently measured memory-context interval; mechanism confidence is
 separate from pressure confidence.
 
 M3 keeps exact I/O PSI separate from disk/process I/O activity. Diskstats and

@@ -748,7 +748,7 @@ fn memory_finding_text(
         optional_counter(vm_delta(VmstatCounter::SwapOut)),
         optional_counter(vm_delta(VmstatCounter::MajorPageFaults)),
     ));
-    output.push_str("Attribution: unavailable (host-wide evidence only)\n");
+    output.push_str("Attribution: see scoped process roles; host-wide resource evidence alone is not process attribution\n");
     if !finding.qualifiers.is_empty() {
         output.push_str("Context and limitations:\n");
         for qualifier in &finding.qualifiers {
@@ -921,7 +921,7 @@ fn io_finding_text(
                 ));
             }
         }
-        output.push_str("Affected workloads: unavailable (this telemetry does not identify I/O stall victims or map processes to devices)\n");
+        output.push_str("Affected workloads: see scoped delay roles; candidates do not map processes to devices or prove harm\n");
     } else {
         output.push_str(
             "Device and process activity candidates: not ranked without an I/O pressure finding\n",
@@ -2005,7 +2005,8 @@ pub(crate) mod tests {
     };
     use crate::cpu::{
         CpuProcessObservation, HostCpuInterval, LoadAverageAvailability, LoadAverageRaw,
-        ProcessCollectionIssues, ProcessCpuInterval, ProcessKey, ProcessSchedulerDelayInterval,
+        ProcessCollectionIssues, ProcessCpuInterval, ProcessKey, ProcessResourceInterval,
+        ProcessSchedulerDelayInterval,
     };
     use crate::io::{
         BlockDeviceKey, DiskstatsInterval, DiskstatsIntervalIssues, DiskstatsObservation,
@@ -2387,7 +2388,7 @@ pub(crate) mod tests {
             text.contains("Device activity candidates (same window only; not mapped to workloads)")
         );
         assert!(text.contains("not proven causal or device-mapped"));
-        assert!(text.contains("Affected workloads: unavailable"));
+        assert!(text.contains("Affected workloads: see scoped delay roles"));
 
         let mut healthy = hunt_observation();
         healthy.io = Some(io_hunt_observation(0.005));
@@ -2403,6 +2404,54 @@ pub(crate) mod tests {
         assert!(text.contains("No meaningful block-I/O pressure observed"));
         assert!(text.contains("activity counters do not override that verdict"));
         assert!(text.contains("not ranked without an I/O pressure finding"));
+    }
+
+    #[test]
+    fn memory_and_io_renderers_do_not_deny_positive_scoped_roles() {
+        let mut observation = hunt_legacy_full_fixture_observation();
+        observation
+            .cpu
+            .as_mut()
+            .unwrap()
+            .process_resource_evidence
+            .push(ProcessResourceInterval {
+                key: ProcessKey {
+                    pid: 99,
+                    start_time_ticks: 7,
+                },
+                name: "delayed-worker".into(),
+                leader_rss_bytes: Some(8_192),
+                rss_growth_bytes: Some(4_096),
+                minor_faults: Some(3),
+                major_faults: Some(2),
+                stable_task_count: 1,
+                block_io_delay_ticks: Some(5),
+            });
+        let text = render_hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
+            },
+            |_| observation,
+        );
+
+        assert!(
+            text.contains("Memory victims (partial): delayed-worker [99]"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Memory suspects: delayed-worker [99]"),
+            "{text}"
+        );
+        assert!(
+            text.contains("I/O victims (partial): delayed-worker [99]"),
+            "{text}"
+        );
+        assert!(!text.contains("Attribution: unavailable"), "{text}");
+        assert!(!text.contains("Affected workloads: unavailable"), "{text}");
+        assert!(text.contains("do not map processes to devices or prove harm"));
     }
 
     #[test]
@@ -2561,7 +2610,7 @@ pub(crate) mod tests {
             text.starts_with("Memory pressure observed with correlated direct reclaim activity")
         );
         assert!(text.contains("Verdict: reclaim pressure · severity moderate"));
-        assert!(text.contains("Attribution: unavailable (host-wide evidence only)"));
+        assert!(text.contains("Attribution: see scoped process roles"));
         assert!(text.contains("occupancy is context and is not itself evidence"));
 
         let mut observation = hunt_observation();

@@ -1015,7 +1015,7 @@ fn memory_qualifiers(
 const fn no_memory_attribution_qualifier() -> Qualifier {
     Qualifier {
         kind: "no_process_attribution",
-        message: "Memory evidence is host-wide; this slice does not identify affected or contributing processes.",
+        message: "Host-wide memory resource evidence alone does not identify affected or contributing processes; scoped role candidates require separate process evidence.",
     }
 }
 
@@ -1396,7 +1396,7 @@ fn io_qualifiers(
 const fn no_io_victim_attribution_qualifier() -> Qualifier {
     Qualifier {
         kind: "no_affected_workload_attribution",
-        message: "This host-wide I/O slice does not identify affected workloads or claim that any process is a victim.",
+        message: "I/O PSI alone does not identify affected workloads; scoped delay candidates require separate process evidence and do not map a process to a device or prove harm.",
     }
 }
 

@@ -2,14 +2,14 @@
 
 This directory is the durable design and project-memory layer.
 
-Milestones 1–6 are functionally complete. Milestone 8's first two conservative
+Milestones 1–6 are functionally complete. The source tree is prepared for the
+v0.4 scoped-attribution and responsive-TUI release, including schema 2 and
+bounded optional taskstats evidence. Publication remains blocked on the
+controlled-host taskstats, 512-TGID/member overhead, and dependency-review
+gates recorded in `status.md`. Milestone 8's first two conservative
 evidence-chain slices relate memory mechanism pressure to I/O pressure, first
-host-wide and then same-cgroup, without claiming causality. Scoped cgroup
-findings can also carry reclaim, swap, possible-thrashing, or quota-throttle
-context labels without creating pressure. The repository is currently parked;
-`status.md` is the authoritative record of implemented behavior, pending work,
-and the gate for selecting a future slice. `experiments.md` retains controlled
-validation and overhead evidence.
+host-wide and then same-cgroup, without claiming causality. `experiments.md`
+retains controlled validation, overhead evidence, and precise open gaps.
 
 ## Read this first
 

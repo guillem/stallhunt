@@ -3,11 +3,12 @@
 ## Current state
 
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
-block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, and the
-first two Milestone 8 evidence-chain slices. Scoped cgroup findings can also
-carry reclaim, swap, possible-thrashing, or quota-throttle context labels. The
-repository is currently parked pending selection of another concrete diagnostic
-question; see `status.md`.
+block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, the v0.4
+scoped-attribution/TUI implementation, and the first two Milestone 8
+evidence-chain slices. The source package is prepared as 0.4.0, but the
+published release remains v0.3.0 until the controlled-host taskstats and
+512-TGID/member overhead gates recorded in `status.md` and `experiments.md`
+pass and the dependency-audit warnings receive a reviewed disposition.
 
 Build and run it from the repository root:
 
@@ -33,7 +34,9 @@ and memory collectors each retain their own measured interval because the reads
 are sequential. The memory analyzer uses exact memory PSI `some` for its
 verdict; `full` is non-additive subset context, while meminfo/vmstat only
 classify/contextualize the result. Memory findings are host-wide and make no
-process attribution. M2 deterministic fixtures, a healthy live smoke, and a
+finding-local process attribution; v0.4's separate `ProcessScope` roles reuse
+the bounded CPU/process evidence when matching PSI pressure exists. M2
+deterministic fixtures, a healthy live smoke, and a
 delegated-cgroup harmful-pressure acceptance are recorded. Reclaim-only and
 possible-thrashing remain fixture-validated.
 
@@ -85,6 +88,16 @@ cargo test --locked --offline --workspace --all-features
 
 Add targeted commands as the project evolves.
 
+`cargo-audit` is a separate release review, not an offline Cargo quality gate.
+On 2026-08-24, cargo-audit 0.22.2 did not support the planned literal
+`--omit=dev` option; its supported full-lockfile `cargo audit` command exited
+0 but reported `RUSTSEC-2024-0436` (`paste`, unmaintained) and
+`RUSTSEC-2026-0002`/`RUSTSEC-2026-0253` (`lru`, unsound), pulled through
+ratatui 0.29. Ratatui 0.30.0 requires Rust 1.86, and 0.30.1 or newer requires
+Rust 1.88; every 0.30 release therefore conflicts with the Rust 1.85 MSRV. Do
+not suppress or change that dependency without an
+explicit reviewed decision; this remains a release risk.
+
 The executable integration tests are in `tests/cli.rs`; opt-in Linux acceptance
 tests are `tests/cpu_acceptance.rs`, `tests/io_acceptance.rs`,
 `tests/memory_acceptance.rs`, and `tests/cgroup_acceptance.rs`; parser and
@@ -125,6 +138,8 @@ not a CI gate. `all` does not spawn hundreds of PIDs. The PTY check requires
 util-linux `script`; it captures the bounded one-window TUI stream, checks
 alternate screen enter/leave sequences, and compares terminal settings.
 EXP-0007 records workstation-scale PID/task cost.
+It predates the v0.4 512-TGID/member taskstats configuration and is not a
+substitute for its required controlled-host overhead measurement.
 
 ## Repository hygiene
 

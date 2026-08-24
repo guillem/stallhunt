@@ -65,9 +65,9 @@ role inference; schema-1 recordings restore it as unavailable.
 
 This distinction is essential for replay and testing.
 
-The stable-leader TASKSTATS
-interval. It preserves individual optional cumulative-delay deltas for CPU,
-block I/O, swap-in, reclaim, thrashing, compaction, and write-protect-copy,
+The stable-leader TASKSTATS interval preserves individual optional
+cumulative-delay deltas for CPU, block I/O, swap-in, reclaim, thrashing,
+compaction, and write-protect-copy,
 plus typed collection completeness and a distinct delay-accounting state.
 These counters are not summed because their categories can overlap. They are
 emitted in schema-2 JSON and recordings. Schema-1 recordings omit them.
@@ -76,16 +76,17 @@ Schema-2 analyzer output contains canonical `process_scopes` for the host and
 for every cgroup path with its own PSI-backed pressure: CPU, memory, and I/O
 victim/suspect lists. Cgroup lists use the complete stable direct-or-descendant
 `ProcessKey` membership set, not the five-member finding summary; overlapping
-ancestor and child scopes may repeat a process and are never summed. Each list is capped and carries separate
-availability, completeness, and lifecycle-stale state. TASKSTATS intervals
+ancestor and child scopes may repeat a process and are never summed. Each list
+is capped and carries separate availability, completeness, and lifecycle-stale
+state. TASKSTATS intervals
 retain the minimum UAPI version and per-field support; a zero is a complete
 negative only when that field was supported, delay accounting was enabled, and
 the bounded process window was complete. Positive counters remain evidence
 when transport or coverage is partial.
 
-This slice transports cgroup scopes through schema-2 hunt/watch output and the
-watch lifecycle model. Dedicated human cgroup-role rendering is deferred to the
-responsive presentation slice.
+Schema-2 hunt/watch output, legacy and compact text, and the watch lifecycle/TUI
+all transport these cgroup scopes. Renderers display analyzer-owned lists and
+do not re-derive candidates.
 
 ## Identity
 
@@ -267,16 +268,20 @@ interval, end-of-window meminfo gauges, optional vmstat deltas, capability
 states, the independent memory-context interval, and qualifiers. `full` is
 represented separately because it is a subset of `some`, not a second pressure
 amount to add. Pressure confidence and optional VM-counter mechanism confidence
-are separate. The host-memory finding has no victims or suspects: the input
-evidence is host-wide and the collector does not walk processes.
+are separate. The host-memory finding itself has no victim/suspect fields.
+v0.4's separate `ProcessScope` model can attach PSI-gated host or cgroup memory
+roles using the shared bounded process walk and optional taskstats evidence;
+static RSS never creates a suspect.
 
 M3 adds `IoFinding`/`IoEvidence`, device activity candidates keyed by
 major/minor with name-change lifecycle validation, and process I/O-accounting
 activity candidates keyed by PID plus start
 time. Diskstats sectors remain raw 512-byte-sector units, `in_flight` remains an
 end-snapshot gauge, and each counter delta may be absent after reset. The two
-candidate lists are correlation-only same-window context, not a process-to-device
-mapping, causal chain, or victim model.
+activity candidate lists are correlation-only same-window context, not a
+process-to-device mapping or causal chain. Separately, v0.4 `ProcessScope`
+I/O-victim roles use taskstats block-I/O delay with procfs delay as fallback or
+corroboration; they still do not identify a device or prove harm.
 
 M4 adds an additive `CgroupObservation` to pre-1.0 JSON: mount identity,
 stable process-to-cgroup memberships, bounded snapshots, per-scope PSI
@@ -379,7 +384,7 @@ Current recording envelope:
 {
   "kind": "stallhunt.recording",
   "schema_version": 2,
-  "tool_version": "0.3.0",
+  "tool_version": "0.4.0",
   "recorded_at_unix_ms": 0,
   "redaction": "none",
   "requested_duration_ms": 10000,

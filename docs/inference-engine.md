@@ -225,8 +225,12 @@ interval. Its mechanism confidence is capped at medium. The threshold is
 provisional and the conclusion remains explicitly heuristic. Memory `full` is
 a non-additive subset of `some`, so it never increases the PSI fraction or
 independently establishes pressure. Meminfo/vmstat are classification/context
-only. This is host-wide evidence: M2 emits no victims, suspects, or causal
-process claims.
+only. Memory PSI remains host-wide resource evidence and does not itself
+establish process causality. Under v0.4, only a matching pressured scope can
+expose role lists: taskstats memory-delay components are direct victim evidence,
+major faults are an explicitly low-confidence fallback, and strictly positive
+RSS growth is a low-confidence suspect signal. Static RSS alone never
+qualifies.
 
 ### Implemented M3 I/O rule
 

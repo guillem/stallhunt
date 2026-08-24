@@ -6,6 +6,11 @@ Last updated: 2026-08-24
 
 **v0.4.0 in progress — scoped process attribution and widescreen TUI**
 
+The package and manual are prepared as 0.4.0; this is not a published release.
+The currently published release remains v0.3.0. Do not tag, merge, or publish
+v0.4.0 until the controlled-host taskstats and 512-TGID/member overhead gates
+below have passed and the dependency audit risk has a reviewed disposition.
+
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
 explicit-`hunt` parity, and rejects root hunt flags mixed with a subcommand.
@@ -41,12 +46,15 @@ the test process and does not mutate the hierarchy.
   rendering, deterministic fixtures, a healthy-host smoke, and a delegated-
   cgroup harmful-pressure acceptance are recorded. The live run produced
   high-severity `memory_swap_pressure` from exact host PSI `some`. Reclaim-only
-  and possible-thrashing labels remain fixture-validated; there is still no
-  process attribution.
+  and possible-thrashing labels remain fixture-validated. The original M2
+  finding has no finding-local process fields; v0.4 adds separate PSI-gated
+  scoped memory roles, whose taskstats path still awaits controlled-host
+  validation.
 - **M3 complete within its deliberately limited exit condition:** PSI-backed
   block-I/O pressure and same-window activity candidates were validated by the
-  recorded controlled run. Victim attribution, process-device mapping, and
-  causality remain explicitly unsupported.
+  recorded controlled run. v0.4 adds scoped delay-based I/O victim roles, but
+  process-device mapping and causality remain explicitly unsupported and the
+  taskstats path still awaits controlled-host validation.
 - **M4 implemented:** bounded cgroup-v2 collection, scoped analysis,
   completeness semantics, controller context, and deterministic coverage are
   complete. Live delegated-scope validation is available opt-in and cannot be
@@ -60,7 +68,7 @@ the test process and does not mutate the hierarchy.
   bounded cgroup pressure findings as new, persistent, or resolved across
   contiguous rolling windows, keeps 16 history windows, and does not store full
   finding evidence in its JSON stream. Piped text and schema-2 JSON expose six
-  bounded analyzer-owned host role lists. Per
+  bounded analyzer-owned role lists for host and cgroup scopes. Per
   ADR-0013, a TTY renders an interactive TUI over that same lifecycle model
   (not a utilization dashboard) instead of the earlier screen-clearing text.
   A second SIGINT while draining terminates immediately with the conventional
@@ -347,10 +355,10 @@ the test process and does not mutate the hierarchy.
   kernel version.
 - Watch JSON carries bounded process-candidate evidence but still omits full
   observations, raw resource evidence, and qualifiers. Schema-2 also carries
-  canonical host six-role lists. CPU suspects and I/O suspects are same-window
-  correlation, while CPU victims are observed summed runnable delay rather
-  than proof of user-visible harm. Cgroup-scoped roles remain pending. A disappeared cgroup finding
-  stays unconfirmed until that scope is observed without ranked pressure.
+  canonical host and cgroup six-role lists. CPU suspects and I/O suspects are
+  same-window correlation, while CPU victims are observed summed runnable delay rather
+  than proof of user-visible harm. A disappeared cgroup finding stays
+  unconfirmed until that scope is observed without ranked pressure.
   Unlimited `watch` without `--count` samples until interrupted and drains the
   current window after the first SIGINT; a second SIGINT exits immediately.
   Consecutive 100 ms windows remain smoke observations, same as hunt.
@@ -377,9 +385,9 @@ the test process and does not mutate the hierarchy.
 
 The approved v0.4.0 vertical slice now has bounded procfs/taskstats evidence,
 host and cgroup six-role attribution, and schema-2 outputs/recording migration.
-Remaining work is controlled-host validation and release preparation specified
-by ADR-0016. No additional
-M8 chain or M7 probe is part of this slice.
+Release metadata is prepared. Remaining work is controlled-host validation and
+a reviewed dependency-risk disposition as specified by ADR-0016 and the release
+gates below. No additional M8 chain or M7 probe is part of this slice.
 
 Diagnostic and attribution gaps:
 
@@ -406,11 +414,14 @@ Validation gaps:
 
 Operational and delivery gaps:
 
-- cgroup collection reached its pre-v0.4 PID selection cap on the measured
-  workstation, so scoped context is partial and can omit higher-PID groups;
-- the v0.4.0 release is blocked until deterministic codec, attribution,
-  migration, renderer, TUI, and overhead gates pass and a separately approved
-  controlled Linux host supplies the required positive taskstats evidence;
+- historical cgroup collection reached its pre-v0.4 PID selection cap on the
+  measured workstation; the current 512-member configuration still needs the
+  controlled-host overhead/completeness measurement;
+- deterministic codec, attribution, migration, renderer, TUI, stable/MSRV,
+  package, and local PTY gates pass;
+- the v0.4.0 release remains blocked until a separately approved controlled
+  Linux host supplies positive taskstats and 512-TGID/member overhead evidence,
+  and the dependency warnings receive a reviewed disposition;
 - unlimited watch drains gracefully: the first SIGINT installs a flag so the
   in-flight window completes and is written before exit;
 - `MANIFEST.txt` (tracked-file byte sizes) predates several source files,
@@ -435,9 +446,10 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Complete the deterministic taskstats/bounds and observer-overhead validation,
-then run the separately approved controlled-host acceptance gate and prepare
-the v0.4.0 release metadata. Do not start Milestone 7 or add another M8 chain;
+Obtain a separately approved controlled Linux host and run the v0.4 taskstats
+acceptance and 512-TGID/member observer-overhead measurements. Then obtain a
+reviewed disposition for the cargo-audit warnings before publishing the already
+prepared v0.4.0 metadata. Do not start Milestone 7 or add another M8 chain;
 coincident PSI still does not establish a causal path.
 
 ## Current design risks
@@ -512,6 +524,21 @@ Mitigation:
 Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 4,096-PID or 16,384-task caps without a quota-aware setup.
 
+### R8: Transitive dependency audit warnings
+
+`cargo audit` 0.22.2 exits successfully for the current lockfile but warns that
+`paste` is unmaintained (RUSTSEC-2024-0436) and that `lru` has two unsoundness
+advisories (RUSTSEC-2026-0002 and RUSTSEC-2026-0253). They arrive through the
+pinned ratatui 0.29 dependency graph. Ratatui 0.30.0 requires Rust 1.86, while
+0.30.1 or newer requires Rust 1.88; both are above the 1.85 MSRV, so an upgrade
+is not an automatic fix.
+
+Mitigation:
+
+- do not claim a clean audit or use an unsupported `--omit=dev` flag;
+- require an explicit reviewed dependency/MSRV decision before release;
+- keep the full-lockfile audit result and advisories in EXP-0009.
+
 ## Known open decisions
 
 Not yet decided:
@@ -544,6 +571,23 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+Release preparation on 2026-08-24 changed the package, binary, manual, and
+recording example version to 0.4.0 without publishing it. The current local
+tree passed formatting, locked offline Clippy, and locked offline tests (262
+passed, one fixture writer ignored; 15 CLI, three documentation, and three
+replay-fixture integration tests passed; five Linux acceptance tests remain
+ignored). The release build printed `stallhunt 0.4.0`; `groff -man -Tascii`
+accepted the manual; and the release-binary PTY check verified alternate-screen
+cleanup and terminal-state restoration. A local v0.4.0 tarball staging
+inspection contained exactly the binary, README, both licenses, and manual. No
+tag or GitHub Release was made.
+
+`cargo-audit` 0.22.2's supported full-lockfile command exited 0 with three
+warnings: RUSTSEC-2024-0436 for `paste`, and RUSTSEC-2026-0002 plus
+RUSTSEC-2026-0253 for `lru`, transitively via ratatui 0.29. Its help has no
+`--omit=dev` option; the planned literal command is not valid for this version.
+This is an unresolved release risk, not a passing audit gate.
 
 On 2026-08-24, the v0.4 procfs/taskstats collector slices passed deterministic
 parser, protocol, scripted collection, and interval tests for leader RSS,

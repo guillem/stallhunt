@@ -451,6 +451,18 @@ v0.4 512-TGID/member observer-overhead measurement is also not recorded. Do
 not treat the historical 256-member EXP-0007 measurement, a rootless denial,
 or a skipped capable-host run as satisfying those gates.
 
+### Dependency-audit status
+
+On 2026-08-24, `cargo audit` from cargo-audit 0.22.2 scanned the full current
+`Cargo.lock` and exited 0 with three allowed warnings: unmaintained `paste`
+(`RUSTSEC-2024-0436`) and unsound `lru` (`RUSTSEC-2026-0002` and
+`RUSTSEC-2026-0253`). The latter dependencies are transitive through ratatui
+0.29. This cargo-audit version does not accept the planned `--omit=dev` flag,
+so no dev-dependency-excluded claim is made. Ratatui 0.30.0 requires Rust 1.86,
+and 0.30.1 or newer requires Rust 1.88, so all conflict with the Rust 1.85
+MSRV. The warnings require a reviewed
+dependency/MSRV decision before v0.4.0 may be released.
+
 ## EXP-0008: Deterministic scoped possible-thrashing validation
 
 Date: 2026-08-17. Commit: `9583404`.
