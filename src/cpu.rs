@@ -26,7 +26,16 @@ pub struct ProcessRaw {
     pub state: char,
     pub user_ticks: u64,
     pub system_ticks: u64,
+    /// RSS belongs to the thread-group leader. Task RSS is intentionally not
+    /// aggregated because every thread reports the process-wide value.
+    pub rss_pages: Option<u64>,
+    pub minor_faults: Option<u64>,
+    pub major_faults: Option<u64>,
+    pub block_io_delay_ticks: Option<u64>,
     pub schedstat: BTreeMap<ThreadKey, SchedstatRaw>,
+    /// Delay-accounting block-I/O ticks are task-scoped, unlike RSS. Entries
+    /// are captured only when the task stat identity was stable while read.
+    pub task_block_io_delay_ticks: BTreeMap<ThreadKey, u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -83,6 +92,14 @@ pub struct ProcessCollectionIssues {
     pub unreadable: u32,
     pub malformed: u32,
     pub counter_regressed: u32,
+    #[serde(default, skip_serializing)]
+    pub resource_counter_regressed: u32,
+    #[serde(default, skip_serializing)]
+    pub task_block_io_counter_regressed: u32,
+    #[serde(default, skip_serializing)]
+    pub task_block_io_aggregate_overflow: u32,
+    #[serde(default, skip_serializing)]
+    pub resource_value_overflow: u32,
     pub appeared: u32,
     pub exited: u32,
     pub limit_reached: bool,
@@ -107,6 +124,25 @@ pub struct SchedstatCollectionIssues {
     pub stable_tasks: u32,
 }
 
+/// Completeness for the task `stat` reads that back procfs block-I/O delay.
+/// This is deliberately separate from schedstat: a kernel may omit or deny
+/// schedstat while task-stat evidence remains usable.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskStatCollectionIssues {
+    pub task_enumeration_failed: u32,
+    pub task_enumeration_errors: u32,
+    pub task_disappeared: u32,
+    pub task_appeared: u32,
+    pub task_exited: u32,
+    pub task_identity_changed: u32,
+    pub task_permission_denied: u32,
+    pub task_unreadable: u32,
+    pub task_malformed: u32,
+    pub task_limit_reached: bool,
+    pub tasks_read: u32,
+    pub stable_tasks: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CpuSnapshot {
     pub host: HostCpuRaw,
@@ -115,6 +151,7 @@ pub struct CpuSnapshot {
     pub processes: BTreeMap<ProcessKey, ProcessRaw>,
     pub issues: ProcessCollectionIssues,
     pub schedstat_issues: SchedstatCollectionIssues,
+    pub task_stat_issues: TaskStatCollectionIssues,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,6 +185,21 @@ pub struct ProcessSchedulerDelayInterval {
     pub runnable_delay_fraction: f64,
 }
 
+/// Procfs resource evidence normalized over one process-CPU observation
+/// interval. RSS is leader-only; block-I/O delay is a sum of stable tasks and
+/// can therefore exceed the wall-clock interval for multi-threaded processes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProcessResourceInterval {
+    pub key: ProcessKey,
+    pub name: String,
+    pub leader_rss_bytes: Option<u64>,
+    pub rss_growth_bytes: Option<u64>,
+    pub minor_faults: Option<u64>,
+    pub major_faults: Option<u64>,
+    pub stable_task_count: u32,
+    pub block_io_delay_ticks: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CpuProcessObservation {
     #[serde(with = "crate::duration_us")]
@@ -157,9 +209,13 @@ pub struct CpuProcessObservation {
     pub load: Option<LoadAverageRaw>,
     pub load_availability: LoadAverageAvailability,
     pub processes: Vec<ProcessCpuInterval>,
+    #[serde(default, skip_serializing)]
+    pub process_resource_evidence: Vec<ProcessResourceInterval>,
     pub collection_issues: ProcessCollectionIssues,
     pub scheduler_delay_candidates: Vec<ProcessSchedulerDelayInterval>,
     pub schedstat_collection_issues: SchedstatCollectionIssues,
+    #[serde(default, skip_serializing)]
+    pub task_stat_collection_issues: TaskStatCollectionIssues,
     pub schedstat_capability: SchedstatCapability,
 }
 
@@ -342,7 +398,7 @@ pub(crate) fn read_snapshot(proc_root: &Path) -> Result<CpuSnapshot, CpuError> {
         },
         Err(_) => (None, LoadAverageAvailability::Unreadable),
     };
-    let (processes, issues, schedstat_issues) = collect_processes(proc_root);
+    let (processes, issues, schedstat_issues, task_stat_issues) = collect_processes(proc_root);
     Ok(CpuSnapshot {
         host,
         load,
@@ -350,6 +406,7 @@ pub(crate) fn read_snapshot(proc_root: &Path) -> Result<CpuSnapshot, CpuError> {
         processes,
         issues,
         schedstat_issues,
+        task_stat_issues,
     })
 }
 
@@ -468,8 +525,34 @@ pub fn parse_process_stat(input: &str) -> Result<ProcessRaw, CpuError> {
         state: fields[0].chars().next().ok_or(CpuError::Malformed)?,
         user_ticks: fields[11].parse().map_err(|_| CpuError::Malformed)?,
         system_ticks: fields[12].parse().map_err(|_| CpuError::Malformed)?,
+        // These fields were added at different times by Linux. Keep the CPU
+        // baseline usable on shorter stat records and make the richer evidence
+        // explicitly unavailable instead of rejecting the process.
+        minor_faults: optional_stat_counter(&fields, 7)?,
+        major_faults: optional_stat_counter(&fields, 9)?,
+        rss_pages: optional_rss_pages(&fields, 21)?,
+        block_io_delay_ticks: optional_stat_counter(&fields, 39)?,
         schedstat: BTreeMap::new(),
+        task_block_io_delay_ticks: BTreeMap::new(),
     })
+}
+
+fn optional_stat_counter(fields: &[&str], index: usize) -> Result<Option<u64>, CpuError> {
+    fields
+        .get(index)
+        .map(|value| value.parse().map_err(|_| CpuError::Malformed))
+        .transpose()
+}
+
+fn optional_rss_pages(fields: &[&str], index: usize) -> Result<Option<u64>, CpuError> {
+    fields
+        .get(index)
+        .map(|value| {
+            let pages: i64 = value.parse().map_err(|_| CpuError::Malformed)?;
+            Ok(u64::try_from(pages).ok())
+        })
+        .transpose()
+        .map(Option::flatten)
 }
 
 pub fn parse_schedstat(input: &str) -> Result<SchedstatRaw, CpuError> {
@@ -490,12 +573,14 @@ fn collect_processes(
     BTreeMap<ProcessKey, ProcessRaw>,
     ProcessCollectionIssues,
     SchedstatCollectionIssues,
+    TaskStatCollectionIssues,
 ) {
     let mut issues = ProcessCollectionIssues::default();
     let mut schedstat_issues = SchedstatCollectionIssues::default();
+    let mut task_stat_issues = TaskStatCollectionIssues::default();
     let Ok(entries) = fs::read_dir(proc_root) else {
         issues.enumeration_failed = true;
-        return (BTreeMap::new(), issues, schedstat_issues);
+        return (BTreeMap::new(), issues, schedstat_issues, task_stat_issues);
     };
     let mut pids = BinaryHeap::with_capacity(MAX_PROCESSES);
     for entry in entries {
@@ -520,12 +605,15 @@ fn collect_processes(
         match fs::read_to_string(proc_root.join(pid.to_string()).join("stat")) {
             Ok(contents) => match parse_process_stat(&contents) {
                 Ok(mut process) => {
-                    process.schedstat = collect_process_schedstat(
+                    let (schedstat, task_block_io_delay_ticks) = collect_process_schedstat(
                         proc_root,
                         pid,
                         &mut remaining_tasks,
                         &mut schedstat_issues,
+                        &mut task_stat_issues,
                     );
+                    process.schedstat = schedstat;
+                    process.task_block_io_delay_ticks = task_block_io_delay_ticks;
                     processes.insert(process.key, process);
                 }
                 Err(_) => issues.malformed += 1,
@@ -537,33 +625,42 @@ fn collect_processes(
             Err(_) => issues.unreadable += 1,
         }
     }
-    (processes, issues, schedstat_issues)
+    (processes, issues, schedstat_issues, task_stat_issues)
 }
 
 fn collect_process_schedstat(
     proc_root: &Path,
     pid: u32,
     remaining_tasks: &mut usize,
-    issues: &mut SchedstatCollectionIssues,
-) -> BTreeMap<ThreadKey, SchedstatRaw> {
+    schedstat_issues: &mut SchedstatCollectionIssues,
+    task_stat_issues: &mut TaskStatCollectionIssues,
+) -> (BTreeMap<ThreadKey, SchedstatRaw>, BTreeMap<ThreadKey, u64>) {
     if *remaining_tasks == 0 {
-        issues.task_limit_reached = true;
-        return BTreeMap::new();
+        schedstat_issues.task_limit_reached = true;
+        task_stat_issues.task_limit_reached = true;
+        return (BTreeMap::new(), BTreeMap::new());
     }
     let task_root = proc_root.join(pid.to_string()).join("task");
     let entries = match fs::read_dir(task_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            issues.task_disappeared = issues.task_disappeared.saturating_add(1);
-            return BTreeMap::new();
+            task_stat_issues.task_disappeared = task_stat_issues.task_disappeared.saturating_add(1);
+            schedstat_issues.task_disappeared = schedstat_issues.task_disappeared.saturating_add(1);
+            return (BTreeMap::new(), BTreeMap::new());
         }
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            issues.task_permission_denied = issues.task_permission_denied.saturating_add(1);
-            return BTreeMap::new();
+            task_stat_issues.task_permission_denied =
+                task_stat_issues.task_permission_denied.saturating_add(1);
+            schedstat_issues.task_permission_denied =
+                schedstat_issues.task_permission_denied.saturating_add(1);
+            return (BTreeMap::new(), BTreeMap::new());
         }
         Err(_) => {
-            issues.task_enumeration_failed = issues.task_enumeration_failed.saturating_add(1);
-            return BTreeMap::new();
+            task_stat_issues.task_enumeration_failed =
+                task_stat_issues.task_enumeration_failed.saturating_add(1);
+            schedstat_issues.task_enumeration_failed =
+                schedstat_issues.task_enumeration_failed.saturating_add(1);
+            return (BTreeMap::new(), BTreeMap::new());
         }
     };
     let mut tids = BinaryHeap::new();
@@ -575,100 +672,150 @@ fn collect_process_schedstat(
                 .and_then(|name| name.parse::<u32>().ok())
             {
                 Some(tid) => {
-                    insert_lowest_task(&mut tids, tid, *remaining_tasks, issues);
+                    insert_lowest_task(&mut tids, tid, *remaining_tasks, schedstat_issues);
+                    if schedstat_issues.task_limit_reached {
+                        task_stat_issues.task_limit_reached = true;
+                    }
                 }
                 None => {
-                    issues.task_enumeration_errors =
-                        issues.task_enumeration_errors.saturating_add(1)
+                    task_stat_issues.task_enumeration_errors =
+                        task_stat_issues.task_enumeration_errors.saturating_add(1);
+                    schedstat_issues.task_enumeration_errors =
+                        schedstat_issues.task_enumeration_errors.saturating_add(1)
                 }
             },
             Err(_) => {
-                issues.task_enumeration_errors = issues.task_enumeration_errors.saturating_add(1)
+                task_stat_issues.task_enumeration_errors =
+                    task_stat_issues.task_enumeration_errors.saturating_add(1);
+                schedstat_issues.task_enumeration_errors =
+                    schedstat_issues.task_enumeration_errors.saturating_add(1)
             }
         }
     }
     let mut tids = tids.into_vec();
     tids.sort_unstable();
     let mut result = BTreeMap::new();
+    let mut task_block_io_delay_ticks = BTreeMap::new();
     for tid in tids {
         *remaining_tasks -= 1;
         let task_base = proc_root
             .join(pid.to_string())
             .join("task")
             .join(tid.to_string());
-        let task_key = match fs::read_to_string(task_base.join("stat"))
-            .and_then(|value| parse_process_stat(&value).map_err(|_| io::Error::other("malformed")))
-        {
-            Ok(stat) if stat.key.pid == tid => ThreadKey {
-                tid,
-                start_time_ticks: stat.key.start_time_ticks,
+        let task_key = match fs::read_to_string(task_base.join("stat")) {
+            Ok(value) => match parse_process_stat(&value) {
+                Ok(stat) if stat.key.pid == tid => ThreadKey {
+                    tid,
+                    start_time_ticks: stat.key.start_time_ticks,
+                },
+                Ok(_) => {
+                    task_stat_issues.task_identity_changed =
+                        task_stat_issues.task_identity_changed.saturating_add(1);
+                    schedstat_issues.task_identity_changed =
+                        schedstat_issues.task_identity_changed.saturating_add(1);
+                    continue;
+                }
+                Err(_) => {
+                    task_stat_issues.task_malformed =
+                        task_stat_issues.task_malformed.saturating_add(1);
+                    schedstat_issues.task_malformed =
+                        schedstat_issues.task_malformed.saturating_add(1);
+                    continue;
+                }
             },
-            Ok(_) => {
-                issues.task_identity_changed = issues.task_identity_changed.saturating_add(1);
-                continue;
-            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                issues.task_disappeared = issues.task_disappeared.saturating_add(1);
+                task_stat_issues.task_disappeared =
+                    task_stat_issues.task_disappeared.saturating_add(1);
+                schedstat_issues.task_disappeared =
+                    schedstat_issues.task_disappeared.saturating_add(1);
                 continue;
             }
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                issues.task_permission_denied = issues.task_permission_denied.saturating_add(1);
+                task_stat_issues.task_permission_denied =
+                    task_stat_issues.task_permission_denied.saturating_add(1);
+                schedstat_issues.task_permission_denied =
+                    schedstat_issues.task_permission_denied.saturating_add(1);
                 continue;
             }
             Err(_) => {
-                issues.task_malformed = issues.task_malformed.saturating_add(1);
+                task_stat_issues.task_unreadable =
+                    task_stat_issues.task_unreadable.saturating_add(1);
+                schedstat_issues.task_unreadable =
+                    schedstat_issues.task_unreadable.saturating_add(1);
                 continue;
             }
         };
-        match fs::read_to_string(task_base.join("schedstat")) {
+        let schedstat = fs::read_to_string(task_base.join("schedstat"));
+        let end_stat = match fs::read_to_string(task_base.join("stat")) {
+            Ok(value) => match parse_process_stat(&value) {
+                Ok(stat) => stat,
+                Err(_) => {
+                    task_stat_issues.task_malformed =
+                        task_stat_issues.task_malformed.saturating_add(1);
+                    schedstat_issues.task_malformed =
+                        schedstat_issues.task_malformed.saturating_add(1);
+                    continue;
+                }
+            },
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                task_stat_issues.task_disappeared =
+                    task_stat_issues.task_disappeared.saturating_add(1);
+                schedstat_issues.task_disappeared =
+                    schedstat_issues.task_disappeared.saturating_add(1);
+                continue;
+            }
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                task_stat_issues.task_permission_denied =
+                    task_stat_issues.task_permission_denied.saturating_add(1);
+                schedstat_issues.task_permission_denied =
+                    schedstat_issues.task_permission_denied.saturating_add(1);
+                continue;
+            }
+            Err(_) => {
+                task_stat_issues.task_unreadable =
+                    task_stat_issues.task_unreadable.saturating_add(1);
+                schedstat_issues.task_unreadable =
+                    schedstat_issues.task_unreadable.saturating_add(1);
+                continue;
+            }
+        };
+        if end_stat.key.pid != tid || end_stat.key.start_time_ticks != task_key.start_time_ticks {
+            task_stat_issues.task_identity_changed =
+                task_stat_issues.task_identity_changed.saturating_add(1);
+            schedstat_issues.task_identity_changed =
+                schedstat_issues.task_identity_changed.saturating_add(1);
+            continue;
+        }
+        if let Some(ticks) = end_stat.block_io_delay_ticks {
+            task_block_io_delay_ticks.insert(task_key, ticks);
+        }
+        task_stat_issues.tasks_read = task_stat_issues.tasks_read.saturating_add(1);
+        match schedstat {
             Ok(contents) => match parse_schedstat(&contents) {
                 Ok(raw) => {
-                    match fs::read_to_string(task_base.join("stat"))
-                        .ok()
-                        .and_then(|value| parse_process_stat(&value).ok())
-                    {
-                        Some(stat)
-                            if stat.key.pid == tid
-                                && stat.key.start_time_ticks == task_key.start_time_ticks =>
-                        {
-                            result.insert(task_key, raw);
-                            issues.tasks_read = issues.tasks_read.saturating_add(1);
-                        }
-                        _ => {
-                            issues.task_identity_changed =
-                                issues.task_identity_changed.saturating_add(1)
-                        }
-                    }
+                    result.insert(task_key, raw);
+                    schedstat_issues.tasks_read = schedstat_issues.tasks_read.saturating_add(1);
                 }
-                Err(_) => issues.task_malformed = issues.task_malformed.saturating_add(1),
+                Err(_) => {
+                    schedstat_issues.task_malformed =
+                        schedstat_issues.task_malformed.saturating_add(1)
+                }
             },
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                issues.task_permission_denied = issues.task_permission_denied.saturating_add(1)
+                schedstat_issues.task_permission_denied =
+                    schedstat_issues.task_permission_denied.saturating_add(1)
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                match fs::read_to_string(task_base.join("stat"))
-                    .ok()
-                    .and_then(|value| parse_process_stat(&value).ok())
-                {
-                    Some(stat)
-                        if stat.key.start_time_ticks == task_key.start_time_ticks
-                            && stat.key.pid == tid =>
-                    {
-                        issues.task_unsupported = issues.task_unsupported.saturating_add(1);
-                    }
-                    Some(_) => {
-                        issues.task_identity_changed =
-                            issues.task_identity_changed.saturating_add(1);
-                    }
-                    None => {
-                        issues.task_disappeared = issues.task_disappeared.saturating_add(1);
-                    }
-                }
+                schedstat_issues.task_unsupported =
+                    schedstat_issues.task_unsupported.saturating_add(1);
             }
-            Err(_) => issues.task_unreadable = issues.task_unreadable.saturating_add(1),
+            Err(_) => {
+                schedstat_issues.task_unreadable =
+                    schedstat_issues.task_unreadable.saturating_add(1)
+            }
         }
     }
-    result
+    (result, task_block_io_delay_ticks)
 }
 
 fn insert_lowest_pid(pids: &mut BinaryHeap<u32>, pid: u32, issues: &mut ProcessCollectionIssues) {
@@ -750,9 +897,12 @@ pub fn interval_from_snapshots(
     )
     .unwrap_or(u32::MAX);
     let mut processes = Vec::new();
+    let mut process_resource_evidence = Vec::new();
     let mut scheduler_delay_candidates = Vec::new();
     let mut schedstat_collection_issues =
         merge_schedstat_issues(start.schedstat_issues, end.schedstat_issues);
+    let mut task_stat_collection_issues =
+        merge_task_stat_issues(start.task_stat_issues, end.task_stat_issues);
     for (key, end_process) in &end.processes {
         let Some(start_process) = start.processes.get(key) else {
             continue;
@@ -778,6 +928,65 @@ pub fn interval_from_snapshots(
             collection_issues.counter_regressed =
                 collection_issues.counter_regressed.saturating_add(1);
         }
+        let rss_growth_pages = rss_growth_pages(start_process.rss_pages, end_process.rss_pages);
+        let minor_faults = checked_counter_delta(
+            start_process.minor_faults,
+            end_process.minor_faults,
+            &mut collection_issues,
+        );
+        let major_faults = checked_counter_delta(
+            start_process.major_faults,
+            end_process.major_faults,
+            &mut collection_issues,
+        );
+        let mut block_io_delay_ticks = 0_u64;
+        let mut stable_task_count = 0_u32;
+        let mut has_block_io_delay = false;
+        for (thread, end_ticks) in &end_process.task_block_io_delay_ticks {
+            let Some(start_ticks) = start_process.task_block_io_delay_ticks.get(thread) else {
+                continue;
+            };
+            let Some(delta) = end_ticks.checked_sub(*start_ticks) else {
+                collection_issues.task_block_io_counter_regressed = collection_issues
+                    .task_block_io_counter_regressed
+                    .saturating_add(1);
+                continue;
+            };
+            let Some(total) = block_io_delay_ticks.checked_add(delta) else {
+                collection_issues.task_block_io_aggregate_overflow = collection_issues
+                    .task_block_io_aggregate_overflow
+                    .saturating_add(1);
+                continue;
+            };
+            block_io_delay_ticks = total;
+            stable_task_count = stable_task_count.saturating_add(1);
+            has_block_io_delay = true;
+        }
+        task_stat_collection_issues.stable_tasks =
+            task_stat_collection_issues.stable_tasks.saturating_add(
+                u32::try_from(
+                    end_process
+                        .task_block_io_delay_ticks
+                        .keys()
+                        .filter(|thread| {
+                            start_process.task_block_io_delay_ticks.contains_key(thread)
+                        })
+                        .count(),
+                )
+                .unwrap_or(u32::MAX),
+            );
+        let leader_rss_bytes = pages_to_bytes(end_process.rss_pages, &mut collection_issues);
+        let rss_growth_bytes = pages_to_bytes(rss_growth_pages, &mut collection_issues);
+        process_resource_evidence.push(ProcessResourceInterval {
+            key: *key,
+            name: sanitized_process_name(&end_process.comm),
+            leader_rss_bytes,
+            rss_growth_bytes,
+            minor_faults,
+            major_faults,
+            stable_task_count,
+            block_io_delay_ticks: has_block_io_delay.then_some(block_io_delay_ticks),
+        });
         let mut total = SchedstatRaw {
             running_ns: 0,
             runnable_wait_ns: 0,
@@ -838,6 +1047,7 @@ pub fn interval_from_snapshots(
             .cmp(&left.cpu_ticks)
             .then_with(|| left.key.cmp(&right.key))
     });
+    process_resource_evidence.sort_unstable_by_key(|evidence| evidence.key);
     scheduler_delay_candidates.sort_unstable_by(|left, right| {
         right
             .runnable_wait_ns
@@ -846,6 +1056,25 @@ pub fn interval_from_snapshots(
     });
     for (key, end_process) in &end.processes {
         if let Some(start_process) = start.processes.get(key) {
+            for thread in end_process.task_block_io_delay_ticks.keys() {
+                if !start_process.task_block_io_delay_ticks.contains_key(thread) {
+                    task_stat_collection_issues.task_appeared =
+                        task_stat_collection_issues.task_appeared.saturating_add(1);
+                }
+                if start_process.task_block_io_delay_ticks.keys().any(|old| {
+                    old.tid == thread.tid && old.start_time_ticks != thread.start_time_ticks
+                }) {
+                    task_stat_collection_issues.task_identity_changed = task_stat_collection_issues
+                        .task_identity_changed
+                        .saturating_add(1);
+                }
+            }
+            for thread in start_process.task_block_io_delay_ticks.keys() {
+                if !end_process.task_block_io_delay_ticks.contains_key(thread) {
+                    task_stat_collection_issues.task_exited =
+                        task_stat_collection_issues.task_exited.saturating_add(1);
+                }
+            }
             for thread in end_process.schedstat.keys() {
                 if !start_process.schedstat.contains_key(thread) {
                     schedstat_collection_issues.task_appeared =
@@ -900,11 +1129,74 @@ pub fn interval_from_snapshots(
         load: end.load,
         load_availability: end.load_availability,
         processes,
+        process_resource_evidence,
         collection_issues,
         scheduler_delay_candidates,
         schedstat_collection_issues,
+        task_stat_collection_issues,
         schedstat_capability,
     })
+}
+
+fn merge_task_stat_issues(
+    start: TaskStatCollectionIssues,
+    end: TaskStatCollectionIssues,
+) -> TaskStatCollectionIssues {
+    TaskStatCollectionIssues {
+        task_enumeration_failed: start
+            .task_enumeration_failed
+            .saturating_add(end.task_enumeration_failed),
+        task_enumeration_errors: start
+            .task_enumeration_errors
+            .saturating_add(end.task_enumeration_errors),
+        task_disappeared: start.task_disappeared.saturating_add(end.task_disappeared),
+        task_appeared: 0,
+        task_exited: 0,
+        task_identity_changed: start
+            .task_identity_changed
+            .saturating_add(end.task_identity_changed),
+        task_permission_denied: start
+            .task_permission_denied
+            .saturating_add(end.task_permission_denied),
+        task_unreadable: start.task_unreadable.saturating_add(end.task_unreadable),
+        task_malformed: start.task_malformed.saturating_add(end.task_malformed),
+        task_limit_reached: start.task_limit_reached || end.task_limit_reached,
+        tasks_read: start.tasks_read.saturating_add(end.tasks_read),
+        stable_tasks: 0,
+    }
+}
+
+fn pages_to_bytes(pages: Option<u64>, issues: &mut ProcessCollectionIssues) -> Option<u64> {
+    let page_size = u64::try_from(rustix::param::page_size()).ok()?;
+    pages.and_then(|pages| match pages.checked_mul(page_size) {
+        Some(bytes) => Some(bytes),
+        None => {
+            issues.resource_value_overflow = issues.resource_value_overflow.saturating_add(1);
+            None
+        }
+    })
+}
+
+fn rss_growth_pages(start: Option<u64>, end: Option<u64>) -> Option<u64> {
+    Some(end?.saturating_sub(start?))
+}
+
+fn checked_counter_delta(
+    start: Option<u64>,
+    end: Option<u64>,
+    issues: &mut ProcessCollectionIssues,
+) -> Option<u64> {
+    match (start, end) {
+        (Some(start), Some(end)) => match end.checked_sub(start) {
+            Some(delta) => Some(delta),
+            None => {
+                issues.resource_counter_regressed =
+                    issues.resource_counter_regressed.saturating_add(1);
+                None
+            }
+        },
+        _ => None,
+    }
 }
 
 fn merge_schedstat_issues(
@@ -960,6 +1252,18 @@ fn merge_issues(
         counter_regressed: start
             .counter_regressed
             .saturating_add(end.counter_regressed),
+        resource_counter_regressed: start
+            .resource_counter_regressed
+            .saturating_add(end.resource_counter_regressed),
+        task_block_io_counter_regressed: start
+            .task_block_io_counter_regressed
+            .saturating_add(end.task_block_io_counter_regressed),
+        task_block_io_aggregate_overflow: start
+            .task_block_io_aggregate_overflow
+            .saturating_add(end.task_block_io_aggregate_overflow),
+        resource_value_overflow: start
+            .resource_value_overflow
+            .saturating_add(end.resource_value_overflow),
         appeared: 0,
         exited: 0,
         limit_reached: start.limit_reached || end.limit_reached,
@@ -1027,6 +1331,31 @@ mod tests {
         assert_eq!(process.comm, "a weird ) name");
         assert_eq!(process.key.start_time_ticks, 987);
         assert_eq!(process.user_ticks, 42);
+        assert_eq!(process.minor_faults, Some(7));
+        assert_eq!(process.major_faults, Some(9));
+        assert_eq!(process.rss_pages, Some(21));
+        assert_eq!(process.block_io_delay_ticks, Some(39));
+    }
+
+    #[test]
+    fn accepts_short_stat_records_but_marks_new_resource_fields_unavailable() {
+        let process =
+            parse_process_stat("1 (short) R 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20")
+                .unwrap();
+        assert_eq!(process.rss_pages, None);
+        assert_eq!(process.block_io_delay_ticks, None);
+        assert_eq!(
+            parse_process_stat(
+                "1 (negative-rss) R 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 -1"
+            )
+            .unwrap()
+            .rss_pages,
+            None
+        );
+        assert!(
+            parse_process_stat("1 (bad) R 1 2 3 4 5 6 nope 8 9 10 11 12 13 14 15 16 17 18 19 20")
+                .is_err()
+        );
     }
 
     #[test]
@@ -1060,6 +1389,29 @@ mod tests {
             );
             let _ = fs::remove_dir_all(root);
         }
+    }
+
+    #[test]
+    fn task_stat_block_io_evidence_survives_missing_schedstat() {
+        let root = proc_fixture(false);
+        fs::remove_file(root.join("123/task/123/schedstat")).unwrap();
+        let snapshot = read_snapshot(&root).unwrap();
+        let process = snapshot.processes.values().next().unwrap();
+        assert_eq!(process.task_block_io_delay_ticks.len(), 1);
+        assert_eq!(snapshot.schedstat_issues.task_unsupported, 1);
+        assert_eq!(snapshot.task_stat_issues.tasks_read, 1);
+        assert_eq!(snapshot.task_stat_issues.task_permission_denied, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn task_stat_prerequisite_failure_is_shared_with_schedstat() {
+        let root = proc_fixture(false);
+        fs::remove_dir_all(root.join("123/task")).unwrap();
+        let snapshot = read_snapshot(&root).unwrap();
+        assert_eq!(snapshot.task_stat_issues.task_disappeared, 1);
+        assert_eq!(snapshot.schedstat_issues.task_disappeared, 1);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1100,6 +1452,7 @@ mod tests {
                 .collect(),
             issues: ProcessCollectionIssues::default(),
             schedstat_issues: SchedstatCollectionIssues::default(),
+            task_stat_issues: TaskStatCollectionIssues::default(),
         }
     }
     fn process(pid: u32, start: u64, ticks: u64) -> ProcessRaw {
@@ -1112,7 +1465,12 @@ mod tests {
             state: 'R',
             user_ticks: ticks,
             system_ticks: 0,
+            rss_pages: None,
+            minor_faults: None,
+            major_faults: None,
+            block_io_delay_ticks: None,
             schedstat: BTreeMap::new(),
+            task_block_io_delay_ticks: BTreeMap::new(),
         }
     }
 
@@ -1156,6 +1514,195 @@ mod tests {
         let observation = interval_from_snapshots(start, end, Duration::from_secs(1)).unwrap();
         assert!(observation.processes.is_empty());
         assert_eq!(observation.collection_issues.counter_regressed, 1);
+    }
+
+    #[test]
+    fn normalizes_leader_resources_and_only_stable_task_block_io_delay() {
+        let mut first = process(7, 1, 10);
+        first.rss_pages = Some(100);
+        first.minor_faults = Some(10);
+        first.major_faults = Some(2);
+        first.task_block_io_delay_ticks = BTreeMap::from([
+            (
+                ThreadKey {
+                    tid: 7,
+                    start_time_ticks: 1,
+                },
+                20,
+            ),
+            (
+                ThreadKey {
+                    tid: 8,
+                    start_time_ticks: 2,
+                },
+                30,
+            ),
+        ]);
+        let mut second = process(7, 1, 20);
+        second.rss_pages = Some(125);
+        second.minor_faults = Some(15);
+        second.major_faults = Some(3);
+        second.task_block_io_delay_ticks = BTreeMap::from([
+            (
+                ThreadKey {
+                    tid: 7,
+                    start_time_ticks: 1,
+                },
+                23,
+            ),
+            (
+                ThreadKey {
+                    tid: 8,
+                    start_time_ticks: 2,
+                },
+                37,
+            ),
+            // A new task cannot contribute to the interval aggregate.
+            (
+                ThreadKey {
+                    tid: 9,
+                    start_time_ticks: 3,
+                },
+                100,
+            ),
+        ]);
+        let observation = interval_from_snapshots(
+            snapshot(100, 60, 40, vec![first]),
+            snapshot(110, 70, 40, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(observation.process_resource_evidence.len(), 1);
+        assert_eq!(
+            observation.process_resource_evidence[0],
+            ProcessResourceInterval {
+                key: ProcessKey {
+                    pid: 7,
+                    start_time_ticks: 1
+                },
+                name: "p7".into(),
+                leader_rss_bytes: Some(125 * rustix::param::page_size() as u64),
+                rss_growth_bytes: Some(25 * rustix::param::page_size() as u64),
+                minor_faults: Some(5),
+                major_faults: Some(1),
+                stable_task_count: 2,
+                block_io_delay_ticks: Some(10),
+            }
+        );
+    }
+
+    #[test]
+    fn resource_regression_overflow_and_tid_reuse_do_not_fabricate_evidence() {
+        let mut first = process(7, 1, 10);
+        first.rss_pages = Some(100);
+        first.minor_faults = Some(10);
+        first.task_block_io_delay_ticks = BTreeMap::from([
+            (
+                ThreadKey {
+                    tid: 7,
+                    start_time_ticks: 1,
+                },
+                2,
+            ),
+            (
+                ThreadKey {
+                    tid: 8,
+                    start_time_ticks: 2,
+                },
+                0,
+            ),
+            (
+                ThreadKey {
+                    tid: 9,
+                    start_time_ticks: 3,
+                },
+                0,
+            ),
+        ]);
+        let mut second = process(7, 1, 20);
+        second.rss_pages = Some(99);
+        second.minor_faults = Some(9);
+        second.task_block_io_delay_ticks = BTreeMap::from([
+            // Same TID but a different start time is not stable.
+            (
+                ThreadKey {
+                    tid: 7,
+                    start_time_ticks: 4,
+                },
+                99,
+            ),
+            (
+                ThreadKey {
+                    tid: 8,
+                    start_time_ticks: 2,
+                },
+                u64::MAX,
+            ),
+            (
+                ThreadKey {
+                    tid: 9,
+                    start_time_ticks: 3,
+                },
+                1,
+            ),
+        ]);
+        let observation = interval_from_snapshots(
+            snapshot(100, 60, 40, vec![first]),
+            snapshot(110, 70, 40, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let evidence = &observation.process_resource_evidence[0];
+        assert_eq!(evidence.rss_growth_bytes, Some(0));
+        assert_eq!(evidence.minor_faults, None);
+        assert_eq!(evidence.stable_task_count, 1);
+        assert_eq!(evidence.block_io_delay_ticks, Some(u64::MAX));
+        assert_eq!(observation.collection_issues.resource_counter_regressed, 1);
+        assert_eq!(
+            observation
+                .collection_issues
+                .task_block_io_aggregate_overflow,
+            1
+        );
+    }
+
+    #[test]
+    fn task_stat_lifecycle_is_independent_of_schedstat() {
+        let mut first = process(7, 1, 10);
+        first.task_block_io_delay_ticks = BTreeMap::from([(
+            ThreadKey {
+                tid: 9,
+                start_time_ticks: 10,
+            },
+            1,
+        )]);
+        let mut second = process(7, 1, 20);
+        second.task_block_io_delay_ticks = BTreeMap::from([(
+            ThreadKey {
+                tid: 9,
+                start_time_ticks: 11,
+            },
+            2,
+        )]);
+        let observation = interval_from_snapshots(
+            snapshot(100, 60, 40, vec![first]),
+            snapshot(110, 70, 40, vec![second]),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert!(observation.scheduler_delay_candidates.is_empty());
+        assert_eq!(observation.task_stat_collection_issues.task_appeared, 1);
+        assert_eq!(observation.task_stat_collection_issues.task_exited, 1);
+        assert_eq!(
+            observation
+                .task_stat_collection_issues
+                .task_identity_changed,
+            1
+        );
+        assert_eq!(
+            observation.process_resource_evidence[0].block_io_delay_ticks,
+            None
+        );
     }
 
     #[test]
@@ -1229,6 +1776,27 @@ mod tests {
         assert_eq!(
             schedstat_capability(&issues, &ProcessCollectionIssues::default()),
             SchedstatCapability::Partial
+        );
+    }
+
+    #[test]
+    fn shared_task_stat_failures_degrade_schedstat_capability() {
+        let partial = SchedstatCollectionIssues {
+            tasks_read: 1,
+            task_enumeration_errors: 1,
+            ..SchedstatCollectionIssues::default()
+        };
+        assert_eq!(
+            schedstat_capability(&partial, &ProcessCollectionIssues::default()),
+            SchedstatCapability::Partial
+        );
+        let denied = SchedstatCollectionIssues {
+            task_permission_denied: 1,
+            ..SchedstatCollectionIssues::default()
+        };
+        assert_eq!(
+            schedstat_capability(&denied, &ProcessCollectionIssues::default()),
+            SchedstatCapability::PermissionDenied
         );
     }
 

@@ -228,8 +228,9 @@ tools/
 ```
 
 There is no generic telemetry framework. `cpu.rs` keeps the narrow procfs
-CPU/process raw and interval model together; it deliberately aggregates stable
-task schedstat counters but does not assign attribution roles. `analysis.rs` is
+CPU/process raw and interval model together; it aggregates stable task
+schedstat and block-I/O-delay counters, while retaining leader-only RSS and
+fault deltas, but does not assign attribution roles. `analysis.rs` is
 a narrow pure boundary that consumes only normalized
 PSI and CPU/process interval observations and emits typed serializable CPU
 findings. A valid PSI interval is sufficient for the CPU resource verdict;

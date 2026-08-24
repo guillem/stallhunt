@@ -2618,9 +2618,11 @@ mod tests {
             load: None,
             load_availability: LoadAverageAvailability::Unreadable,
             processes,
+            process_resource_evidence: Vec::new(),
             collection_issues: ProcessCollectionIssues::default(),
             scheduler_delay_candidates: delays,
             schedstat_collection_issues: SchedstatCollectionIssues::default(),
+            task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
             schedstat_capability: SchedstatCapability::Available,
         }
     }

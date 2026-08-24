@@ -4,7 +4,7 @@ Last updated: 2026-08-24
 
 ## Current milestone
 
-**v0.4.0 planning — scoped process attribution and widescreen TUI**
+**v0.4.0 in progress — scoped process attribution and widescreen TUI**
 
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
@@ -19,9 +19,11 @@ the repository remains parked otherwise.
 ADR-0015 and ADR-0016 define the next proposed vertical slice: bounded procfs
 evidence plus optional taskstats delay evidence will support six independently
 ranked host/cgroup process roles, schema version 2, and a responsive wide TUI.
-They are design decisions only at this point; v0.4.0 telemetry, inference,
-schema migration, presentation, validation, and release gates are not yet
-implemented. Do not start M7 merely because eBPF is interesting; add a probe only for
+The first procfs-normalization slice is implemented: the existing bounded walk
+now retains leader RSS/RSS growth in bytes, fault deltas, and stable-task
+block-I/O delay ticks. Taskstats, roles, schema migration, presentation,
+controlled-host validation, and release gates are still pending. Do not start
+M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
 that test still requires a caller-owned delegated subtree that already contains
@@ -128,6 +130,17 @@ the test process and does not mutate the hierarchy.
   endpoint after the existing PID cap. Direct task schedstat reads determine
   availability; task churn, TID reuse, permissions, malformed data, and caps are
   explicit JSON context. Candidate delay is raw summed-thread evidence.
+- The v0.4 procfs-normalization slice reuses that bounded PID/task walk: it
+  retains leader RSS and RSS growth in checked bytes, minor/major-fault deltas,
+  and checked stable-task block-I/O delay-tick sums. Per-thread RSS is never
+  summed. RSS is a gauge, so a valid decrease produces zero growth; missing
+  trailing `stat` fields, negative RSS, identity churn, monotonic-counter
+  regression, and aggregate overflow remain explicit unavailable or partial
+  evidence rather than fabricated zeroes. Task-stat completeness is tracked
+  independently of schedstat, so block-I/O evidence can remain usable when
+  schedstat is unavailable. Schema-1 recordings omit this new evidence. It
+  adds no taskstats access,
+  process role inference, cgroup attribution, or presentation behavior.
 - M1.5 analyzes normalized CPU evidence without reading procfs: exact-interval
   CPU PSI alone establishes the resource verdict. The effective diagnostic and
   resource-confidence window is the shorter of requested and measured PSI
@@ -292,6 +305,10 @@ the test process and does not mutate the hierarchy.
   with 370 visible PIDs and ~1,587--2,099 stable tasks: about 6 MiB RSS and
   110--210 ms PSI-window skew on a one-second hunt. The 4,096-PID and 16,384-task
   caps were not reached.
+- The new procfs resource evidence is raw normalized context only. Delayacct
+  block-I/O ticks can be absent or disabled, and zero or unavailable values do
+  not establish that a process suffered no I/O delay. Taskstats remains needed
+  for the planned direct CPU, memory, and I/O delay categories.
 - GitHub Actions runs locked tests on Rust 1.85 and formatting, Clippy, and
   locked tests on stable Rust. The five environment-dependent Linux acceptance
   tests remain opt-in rather than CI workloads.
@@ -356,11 +373,11 @@ the test process and does not mutate the hierarchy.
 
 ## Pending work
 
-The approved v0.4.0 vertical slice is not yet implemented. It adds bounded
-process resource evidence, optional taskstats delay evidence, six analyzer-owned
-host/cgroup roles, schema-2 outputs and recording migration, and the responsive
-wide TUI specified by ADR-0015 and ADR-0016. No additional M8 chain or M7 probe
-is part of this slice.
+The approved v0.4.0 vertical slice has its bounded procfs normalization
+foundation. Remaining work adds optional taskstats delay evidence, six
+analyzer-owned host/cgroup roles, schema-2 outputs and recording migration, and
+the responsive wide TUI specified by ADR-0015 and ADR-0016. No additional M8
+chain or M7 probe is part of this slice.
 
 Diagnostic and attribution gaps:
 
@@ -417,9 +434,8 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Extend the existing bounded procfs process walk with leader RSS, fault counters,
-and stable-task block-I/O delay, including deterministic normalization tests.
-Then implement the optional bounded taskstats collector before adding role
+Implement the optional bounded taskstats collector, reusing the normalized
+procfs evidence as the ordinary-user baseline, before adding role
 inference. Do not start Milestone 7 or add another M8 chain as part of v0.4.0;
 coincident PSI still does not establish a causal path.
 
@@ -527,6 +543,21 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-24, the v0.4 procfs-normalization slice passed deterministic parser
+and interval tests for leader RSS, missing/negative fields, fault and block-I/O
+counter regression, overflow, task churn, and PID/TID reuse. Recording
+redaction and schema-1 replay compatibility were also exercised. The complete
+local formatting, locked offline Clippy, and locked offline test gates passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
+
+The optional Linux acceptance tests remain skipped; this slice has no required
+controlled-host taskstats validation yet.
 
 On 2026-08-24, the v0.3.0 release preparation validated implicit root-hunt
 option parity and conflicts, typed watch process attribution across lifecycle,

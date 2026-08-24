@@ -1870,9 +1870,11 @@ pub(crate) mod tests {
                     cpu_ticks: 50,
                     cpu_fraction_of_one: 0.4,
                 }],
+                process_resource_evidence: Vec::new(),
                 collection_issues: ProcessCollectionIssues::default(),
                 scheduler_delay_candidates: Vec::new(),
                 schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+                task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
                 schedstat_capability: crate::cpu::SchedstatCapability::Unsupported,
             }),
             memory: None,
@@ -3185,6 +3187,7 @@ pub(crate) mod tests {
                     cpu_fraction_of_one: 0.3,
                 },
             ],
+            process_resource_evidence: Vec::new(),
             collection_issues: ProcessCollectionIssues::default(),
             scheduler_delay_candidates: vec![ProcessSchedulerDelayInterval {
                 key: ProcessKey {
@@ -3199,6 +3202,7 @@ pub(crate) mod tests {
                 timeslices: 1,
             }],
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+            task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
         let output = render_hunt(
@@ -3290,6 +3294,7 @@ pub(crate) mod tests {
                     cpu_fraction_of_one: 0.3,
                 },
             ],
+            process_resource_evidence: Vec::new(),
             collection_issues: ProcessCollectionIssues::default(),
             scheduler_delay_candidates: vec![ProcessSchedulerDelayInterval {
                 key: ProcessKey {
@@ -3304,6 +3309,7 @@ pub(crate) mod tests {
                 timeslices: 1,
             }],
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+            task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
         HuntObservation {

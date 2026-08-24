@@ -52,6 +52,18 @@ Examples:
 - I/O bytes/sec,
 - pressure percentage during the exact observation window.
 
+The current CPU/process interval also transports normalized procfs resource
+evidence per stable process identity: leader RSS and RSS growth in bytes,
+minor- and major-fault deltas, and a checked sum of stable-task block-I/O delay
+ticks. RSS is leader-only and is never summed across threads; as a gauge, a
+valid RSS decrease yields zero growth. Components can be unavailable
+independently when a kernel omits a trailing `stat` field, a negative RSS cannot
+be represented as bytes, a task changes identity, or a monotonic counter
+regresses or overflows. This is normalized observation data, not a
+finding, role, or causal claim. It is currently internal collector state: it is
+not emitted in hunt JSON or schema-1 recordings, and its persisted form remains
+pending schema 2.
+
 This distinction is essential for replay and testing.
 
 ## Identity
@@ -357,6 +369,10 @@ Current recording envelope:
 Durations are integer microseconds. Each resource is `observed` or
 `unavailable` with a typed error. Wall-clock `recorded_at_unix_ms` is metadata
 only.
+
+Schema-1 recordings deliberately omit v0.4 procfs resource evidence. The
+evidence remains internal and is not yet exposed in hunt JSON. Replay therefore
+treats it as unavailable until schema 2 defines its persisted form.
 
 Pre-1.0 recordings have no compatibility promise. Legacy recordings with
 `kind` `bottleneck.recording` are accepted on replay. Unknown `kind` or

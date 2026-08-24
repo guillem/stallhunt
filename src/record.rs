@@ -193,7 +193,7 @@ pub fn recording_from_observation(
         requested_duration_ms,
         observation: RecordedHunt {
             cpu_psi: Collected::from_result(observation.psi),
-            cpu: Collected::from_result(observation.cpu.clone()),
+            cpu: record_cpu(observation.cpu.clone()),
             memory: observation.memory.as_ref().map(record_memory),
             io: observation.io.as_ref().map(record_io),
             cgroup: observation.cgroup.as_ref().map(record_cgroup),
@@ -205,11 +205,28 @@ pub fn recording_from_observation(
     Ok(recording)
 }
 
+fn record_cpu(
+    mut cpu: Result<CpuProcessObservation, CpuError>,
+) -> Collected<CpuProcessObservation, CpuError> {
+    // Schema 1 recordings predate this raw evidence. Omit it until schema 2
+    // defines persisted replay semantics.
+    if let Ok(value) = &mut cpu {
+        strip_schema1_cpu(value);
+    }
+    Collected::from_result(cpu)
+}
+
 pub fn observation_from_recording(recording: &Recording) -> Result<HuntObservation, RecordError> {
     validate_header(recording)?;
+    let mut cpu = result_from_collected(&recording.observation.cpu);
+    if let Ok(value) = &mut cpu {
+        // Future fields injected into a schema-1 document have no schema-1
+        // meaning and must not leak into replay.
+        strip_schema1_cpu(value);
+    }
     Ok(HuntObservation {
         psi: result_from_collected(&recording.observation.cpu_psi),
-        cpu: result_from_collected(&recording.observation.cpu),
+        cpu,
         memory: recording
             .observation
             .memory
@@ -222,6 +239,15 @@ pub fn observation_from_recording(recording: &Recording) -> Result<HuntObservati
             .as_ref()
             .map(cgroup_from_recorded),
     })
+}
+
+fn strip_schema1_cpu(value: &mut CpuProcessObservation) {
+    value.process_resource_evidence.clear();
+    value.task_stat_collection_issues = Default::default();
+    value.collection_issues.resource_counter_regressed = 0;
+    value.collection_issues.task_block_io_counter_regressed = 0;
+    value.collection_issues.task_block_io_aggregate_overflow = 0;
+    value.collection_issues.resource_value_overflow = 0;
 }
 
 pub fn encode_recording(recording: &Recording) -> Result<String, RecordError> {
@@ -583,7 +609,7 @@ mod tests {
     use crate::cgroup::{CgroupFileState, CgroupPsiIntervalState};
     use crate::cpu::{
         HostCpuInterval, LoadAverageAvailability, LoadAverageRaw, ProcessCollectionIssues,
-        ProcessCpuInterval, ProcessKey, SchedstatCapability,
+        ProcessCpuInterval, ProcessKey, ProcessResourceInterval, SchedstatCapability,
     };
     use crate::io::{
         BlockDeviceKey, DiskstatsInterval, DiskstatsIntervalIssues, IoCapability,
@@ -648,9 +674,11 @@ mod tests {
                     cpu_ticks: 50,
                     cpu_fraction_of_one: 0.5,
                 }],
+                process_resource_evidence: Vec::new(),
                 collection_issues: ProcessCollectionIssues::default(),
                 scheduler_delay_candidates: Vec::new(),
                 schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+                task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
                 schedstat_capability: SchedstatCapability::Unsupported,
             }),
             memory: Some(MemoryHuntObservation {
@@ -886,7 +914,37 @@ mod tests {
 
     #[test]
     fn redaction_replaces_identifiers_without_changing_verdicts() {
-        let original = sample_observation();
+        let mut original = sample_observation();
+        original
+            .cpu
+            .as_mut()
+            .unwrap()
+            .process_resource_evidence
+            .push(ProcessResourceInterval {
+                key: ProcessKey {
+                    pid: 42,
+                    start_time_ticks: 7,
+                },
+                name: "secret-worker".into(),
+                leader_rss_bytes: Some(1),
+                rss_growth_bytes: Some(1),
+                minor_faults: Some(1),
+                major_faults: Some(1),
+                stable_task_count: 1,
+                block_io_delay_ticks: Some(1),
+            });
+        original
+            .cpu
+            .as_mut()
+            .unwrap()
+            .collection_issues
+            .resource_counter_regressed = 1;
+        original
+            .cpu
+            .as_mut()
+            .unwrap()
+            .task_stat_collection_issues
+            .tasks_read = 1;
         let recording =
             recording_from_observation(&original, 10_000, Redaction::Identifiers).expect("encode");
         let restored = observation_from_recording(&recording).expect("decode");
@@ -900,6 +958,65 @@ mod tests {
         assert_eq!(original_cpu.kind, restored_cpu.kind);
         assert_eq!(original_cpu.severity, restored_cpu.severity);
         assert_eq!(restored.cpu.as_ref().unwrap().processes[0].name, "pid-42");
+        assert!(
+            restored
+                .cpu
+                .as_ref()
+                .unwrap()
+                .process_resource_evidence
+                .is_empty()
+        );
+        assert_eq!(
+            restored
+                .cpu
+                .as_ref()
+                .unwrap()
+                .collection_issues
+                .resource_counter_regressed,
+            0
+        );
+        assert_eq!(
+            restored
+                .cpu
+                .as_ref()
+                .unwrap()
+                .task_stat_collection_issues
+                .tasks_read,
+            0
+        );
+        assert!(
+            !encode_recording(&recording)
+                .expect("json")
+                .contains("process_resource_evidence")
+        );
+        let encoded = encode_recording(&recording).expect("json");
+        assert!(!encoded.contains("task_stat_collection_issues"));
+        assert!(!encoded.contains("resource_counter_regressed"));
+        let mut injected = recording.clone();
+        if let Collected::Observed { value } = &mut injected.observation.cpu {
+            value
+                .process_resource_evidence
+                .push(ProcessResourceInterval {
+                    key: ProcessKey {
+                        pid: 99,
+                        start_time_ticks: 1,
+                    },
+                    name: "injected".into(),
+                    leader_rss_bytes: Some(1),
+                    rss_growth_bytes: Some(1),
+                    minor_faults: Some(1),
+                    major_faults: Some(1),
+                    stable_task_count: 1,
+                    block_io_delay_ticks: Some(1),
+                });
+            value.collection_issues.resource_counter_regressed = 1;
+            value.task_stat_collection_issues.tasks_read = 1;
+        }
+        let injected_restored = observation_from_recording(&injected).expect("strip schema 1");
+        let injected_cpu = injected_restored.cpu.unwrap();
+        assert!(injected_cpu.process_resource_evidence.is_empty());
+        assert_eq!(injected_cpu.collection_issues.resource_counter_regressed, 0);
+        assert_eq!(injected_cpu.task_stat_collection_issues.tasks_read, 0);
         assert_eq!(
             restored
                 .io

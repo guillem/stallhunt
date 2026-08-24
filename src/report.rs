@@ -658,6 +658,7 @@ mod tests {
                 cpu_ticks: 80,
                 cpu_fraction_of_one: 0.8,
             }],
+            process_resource_evidence: Vec::new(),
             collection_issues: ProcessCollectionIssues::default(),
             scheduler_delay_candidates: vec![ProcessSchedulerDelayInterval {
                 key: ProcessKey {
@@ -672,6 +673,7 @@ mod tests {
                 timeslices: 1,
             }],
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+            task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
         };
         HuntObservation {

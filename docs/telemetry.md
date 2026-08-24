@@ -142,7 +142,14 @@ retain only the lowest 4,096 PIDs with bounded heap storage, and read only
 `stat`. Missing entries after enumeration, permission-denied or unreadable
 reads, directory iteration errors, malformed entries, and hitting the cap are
 retained as collection qualifiers. Only matching `(pid, starttime)` pairs
-produce process CPU deltas; appearing, exiting, or reused PIDs do not.
+produce interval process evidence; appearing, exiting, or reused PIDs do not.
+The same existing bounded walk retains leader RSS, minor/major-fault counters,
+and delay-accounting block-I/O ticks from `stat`. Normalization reports end RSS
+and RSS growth in bytes using the local page size with checked conversion. RSS
+is a gauge: a valid decrease reports zero growth, while negative RSS and absent
+trailing fields are explicitly unavailable. Fault counters and task delay
+counters are monotonic evidence, so regressions are omitted rather than
+clamped.
 
 ## `/proc/<pid>/schedstat`
 
@@ -163,6 +170,13 @@ issues and cap truncation remain qualifiers. Tasks whose full lifetime occurs
 between snapshots remain unobservable. Direct task reads are authoritative.
 This is raw scheduler evidence, not a severity, victim, suspect, or causal
 conclusion.
+
+The same identity-bracketed task `stat` reads retain delay-accounting
+block-I/O ticks independently of schedstat availability. Only matching
+`(tid,starttime)` pairs contribute checked deltas to a process aggregate;
+new, exited, reused, unreadable, or regressing task counters do not. This sum
+can exceed the wall-clock interval for a multi-threaded process. RSS is never
+summed across tasks because every task reports the thread-group's RSS.
 
 Expected concepts include:
 
