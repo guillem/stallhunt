@@ -199,7 +199,8 @@ checkout-local temporary path, with direct/sync/fsync behavior and an
 eight-second coordinator bound. The test asserts a PSI-backed I/O-pressure
 finding while preserving the lack of victim, process-device, and causal claims.
 
-M4 has deterministic cgroup-v2 coverage for mountinfo and `0::` membership
+M4 has deterministic cgroup-v2 coverage for mountinfo (including equivalent
+duplicate aliases versus different-device/root ambiguity) and `0::` membership
 parsing, normalized-path validation, ancestor selection, controller/missing-file
 degradation, process movement and PID reuse across interval membership, scoped
 PSI rules, path-derived systemd candidates, capability completeness, endpoint
@@ -232,6 +233,28 @@ cover piped text, JSON, and the TUI's normal and expanded candidate evidence,
 including empty states and terminal-safe truncation. Executable CLI tests cover `watch --count 1` text
 and JSON on a 100 ms window, plus prompt second-SIGINT termination during an
 unlimited five-minute window. Live watch does not assert host contention.
+
+The v0.4 scoped-role matrix also covers direct and descendant membership,
+component-boundary rejection, independent host/cgroup ranking, five-candidate
+limits and stable keys, and membership-cap partial completeness. Cgroup watch
+signals obtain their exact two matching role lists from the selected
+path-plus-resource scope so stale lifecycle retention cannot cross resources.
+Presentation tests cover host/cgroup role rendering, exact scoped lifecycle
+matching, responsive 120×30 and 160×45 grids, compact 119×29/80×24 fallback,
+detail preference across resize, layout-derived Unicode-aware scrolling, and
+terminal-safe identifiers. Unit tests exercise the one-shot terminal
+restoration guard on explicit cleanup and panic unwinding. On Linux systems
+with util-linux `script`, run the reproducible real-PTY check against a built
+binary; it captures a bounded one-window TUI stream, checks alternate-screen
+enter/leave sequences, and compares `stty -g` before and after:
+
+```bash
+tools/check-tui-pty.sh --binary target/debug/stallhunt
+```
+
+It is deliberately opt-in because a PTY utility is not guaranteed in ordinary
+CI images. A passing local PTY check does not replace controlled-host taskstats
+evidence; EXP-0010 records that separate passed gate.
 
 M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus

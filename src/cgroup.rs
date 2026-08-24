@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::cpu::{ProcessKey, ProcessRaw, parse_process_stat, sanitized_process_name};
 
-pub const MAX_CGROUP_PROCESSES: usize = 256;
+pub const MAX_CGROUP_PROCESSES: usize = 512;
 pub const MAX_CGROUPS: usize = 512;
 pub const MAX_CGROUP_DEPTH: usize = 64;
 pub const MAX_CGROUP_PATH_BYTES: usize = 4_096;
@@ -23,6 +23,10 @@ const MAX_PROC_INPUT_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Cgroup2Mount {
+    /// Kernel device identity from mountinfo. It is internal interval identity,
+    /// not a stable recording field.
+    #[serde(skip)]
+    pub device: (u32, u32),
     /// Root of the cgroup hierarchy exposed by this mount, in cgroup-path
     /// notation (not a host filesystem path).
     pub root: String,
@@ -383,7 +387,7 @@ pub fn parse_cgroup2_mountinfo(input: &str) -> Result<Cgroup2Mount, CgroupError>
         let mut pre = left.split_ascii_whitespace();
         let _id = pre.next().ok_or(CgroupError::Malformed)?;
         let _parent = pre.next().ok_or(CgroupError::Malformed)?;
-        let _major_minor = pre.next().ok_or(CgroupError::Malformed)?;
+        let major_minor = pre.next().ok_or(CgroupError::Malformed)?;
         let root = decode_mountinfo_path(pre.next().ok_or(CgroupError::Malformed)?)?;
         let mount_point = decode_mountinfo_path(pre.next().ok_or(CgroupError::Malformed)?)?;
         let _options = pre.next().ok_or(CgroupError::Malformed)?;
@@ -394,16 +398,54 @@ pub fn parse_cgroup2_mountinfo(input: &str) -> Result<Cgroup2Mount, CgroupError>
         if post.next().is_none() || post.next().is_none() {
             return Err(CgroupError::Malformed);
         }
+        let device = parse_mount_device(major_minor)?;
         found.push(Cgroup2Mount {
+            device,
             root,
             mount_point: PathBuf::from(mount_point),
         });
     }
-    match found.len() {
-        0 => Err(CgroupError::Unsupported),
-        1 => Ok(found.remove(0)),
-        _ => Err(CgroupError::AmbiguousMount),
+    let Some(first) = found.first() else {
+        return Err(CgroupError::Unsupported);
+    };
+    if found
+        .iter()
+        .any(|mount| mount.device != first.device || mount.root != first.root)
+    {
+        return Err(CgroupError::AmbiguousMount);
     }
+    // A hierarchy may be exposed at multiple mount points in one namespace
+    // (for example by a host tuning service). Equal device and root identify
+    // aliases of the same cgroupfs view, so choose one deterministically while
+    // continuing to reject genuinely different hierarchies or namespace roots.
+    found.sort_by(|left, right| {
+        mount_preference(left)
+            .cmp(&mount_preference(right))
+            .then_with(|| left.mount_point.cmp(&right.mount_point))
+    });
+    Ok(found.remove(0))
+}
+
+fn parse_mount_device(value: &str) -> Result<(u32, u32), CgroupError> {
+    let (major, minor) = value.split_once(':').ok_or(CgroupError::Malformed)?;
+    if major.is_empty()
+        || minor.is_empty()
+        || !major.bytes().all(|byte| byte.is_ascii_digit())
+        || !minor.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(CgroupError::Malformed);
+    }
+    Ok((
+        major.parse().map_err(|_| CgroupError::Malformed)?,
+        minor.parse().map_err(|_| CgroupError::Malformed)?,
+    ))
+}
+
+fn mount_preference(mount: &Cgroup2Mount) -> (bool, usize) {
+    (
+        mount.mount_point != Path::new("/sys/fs/cgroup"),
+        mount.mount_point.components().count(),
+    )
 }
 
 /// Parse the unified record.  A cgroup-v1 record or multiple unified records
@@ -1325,6 +1367,7 @@ mod tests {
     }
     fn mount(name: &str) -> Cgroup2Mount {
         Cgroup2Mount {
+            device: (0, 0),
             root: "/".into(),
             mount_point: PathBuf::from(name),
         }
@@ -1383,13 +1426,53 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mount.root, "/my root");
+        assert_eq!(mount.device, (0, 26));
         assert_eq!(mount.mount_point, PathBuf::from("/sys/fs/cgroup"));
+        let duplicate = parse_cgroup2_mountinfo(
+            "2 0 0:30 / /run/bpftune/cgroupv2 rw - cgroup2 none rw\n\
+             1 0 0:30 / /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n",
+        )
+        .unwrap();
+        assert_eq!(duplicate.root, "/");
+        assert_eq!(duplicate.device, (0, 30));
+        assert_eq!(duplicate.mount_point, PathBuf::from("/sys/fs/cgroup"));
+        for input in [
+            "3 0 0:30 / /z/deep rw - cgroup2 none rw\n\
+             2 0 0:30 / /b rw - cgroup2 none rw\n\
+             1 0 0:30 / /a rw - cgroup2 none rw\n",
+            "1 0 0:30 / /a rw - cgroup2 none rw\n\
+             2 0 0:30 / /b rw - cgroup2 none rw\n\
+             3 0 0:30 / /z/deep rw - cgroup2 none rw\n",
+        ] {
+            assert_eq!(
+                parse_cgroup2_mountinfo(input).unwrap().mount_point,
+                PathBuf::from("/a")
+            );
+        }
         assert_eq!(
             parse_cgroup2_mountinfo(
                 "1 0 0:1 / /x rw - cgroup2 cgroup rw\n2 0 0:2 / /y rw - cgroup2 cgroup rw\n"
             ),
             Err(CgroupError::AmbiguousMount)
         );
+        assert_eq!(
+            parse_cgroup2_mountinfo(
+                "1 0 0:1 /a /x rw - cgroup2 cgroup rw\n2 0 0:1 /b /y rw - cgroup2 cgroup rw\n"
+            ),
+            Err(CgroupError::AmbiguousMount)
+        );
+        for device in [
+            "not-a-device",
+            "+1:2",
+            "1",
+            "1:2:3",
+            ":2",
+            "1:",
+            "4294967296:1",
+        ] {
+            let input = format!("1 0 {device} / /x rw - cgroup2 cgroup rw\n");
+            assert_eq!(parse_cgroup2_mountinfo(&input), Err(CgroupError::Malformed));
+        }
         assert!(parse_cgroup2_mountinfo("1 0 0:1 /../x /x rw - cgroup2 cgroup rw\n").is_err());
         assert!(parse_cgroup2_mountinfo("1 0 0:1 /bad\\999 /x rw - cgroup2 cgroup rw\n").is_err());
     }
@@ -1438,6 +1521,7 @@ mod tests {
     #[test]
     fn paths_collect_ancestors_and_bound_count() {
         let mount = Cgroup2Mount {
+            device: (0, 0),
             root: "/".into(),
             mount_point: "/x".into(),
         };
@@ -1454,6 +1538,7 @@ mod tests {
     #[test]
     fn interval_omits_regression_and_pid_move_is_not_matched() {
         let mount = Cgroup2Mount {
+            device: (0, 0),
             root: "/".into(),
             mount_point: "/x".into(),
         };
@@ -1534,6 +1619,16 @@ mod tests {
             cgroup_interval_from_snapshots(
                 snapshot(mount("/one"), vec![], None),
                 snapshot(mount("/two"), vec![], None),
+                Duration::from_secs(1)
+            ),
+            Err(CgroupError::MountChanged)
+        );
+        let mut changed_device = mount("/same");
+        changed_device.device = (1, 2);
+        assert_eq!(
+            cgroup_interval_from_snapshots(
+                snapshot(mount("/same"), vec![], None),
+                snapshot(changed_device, vec![], None),
                 Duration::from_secs(1)
             ),
             Err(CgroupError::MountChanged)
@@ -1717,6 +1812,20 @@ mod tests {
         assert!(leaves.iter().all(|leaf| result.contains(leaf)));
     }
     #[test]
+    fn pid_selection_keeps_exactly_the_lowest_512_members() {
+        let root = TempTree::new();
+        for pid in (1..=MAX_CGROUP_PROCESSES as u32 + 1).rev() {
+            fs::create_dir(root.0.join(pid.to_string())).unwrap();
+        }
+        fs::create_dir(root.0.join("not-a-pid")).unwrap();
+        let mut issues = CgroupCollectionIssues::default();
+        let selected = select_pids(&root.0, &mut issues);
+        assert_eq!(selected.len(), MAX_CGROUP_PROCESSES);
+        assert_eq!(selected.first(), Some(&1));
+        assert_eq!(selected.last(), Some(&(MAX_CGROUP_PROCESSES as u32)));
+        assert!(issues.process_limit_reached);
+    }
+    #[test]
     fn systemd_candidates_are_conservative() {
         assert_eq!(
             systemd_unit_candidate("/a/foo.service"),
@@ -1748,6 +1857,7 @@ mod tests {
         let snapshot = read_cgroup_snapshot_with_mount_at(
             &proc_root,
             Cgroup2Mount {
+                device: (0, 0),
                 root: "/".into(),
                 mount_point: cg_root,
             },

@@ -10,7 +10,8 @@ use crate::cgroup::{
     CgroupResource,
 };
 use crate::cpu::{
-    self, CpuProcessObservation, ProcessKey, ProcessSchedulerDelayInterval, SchedstatCapability,
+    self, CpuProcessObservation, ProcessKey, ProcessResourceInterval,
+    ProcessSchedulerDelayInterval, SchedstatCapability,
 };
 use crate::io::{BlockDeviceKey, DiskstatsObservation, IoCapability, ProcessIoObservation};
 use crate::memory::{MemoryContextCapability, MemoryContextObservation, VmstatCounter};
@@ -18,7 +19,8 @@ use crate::psi::{
     CpuPsiObservation, IoPsiFullInterval, IoPsiObservation, MemoryPsiFullInterval,
     MemoryPsiObservation,
 };
-use std::collections::BTreeMap;
+use crate::taskstats::{DelayAccountingState, TaskstatsCapability};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const MIN_DIAGNOSIS_WINDOW: Duration = Duration::from_secs(1);
 pub const CPU_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
@@ -114,6 +116,116 @@ pub enum Confidence {
     Low,
     Medium,
     High,
+}
+
+/// Scope-owned, bounded process attribution.  These are candidates, never a
+/// proof that one process caused another to stall.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "scope", rename_all = "snake_case")]
+pub enum ProcessScopeKind {
+    Host,
+    #[allow(dead_code)] // constructed by the following cgroup attribution slice
+    Cgroup {
+        path: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessRole {
+    CpuVictim,
+    CpuSuspect,
+    MemoryVictim,
+    MemorySuspect,
+    IoVictim,
+    IoSuspect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessCandidateAvailability {
+    Available,
+    UnavailableOrIncomplete,
+    NotAssessed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessRoleCompleteness {
+    Complete,
+    Partial,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProcessCandidateEvidence {
+    RunnableDelay {
+        runnable_wait_ns: u64,
+        runnable_delay_fraction: f64,
+        stable_task_count: u32,
+        taskstats_cpu_delay_ns: Option<u64>,
+    },
+    CpuConsumption {
+        cpu_fraction_of_one: f64,
+        cpu_ticks: u64,
+    },
+    TaskstatsCpuDelay {
+        cpu_delay_ns: u64,
+    },
+    MemoryDelay {
+        largest_component: &'static str,
+        largest_delay_ns: u64,
+        swapin_delay_ns: Option<u64>,
+        reclaim_delay_ns: Option<u64>,
+        thrashing_delay_ns: Option<u64>,
+        compaction_delay_ns: Option<u64>,
+        write_protect_copy_delay_ns: Option<u64>,
+    },
+    MajorFaults {
+        major_faults: u64,
+    },
+    RssGrowth {
+        rss_growth_bytes: u64,
+    },
+    BlockIoDelay {
+        block_io_delay_ns: Option<u64>,
+        procfs_block_io_delay_ticks: Option<u64>,
+    },
+    IoActivity {
+        read_bytes: Option<u64>,
+        write_bytes: Option<u64>,
+        cancelled_write_bytes: Option<u64>,
+        known_accounted_bytes: u128,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProcessCandidate {
+    pub role: ProcessRole,
+    pub key: ProcessKey,
+    pub name: String,
+    pub confidence: Confidence,
+    pub label: &'static str,
+    pub evidence: ProcessCandidateEvidence,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProcessRoleList {
+    pub role: ProcessRole,
+    pub availability: ProcessCandidateAvailability,
+    pub completeness: ProcessRoleCompleteness,
+    /// Lifecycle retention marks copied role lists stale explicitly; consumers
+    /// must not infer freshness from the resource row alone.
+    #[serde(default)]
+    pub stale: bool,
+    pub candidates: Vec<ProcessCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProcessScope {
+    pub scope: ProcessScopeKind,
+    pub roles: Vec<ProcessRoleList>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -903,7 +1015,7 @@ fn memory_qualifiers(
 const fn no_memory_attribution_qualifier() -> Qualifier {
     Qualifier {
         kind: "no_process_attribution",
-        message: "Memory evidence is host-wide; this slice does not identify affected or contributing processes.",
+        message: "Host-wide memory resource evidence alone does not identify affected or contributing processes; scoped role candidates require separate process evidence.",
     }
 }
 
@@ -1284,7 +1396,7 @@ fn io_qualifiers(
 const fn no_io_victim_attribution_qualifier() -> Qualifier {
     Qualifier {
         kind: "no_affected_workload_attribution",
-        message: "This host-wide I/O slice does not identify affected workloads or claim that any process is a victim.",
+        message: "I/O PSI alone does not identify affected workloads; scoped delay candidates require separate process evidence and do not map a process to a device or prove harm.",
     }
 }
 
@@ -1748,6 +1860,734 @@ pub fn analyze_cpu(
         }],
         qualifiers: vec![],
     }
+}
+
+/// Builds the six host role lists from normalized observations.  The resource
+/// analyzers remain the authority for whether PSI established pressure; this
+/// function only attributes an already-confirmed scope and never reads procfs.
+pub fn host_process_scope(
+    cpu: Option<&CpuProcessObservation>,
+    process_io: Option<&ProcessIoObservation>,
+    cpu_pressure: Option<Confidence>,
+    memory_pressure: Option<Confidence>,
+    io_pressure: Option<Confidence>,
+) -> ProcessScope {
+    let roles = vec![
+        cpu_victims(cpu, cpu_pressure, None),
+        cpu_suspects_role(cpu, cpu_pressure, None),
+        memory_victims(cpu, memory_pressure, None),
+        memory_suspects(cpu, memory_pressure, None),
+        io_victims(cpu, io_pressure, None),
+        io_suspects_role(process_io, io_pressure, None),
+    ];
+    ProcessScope {
+        scope: ProcessScopeKind::Host,
+        roles,
+    }
+}
+
+/// Build one scope for each cgroup with PSI-backed pressure. Candidate
+/// selection is performed against the complete stable membership set, rather
+/// than the presentation-only five-member summary on `CgroupFinding`.
+pub fn cgroup_process_scopes(
+    observation: Option<&CgroupObservation>,
+    cpu: Option<&CpuProcessObservation>,
+    process_io: Option<&ProcessIoObservation>,
+) -> Vec<ProcessScope> {
+    let Some(observation) = observation else {
+        return Vec::new();
+    };
+    let membership_complete = cgroup_membership_complete(observation);
+    observation
+        .groups
+        .iter()
+        .filter_map(|group| {
+            let findings = [
+                cgroup_finding(
+                    group,
+                    CgroupResourceKind::Cpu,
+                    &group.cpu_pressure,
+                    observation,
+                ),
+                cgroup_finding(
+                    group,
+                    CgroupResourceKind::Memory,
+                    &group.memory_pressure,
+                    observation,
+                ),
+                cgroup_finding(
+                    group,
+                    CgroupResourceKind::Io,
+                    &group.io_pressure,
+                    observation,
+                ),
+            ];
+            let pressure = |resource| {
+                findings
+                    .iter()
+                    .find(|finding| finding.resource == resource)
+                    .and_then(|finding| {
+                        (finding.kind == CgroupAssessmentKind::Pressure)
+                            .then_some(finding.resource_confidence)
+                    })
+            };
+            let keys = observation
+                .members
+                .iter()
+                .filter(|member| cgroup_contains_path(&group.path, &member.cgroup_path))
+                .map(|member| member.key)
+                .collect::<BTreeSet<_>>();
+            if pressure(CgroupResourceKind::Cpu).is_none()
+                && pressure(CgroupResourceKind::Memory).is_none()
+                && pressure(CgroupResourceKind::Io).is_none()
+            {
+                return None;
+            }
+            let mut roles = vec![
+                cpu_victims(cpu, pressure(CgroupResourceKind::Cpu), Some(&keys)),
+                cpu_suspects_role(cpu, pressure(CgroupResourceKind::Cpu), Some(&keys)),
+                memory_victims(cpu, pressure(CgroupResourceKind::Memory), Some(&keys)),
+                memory_suspects(cpu, pressure(CgroupResourceKind::Memory), Some(&keys)),
+                io_victims(cpu, pressure(CgroupResourceKind::Io), Some(&keys)),
+                io_suspects_role(process_io, pressure(CgroupResourceKind::Io), Some(&keys)),
+            ];
+            if !membership_complete {
+                mark_roles_partial(&mut roles);
+            }
+            Some(ProcessScope {
+                scope: ProcessScopeKind::Cgroup {
+                    path: group.path.clone(),
+                },
+                roles,
+            })
+        })
+        .collect()
+}
+
+fn cgroup_contains_path(scope: &str, member: &str) -> bool {
+    scope == "/"
+        || member == scope
+        || member
+            .strip_prefix(scope)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn cgroup_membership_complete(observation: &CgroupObservation) -> bool {
+    let issues = &observation.issues;
+    !issues.process_enumeration_failed
+        && issues.process_enumeration_errors == 0
+        && issues.process_disappeared == 0
+        && issues.process_identity_changed == 0
+        && issues.process_permission_denied == 0
+        && issues.process_malformed == 0
+        && !issues.process_limit_reached
+        && !issues.budget_exhausted
+        && issues.members_appeared == 0
+        && issues.members_exited == 0
+        && issues.members_reused == 0
+        && issues.members_moved == 0
+}
+
+fn mark_roles_partial(roles: &mut [ProcessRoleList]) {
+    for role in roles {
+        if role.completeness == ProcessRoleCompleteness::Complete {
+            role.availability = ProcessCandidateAvailability::UnavailableOrIncomplete;
+            role.completeness = ProcessRoleCompleteness::Partial;
+        }
+    }
+}
+
+fn in_scope(key: ProcessKey, allowed: Option<&BTreeSet<ProcessKey>>) -> bool {
+    allowed.is_none_or(|keys| keys.contains(&key))
+}
+
+fn unassessed(role: ProcessRole) -> ProcessRoleList {
+    ProcessRoleList {
+        role,
+        availability: ProcessCandidateAvailability::NotAssessed,
+        completeness: ProcessRoleCompleteness::Unavailable,
+        stale: false,
+        candidates: vec![],
+    }
+}
+
+fn unavailable(role: ProcessRole) -> ProcessRoleList {
+    ProcessRoleList {
+        role,
+        availability: ProcessCandidateAvailability::UnavailableOrIncomplete,
+        completeness: ProcessRoleCompleteness::Unavailable,
+        stale: false,
+        candidates: vec![],
+    }
+}
+
+fn role_list(
+    role: ProcessRole,
+    pressure: Option<Confidence>,
+    complete: bool,
+    candidates: Vec<ProcessCandidate>,
+) -> ProcessRoleList {
+    let Some(_) = pressure else {
+        return unassessed(role);
+    };
+    ProcessRoleList {
+        role,
+        availability: if complete {
+            ProcessCandidateAvailability::Available
+        } else {
+            ProcessCandidateAvailability::UnavailableOrIncomplete
+        },
+        completeness: if complete {
+            ProcessRoleCompleteness::Complete
+        } else {
+            ProcessRoleCompleteness::Partial
+        },
+        stale: false,
+        candidates,
+    }
+}
+
+fn candidate_confidence(resource: Confidence, direct: bool, fallback: bool) -> Confidence {
+    if fallback {
+        Confidence::Low
+    } else if direct {
+        resource
+    } else {
+        Confidence::Medium.min(resource)
+    }
+}
+
+fn cpu_victims(
+    cpu: Option<&CpuProcessObservation>,
+    pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
+) -> ProcessRoleList {
+    let Some(cpu) = cpu else {
+        return pressure.map_or_else(
+            || unassessed(ProcessRole::CpuVictim),
+            |_| unavailable(ProcessRole::CpuVictim),
+        );
+    };
+    let complete = cpu.schedstat_capability == SchedstatCapability::Available;
+    let taskstats: BTreeMap<_, _> = cpu.taskstats.iter().map(|item| (item.key, item)).collect();
+    let mut candidates: Vec<_> = cpu
+        .scheduler_delay_candidates
+        .iter()
+        .filter(|item| in_scope(item.key, allowed))
+        .filter(|item| item.runnable_wait_ns > 0)
+        .map(|item| {
+            let corroboration = taskstats
+                .get(&item.key)
+                .and_then(|stats| stats.cpu_delay_ns);
+            ProcessCandidate {
+                role: ProcessRole::CpuVictim,
+                key: item.key,
+                name: item.name.clone(),
+                confidence: candidate_confidence(pressure.unwrap_or(Confidence::Low), true, false),
+                label: "observed_runnable_delay_victim_candidate",
+                evidence: ProcessCandidateEvidence::RunnableDelay {
+                    runnable_wait_ns: item.runnable_wait_ns,
+                    runnable_delay_fraction: item.runnable_delay_fraction,
+                    stable_task_count: item.task_count,
+                    taskstats_cpu_delay_ns: corroboration,
+                },
+            }
+        })
+        .collect();
+    let direct_keys: std::collections::BTreeSet<_> =
+        candidates.iter().map(|candidate| candidate.key).collect();
+    if matches!(
+        cpu.taskstats_capability,
+        TaskstatsCapability::Available | TaskstatsCapability::Partial
+    ) {
+        candidates.extend(
+            cpu.taskstats
+                .iter()
+                .filter(|item| in_scope(item.key, allowed))
+                .filter_map(|item| {
+                    (!direct_keys.contains(&item.key)).then_some(())?;
+                    item.cpu_delay_ns
+                        .filter(|delay| *delay > 0)
+                        .map(|delay| ProcessCandidate {
+                            role: ProcessRole::CpuVictim,
+                            key: item.key,
+                            name: name_for_key(cpu, item.key),
+                            confidence: candidate_confidence(
+                                pressure.unwrap_or(Confidence::Low),
+                                true,
+                                false,
+                            ),
+                            label: "observed_taskstats_cpu_delay_victim_candidate",
+                            evidence: ProcessCandidateEvidence::TaskstatsCpuDelay {
+                                cpu_delay_ns: delay,
+                            },
+                        })
+                }),
+        );
+    }
+    candidates.sort_by(|a, b| {
+        cpu_schedstat_direct(&b.evidence)
+            .cmp(&cpu_schedstat_direct(&a.evidence))
+            .then_with(|| score_cpu_victim(&b.evidence).cmp(&score_cpu_victim(&a.evidence)))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    candidates.truncate(5);
+    role_list(
+        ProcessRole::CpuVictim,
+        pressure,
+        complete || taskstats_complete_for_cpu(cpu),
+        candidates,
+    )
+}
+fn cpu_schedstat_direct(evidence: &ProcessCandidateEvidence) -> bool {
+    matches!(evidence, ProcessCandidateEvidence::RunnableDelay { .. })
+}
+fn taskstats_complete_for_cpu(cpu: &CpuProcessObservation) -> bool {
+    matches!(cpu.taskstats_capability, TaskstatsCapability::Available)
+        && matches!(cpu.delay_accounting, DelayAccountingState::Enabled)
+        && process_window_complete(cpu)
+        && cpu
+            .taskstats
+            .iter()
+            .all(|item| item.field_support.cpu_delay)
+}
+
+fn score_cpu_victim(evidence: &ProcessCandidateEvidence) -> u64 {
+    match evidence {
+        ProcessCandidateEvidence::RunnableDelay {
+            runnable_wait_ns, ..
+        } => *runnable_wait_ns,
+        ProcessCandidateEvidence::TaskstatsCpuDelay { cpu_delay_ns } => *cpu_delay_ns,
+        _ => 0,
+    }
+}
+
+fn cpu_suspects_role(
+    cpu: Option<&CpuProcessObservation>,
+    pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
+) -> ProcessRoleList {
+    let Some(cpu) = cpu else {
+        return pressure.map_or_else(
+            || unassessed(ProcessRole::CpuSuspect),
+            |_| unavailable(ProcessRole::CpuSuspect),
+        );
+    };
+    let complete = !process_coverage_partial(cpu);
+    let mut candidates: Vec<_> = cpu
+        .processes
+        .iter()
+        .filter(|item| in_scope(item.key, allowed))
+        .filter(|item| item.cpu_fraction_of_one >= SUSPECT_MIN_FRACTION)
+        .map(|item| ProcessCandidate {
+            role: ProcessRole::CpuSuspect,
+            key: item.key,
+            name: item.name.clone(),
+            confidence: Confidence::Medium.min(pressure.unwrap_or(Confidence::Low)),
+            label: "same_window_cpu_consumer_suspect",
+            evidence: ProcessCandidateEvidence::CpuConsumption {
+                cpu_fraction_of_one: item.cpu_fraction_of_one,
+                cpu_ticks: item.cpu_ticks,
+            },
+        })
+        .collect();
+    candidates.sort_by(|a, b| match (&a.evidence, &b.evidence) {
+        (
+            ProcessCandidateEvidence::CpuConsumption {
+                cpu_fraction_of_one: left,
+                ..
+            },
+            ProcessCandidateEvidence::CpuConsumption {
+                cpu_fraction_of_one: right,
+                ..
+            },
+        ) => right.total_cmp(left).then_with(|| a.key.cmp(&b.key)),
+        _ => a.key.cmp(&b.key),
+    });
+    candidates.truncate(5);
+    role_list(ProcessRole::CpuSuspect, pressure, complete, candidates)
+}
+
+fn memory_victims(
+    cpu: Option<&CpuProcessObservation>,
+    pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
+) -> ProcessRoleList {
+    let Some(cpu) = cpu else {
+        return pressure.map_or_else(
+            || unassessed(ProcessRole::MemoryVictim),
+            |_| unavailable(ProcessRole::MemoryVictim),
+        );
+    };
+    if pressure.is_some()
+        && !matches!(
+            cpu.taskstats_capability,
+            TaskstatsCapability::Available | TaskstatsCapability::Partial
+        )
+        && cpu.process_resource_evidence.is_empty()
+    {
+        return unavailable(ProcessRole::MemoryVictim);
+    }
+    // A disabled or unknown delay-accounting state cannot prove a zero
+    // memory-delay interval. Positive taskstats counters remain valid direct
+    // evidence regardless of the state.
+    let direct_complete = taskstats_complete_for_memory(cpu);
+    let mut candidates = Vec::new();
+    for item in cpu
+        .taskstats
+        .iter()
+        .filter(|item| in_scope(item.key, allowed))
+    {
+        let components = [
+            ("swapin", item.swapin_delay_ns),
+            ("reclaim", item.reclaim_delay_ns),
+            ("thrashing", item.thrashing_delay_ns),
+            ("compaction", item.compaction_delay_ns),
+            ("write_protect_copy", item.write_protect_copy_delay_ns),
+        ];
+        if let Some((name, delay)) = components
+            .into_iter()
+            .filter_map(|(name, value)| value.map(|value| (name, value)))
+            .filter(|(_, value)| *value > 0)
+            .max_by_key(|(_, value)| *value)
+        {
+            candidates.push(ProcessCandidate {
+                role: ProcessRole::MemoryVictim,
+                key: item.key,
+                name: name_for_key(cpu, item.key),
+                confidence: candidate_confidence(pressure.unwrap_or(Confidence::Low), true, false),
+                label: "observed_taskstats_memory_delay_victim_candidate",
+                evidence: ProcessCandidateEvidence::MemoryDelay {
+                    largest_component: name,
+                    largest_delay_ns: delay,
+                    swapin_delay_ns: item.swapin_delay_ns,
+                    reclaim_delay_ns: item.reclaim_delay_ns,
+                    thrashing_delay_ns: item.thrashing_delay_ns,
+                    compaction_delay_ns: item.compaction_delay_ns,
+                    write_protect_copy_delay_ns: item.write_protect_copy_delay_ns,
+                },
+            });
+        }
+    }
+    let direct_keys: std::collections::BTreeSet<_> =
+        candidates.iter().map(|candidate| candidate.key).collect();
+    candidates.extend(
+        resource_evidence(cpu)
+            .filter(|item| in_scope(item.key, allowed))
+            .filter_map(|item| {
+                (!direct_keys.contains(&item.key)).then_some(())?;
+                item.major_faults
+                    .filter(|value| *value > 0)
+                    .map(|major_faults| ProcessCandidate {
+                        role: ProcessRole::MemoryVictim,
+                        key: item.key,
+                        name: item.name.clone(),
+                        confidence: Confidence::Low,
+                        label: "major_fault_memory_victim_candidate",
+                        evidence: ProcessCandidateEvidence::MajorFaults { major_faults },
+                    })
+            }),
+    );
+    candidates.sort_by(|a, b| {
+        memory_direct(&b.evidence)
+            .cmp(&memory_direct(&a.evidence))
+            .then_with(|| score_memory(&b.evidence).cmp(&score_memory(&a.evidence)))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    candidates.truncate(5);
+    role_list(
+        ProcessRole::MemoryVictim,
+        pressure,
+        direct_complete,
+        candidates,
+    )
+}
+fn memory_direct(e: &ProcessCandidateEvidence) -> bool {
+    matches!(e, ProcessCandidateEvidence::MemoryDelay { .. })
+}
+fn taskstats_complete_for_memory(cpu: &CpuProcessObservation) -> bool {
+    matches!(cpu.taskstats_capability, TaskstatsCapability::Available)
+        && matches!(cpu.delay_accounting, DelayAccountingState::Enabled)
+        && process_window_complete(cpu)
+        && cpu.taskstats.iter().all(|item| {
+            item.field_support.swapin_delay
+                && item.field_support.reclaim_delay
+                && item.field_support.thrashing_delay
+                && item.field_support.compaction_delay
+                && item.field_support.write_protect_copy_delay
+        })
+}
+fn score_memory(e: &ProcessCandidateEvidence) -> u64 {
+    match e {
+        ProcessCandidateEvidence::MemoryDelay {
+            largest_delay_ns, ..
+        } => *largest_delay_ns,
+        ProcessCandidateEvidence::MajorFaults { major_faults } => *major_faults,
+        _ => 0,
+    }
+}
+
+fn memory_suspects(
+    cpu: Option<&CpuProcessObservation>,
+    pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
+) -> ProcessRoleList {
+    let Some(cpu) = cpu else {
+        return pressure.map_or_else(
+            || unassessed(ProcessRole::MemorySuspect),
+            |_| unavailable(ProcessRole::MemorySuspect),
+        );
+    };
+    if pressure.is_some()
+        && matches!(
+            cpu::process_resource_capability(cpu),
+            cpu::ProcessResourceCapability::Unavailable
+                | cpu::ProcessResourceCapability::NotRecorded
+        )
+    {
+        return unavailable(ProcessRole::MemorySuspect);
+    }
+    let complete = resource_field_complete(cpu, |item| item.rss_growth_bytes.is_some())
+        && cpu.collection_issues.resource_value_overflow == 0;
+    let mut candidates: Vec<_> = resource_evidence(cpu)
+        .filter(|item| in_scope(item.key, allowed))
+        .filter_map(|item| {
+            item.rss_growth_bytes
+                .filter(|value| *value > 0)
+                .map(|rss_growth_bytes| ProcessCandidate {
+                    role: ProcessRole::MemorySuspect,
+                    key: item.key,
+                    name: item.name.clone(),
+                    confidence: Confidence::Low,
+                    label: "rss_growth_memory_suspect",
+                    evidence: ProcessCandidateEvidence::RssGrowth { rss_growth_bytes },
+                })
+        })
+        .collect();
+    candidates.sort_by(|a, b| {
+        score_rss(&b.evidence)
+            .cmp(&score_rss(&a.evidence))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    candidates.truncate(5);
+    role_list(ProcessRole::MemorySuspect, pressure, complete, candidates)
+}
+fn score_rss(e: &ProcessCandidateEvidence) -> u64 {
+    match e {
+        ProcessCandidateEvidence::RssGrowth { rss_growth_bytes } => *rss_growth_bytes,
+        _ => 0,
+    }
+}
+
+fn io_victims(
+    cpu: Option<&CpuProcessObservation>,
+    pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
+) -> ProcessRoleList {
+    let Some(cpu) = cpu else {
+        return pressure.map_or_else(
+            || unassessed(ProcessRole::IoVictim),
+            |_| unavailable(ProcessRole::IoVictim),
+        );
+    };
+    if pressure.is_some()
+        && !matches!(
+            cpu.taskstats_capability,
+            TaskstatsCapability::Available | TaskstatsCapability::Partial
+        )
+        && cpu.process_resource_evidence.is_empty()
+    {
+        return unavailable(ProcessRole::IoVictim);
+    }
+    let mut candidates = Vec::new();
+    let taskstats: BTreeMap<_, _> = cpu.taskstats.iter().map(|item| (item.key, item)).collect();
+    let mut keys: std::collections::BTreeSet<_> = cpu
+        .process_resource_evidence
+        .iter()
+        .filter(|item| in_scope(item.key, allowed))
+        .map(|item| item.key)
+        .collect();
+    keys.extend(
+        taskstats
+            .keys()
+            .copied()
+            .filter(|key| in_scope(*key, allowed)),
+    );
+    for key in keys {
+        let direct = taskstats
+            .get(&key)
+            .and_then(|stats| stats.block_io_delay_ns);
+        let fallback = cpu
+            .process_resource_evidence
+            .iter()
+            .find(|item| item.key == key)
+            .and_then(|item| item.block_io_delay_ticks);
+        if direct.is_some_and(|value| value > 0) || fallback.is_some_and(|value| value > 0) {
+            candidates.push(ProcessCandidate {
+                role: ProcessRole::IoVictim,
+                key,
+                name: name_for_key(cpu, key),
+                confidence: if direct.is_some_and(|value| value > 0) {
+                    candidate_confidence(pressure.unwrap_or(Confidence::Low), true, false)
+                } else {
+                    Confidence::Medium.min(pressure.unwrap_or(Confidence::Low))
+                },
+                label: if direct.is_some_and(|value| value > 0) {
+                    "observed_taskstats_block_io_delay_victim_candidate"
+                } else {
+                    "observed_procfs_block_io_delay_victim_candidate"
+                },
+                evidence: ProcessCandidateEvidence::BlockIoDelay {
+                    block_io_delay_ns: direct,
+                    procfs_block_io_delay_ticks: fallback,
+                },
+            });
+        }
+    }
+    candidates.sort_by(|a, b| {
+        io_direct(&b.evidence)
+            .cmp(&io_direct(&a.evidence))
+            .then_with(|| {
+                score_io_victim(&b.evidence)
+                    .cmp(&score_io_victim(&a.evidence))
+                    .then_with(|| a.key.cmp(&b.key))
+            })
+    });
+    candidates.truncate(5);
+    role_list(
+        ProcessRole::IoVictim,
+        pressure,
+        taskstats_complete_for_io(cpu) || procfs_block_io_complete(cpu),
+        candidates,
+    )
+}
+fn taskstats_complete_for_io(cpu: &CpuProcessObservation) -> bool {
+    matches!(cpu.taskstats_capability, TaskstatsCapability::Available)
+        && matches!(cpu.delay_accounting, DelayAccountingState::Enabled)
+        && process_window_complete(cpu)
+        && cpu
+            .taskstats
+            .iter()
+            .all(|item| item.field_support.block_io_delay)
+}
+fn procfs_block_io_complete(cpu: &CpuProcessObservation) -> bool {
+    matches!(
+        cpu::task_stat_capability(cpu),
+        cpu::TaskStatCapability::Available
+    ) && matches!(cpu.delay_accounting, DelayAccountingState::Enabled)
+        && resource_field_complete(cpu, |item| item.block_io_delay_ticks.is_some())
+}
+fn io_direct(e: &ProcessCandidateEvidence) -> bool {
+    matches!(e, ProcessCandidateEvidence::BlockIoDelay { block_io_delay_ns: Some(value), .. } if *value > 0)
+}
+fn score_io_victim(e: &ProcessCandidateEvidence) -> u64 {
+    match e {
+        ProcessCandidateEvidence::BlockIoDelay {
+            block_io_delay_ns,
+            procfs_block_io_delay_ticks,
+        } => block_io_delay_ns
+            .filter(|value| *value > 0)
+            .or_else(|| procfs_block_io_delay_ticks.filter(|value| *value > 0))
+            .unwrap_or(0),
+        _ => 0,
+    }
+}
+
+fn io_suspects_role(
+    process_io: Option<&ProcessIoObservation>,
+    pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
+) -> ProcessRoleList {
+    let Some(process_io) = process_io else {
+        return pressure.map_or_else(
+            || unassessed(ProcessRole::IoSuspect),
+            |_| unavailable(ProcessRole::IoSuspect),
+        );
+    };
+    let complete = process_io.capability == IoCapability::Available;
+    let mut candidates: Vec<_> = process_io
+        .processes
+        .iter()
+        .filter(|item| in_scope(item.key, allowed))
+        .filter_map(|item| {
+            let known = u128::from(item.read_bytes.unwrap_or(0))
+                + u128::from(item.write_bytes.unwrap_or(0));
+            (known > 0).then(|| ProcessCandidate {
+                role: ProcessRole::IoSuspect,
+                key: item.key,
+                name: item.name.clone(),
+                confidence: Confidence::Medium.min(pressure.unwrap_or(Confidence::Low)),
+                label: "same_window_process_io_activity_suspect",
+                evidence: ProcessCandidateEvidence::IoActivity {
+                    read_bytes: item.read_bytes,
+                    write_bytes: item.write_bytes,
+                    cancelled_write_bytes: item.cancelled_write_bytes,
+                    known_accounted_bytes: known,
+                },
+            })
+        })
+        .collect();
+    candidates.sort_by(|a, b| {
+        score_io_activity(&b.evidence)
+            .cmp(&score_io_activity(&a.evidence))
+            .then_with(|| a.key.cmp(&b.key))
+    });
+    candidates.truncate(5);
+    role_list(ProcessRole::IoSuspect, pressure, complete, candidates)
+}
+fn resource_field_complete(
+    cpu: &CpuProcessObservation,
+    supported: impl Fn(&ProcessResourceInterval) -> bool,
+) -> bool {
+    !cpu.process_resource_evidence.is_empty()
+        && process_window_complete(cpu)
+        && cpu.process_resource_evidence.iter().all(supported)
+}
+fn process_window_complete(cpu: &CpuProcessObservation) -> bool {
+    let issues = &cpu.collection_issues;
+    !cpu.process_resource_evidence.is_empty()
+        && !issues.enumeration_failed
+        && issues.enumeration_errors == 0
+        && issues.disappeared == 0
+        && issues.permission_denied == 0
+        && issues.unreadable == 0
+        && issues.malformed == 0
+        && issues.appeared == 0
+        && issues.exited == 0
+        && !issues.limit_reached
+}
+fn score_io_activity(e: &ProcessCandidateEvidence) -> u128 {
+    match e {
+        ProcessCandidateEvidence::IoActivity {
+            known_accounted_bytes,
+            ..
+        } => *known_accounted_bytes,
+        _ => 0,
+    }
+}
+fn resource_evidence(
+    cpu: &CpuProcessObservation,
+) -> impl Iterator<Item = &ProcessResourceInterval> {
+    cpu.process_resource_evidence.iter()
+}
+fn name_for_key(cpu: &CpuProcessObservation, key: ProcessKey) -> String {
+    cpu.processes
+        .iter()
+        .find(|item| item.key == key)
+        .map(|item| item.name.clone())
+        .or_else(|| {
+            cpu.process_resource_evidence
+                .iter()
+                .find(|item| item.key == key)
+                .map(|item| item.name.clone())
+        })
+        .or_else(|| {
+            cpu.scheduler_delay_candidates
+                .iter()
+                .find(|item| item.key == key)
+                .map(|item| item.name.clone())
+        })
+        .unwrap_or_else(|| format!("pid-{}", key.pid))
 }
 
 fn evidence(psi: &CpuPsiObservation, cpu: Option<&CpuProcessObservation>) -> CpuEvidence {
@@ -2618,12 +3458,697 @@ mod tests {
             load: None,
             load_availability: LoadAverageAvailability::Unreadable,
             processes,
+            process_resource_evidence: Vec::new(),
             collection_issues: ProcessCollectionIssues::default(),
             scheduler_delay_candidates: delays,
             schedstat_collection_issues: SchedstatCollectionIssues::default(),
+            task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
             schedstat_capability: SchedstatCapability::Available,
+            taskstats: Vec::new(),
+            taskstats_collection_issues: Default::default(),
+            taskstats_capability: Default::default(),
+            delay_accounting: Default::default(),
         }
     }
+    fn key(pid: u32) -> ProcessKey {
+        ProcessKey {
+            pid,
+            start_time_ticks: 1,
+        }
+    }
+    fn resource(
+        key: ProcessKey,
+        rss: Option<u64>,
+        major: Option<u64>,
+        block: Option<u64>,
+    ) -> ProcessResourceInterval {
+        ProcessResourceInterval {
+            key,
+            name: format!("p{}", key.pid),
+            leader_rss_bytes: Some(1),
+            rss_growth_bytes: rss,
+            minor_faults: Some(0),
+            major_faults: major,
+            stable_task_count: 1,
+            block_io_delay_ticks: block,
+        }
+    }
+
+    #[test]
+    fn cgroup_roles_use_full_stable_descendant_membership_and_keep_host_rankings_independent() {
+        let mut cgroup = cgroup_observation(
+            Some(200_000),
+            Duration::from_secs(1),
+            CgroupPsiIntervalState::Available,
+        );
+        cgroup.groups[0].path = "/workload".into();
+        cgroup.members = vec![
+            crate::cgroup::CgroupProcessMember {
+                key: key(1),
+                name: "outside".into(),
+                cgroup_path: "/other".into(),
+            },
+            crate::cgroup::CgroupProcessMember {
+                key: key(2),
+                name: "direct".into(),
+                cgroup_path: "/workload".into(),
+            },
+            crate::cgroup::CgroupProcessMember {
+                key: key(3),
+                name: "child".into(),
+                cgroup_path: "/workload/child".into(),
+            },
+            crate::cgroup::CgroupProcessMember {
+                key: key(4),
+                name: "prefix".into(),
+                cgroup_path: "/workload-other".into(),
+            },
+            crate::cgroup::CgroupProcessMember {
+                key: key(6),
+                name: "outside-host-top-five".into(),
+                cgroup_path: "/workload".into(),
+            },
+        ];
+        let cpu = cpu(
+            vec![
+                ProcessCpuInterval {
+                    key: key(1),
+                    name: "outside".into(),
+                    state: 'R',
+                    cpu_ticks: 90,
+                    cpu_fraction_of_one: 0.9,
+                },
+                ProcessCpuInterval {
+                    key: key(2),
+                    name: "direct".into(),
+                    state: 'R',
+                    cpu_ticks: 30,
+                    cpu_fraction_of_one: 0.3,
+                },
+                ProcessCpuInterval {
+                    key: key(3),
+                    name: "child".into(),
+                    state: 'R',
+                    cpu_ticks: 40,
+                    cpu_fraction_of_one: 0.4,
+                },
+                ProcessCpuInterval {
+                    key: key(4),
+                    name: "prefix".into(),
+                    state: 'R',
+                    cpu_ticks: 80,
+                    cpu_fraction_of_one: 0.8,
+                },
+                ProcessCpuInterval {
+                    key: key(5),
+                    name: "host-five".into(),
+                    state: 'R',
+                    cpu_ticks: 70,
+                    cpu_fraction_of_one: 0.7,
+                },
+                ProcessCpuInterval {
+                    key: key(6),
+                    name: "outside-host-top-five".into(),
+                    state: 'R',
+                    cpu_ticks: 30,
+                    cpu_fraction_of_one: 0.3,
+                },
+            ],
+            vec![],
+        );
+        let host = host_process_scope(Some(&cpu), None, Some(Confidence::Medium), None, None);
+        let scopes = cgroup_process_scopes(Some(&cgroup), Some(&cpu), None);
+        assert_eq!(scopes.len(), 1);
+        let ProcessScopeKind::Cgroup { path } = &scopes[0].scope else {
+            panic!("expected cgroup scope")
+        };
+        assert_eq!(path, "/workload");
+        let suspects = scopes[0]
+            .roles
+            .iter()
+            .find(|role| role.role == ProcessRole::CpuSuspect)
+            .unwrap();
+        assert_eq!(
+            suspects
+                .candidates
+                .iter()
+                .map(|candidate| candidate.key.pid)
+                .collect::<Vec<_>>(),
+            vec![3, 2, 6]
+        );
+        assert!(
+            host.roles
+                .iter()
+                .find(|role| role.role == ProcessRole::CpuSuspect)
+                .unwrap()
+                .candidates
+                .iter()
+                .any(|candidate| candidate.key == key(1))
+        );
+        assert!(
+            host.roles
+                .iter()
+                .find(|role| role.role == ProcessRole::CpuSuspect)
+                .unwrap()
+                .candidates
+                .iter()
+                .all(|candidate| candidate.key != key(6))
+        );
+        assert!(
+            scopes[0]
+                .roles
+                .iter()
+                .filter(|role| role.role != ProcessRole::CpuVictim
+                    && role.role != ProcessRole::CpuSuspect)
+                .all(|role| role.availability == ProcessCandidateAvailability::NotAssessed)
+        );
+
+        cgroup.issues.process_limit_reached = true;
+        let partial = cgroup_process_scopes(Some(&cgroup), Some(&cpu), None);
+        assert_eq!(
+            partial[0]
+                .roles
+                .iter()
+                .find(|role| role.role == ProcessRole::CpuSuspect)
+                .unwrap()
+                .completeness,
+            ProcessRoleCompleteness::Partial
+        );
+        let unavailable = cgroup_process_scopes(Some(&cgroup), None, None);
+        let victim = unavailable[0]
+            .roles
+            .iter()
+            .find(|role| role.role == ProcessRole::CpuVictim)
+            .unwrap();
+        assert_eq!(victim.completeness, ProcessRoleCompleteness::Unavailable);
+        assert_eq!(
+            victim.availability,
+            ProcessCandidateAvailability::UnavailableOrIncomplete
+        );
+
+        cgroup.issues = CgroupCollectionIssues::default();
+        let child = cgroup.groups[0].clone();
+        cgroup.groups[0].path = "/".into();
+        cgroup.groups.push(child);
+        let overlapping = cgroup_process_scopes(Some(&cgroup), Some(&cpu), None);
+        assert_eq!(overlapping.len(), 2);
+        for scope in &overlapping {
+            let suspects = scope
+                .roles
+                .iter()
+                .find(|role| role.role == ProcessRole::CpuSuspect)
+                .unwrap();
+            assert!(
+                suspects
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.key == key(2))
+            );
+        }
+    }
+    fn memory_suspect_completeness(
+        mut observation: CpuProcessObservation,
+    ) -> ProcessRoleCompleteness {
+        observation.process_resource_evidence = vec![resource(key(1), Some(0), Some(0), Some(0))];
+        host_process_scope(Some(&observation), None, None, Some(Confidence::Low), None)
+            .roles
+            .into_iter()
+            .find(|role| role.role == ProcessRole::MemorySuspect)
+            .unwrap()
+            .completeness
+    }
+
+    #[test]
+    fn cgroup_scope_builds_all_six_roles_with_shared_cap_and_tie_rules() {
+        let elapsed = Duration::from_secs(10);
+        let mut cgroup =
+            cgroup_observation(Some(2_000_000), elapsed, CgroupPsiIntervalState::Available);
+        cgroup.groups[0].memory_pressure =
+            cgroup_psi(Some(2_000_000), elapsed, CgroupPsiIntervalState::Available);
+        cgroup.groups[0].io_pressure =
+            cgroup_psi(Some(2_000_000), elapsed, CgroupPsiIntervalState::Available);
+        cgroup.members = (1..=6)
+            .map(|pid| crate::cgroup::CgroupProcessMember {
+                key: key(pid),
+                name: format!("p{pid}"),
+                cgroup_path: "/demo.service".into(),
+            })
+            .collect();
+        let mut cpu = cpu(
+            (1..=6)
+                .map(|pid| ProcessCpuInterval {
+                    key: key(pid),
+                    name: format!("p{pid}"),
+                    state: 'R',
+                    cpu_ticks: 25,
+                    cpu_fraction_of_one: 0.25,
+                })
+                .collect(),
+            vec![ProcessSchedulerDelayInterval {
+                key: key(1),
+                name: "p1".into(),
+                task_count: 1,
+                running_ns: 0,
+                runnable_wait_ns: 10,
+                timeslices: 1,
+                runnable_delay_fraction: 0.0,
+            }],
+        );
+        cpu.process_resource_evidence = (1..=6)
+            .map(|pid| resource(key(pid), Some(1), Some(1), Some(1)))
+            .collect();
+        cpu.taskstats_capability = TaskstatsCapability::Available;
+        cpu.delay_accounting = DelayAccountingState::Enabled;
+        cpu.taskstats = vec![crate::taskstats::TaskstatsInterval {
+            key: key(1),
+            min_uapi_version: 13,
+            field_support: crate::taskstats::TaskstatsFieldSupport {
+                cpu_delay: true,
+                block_io_delay: true,
+                swapin_delay: true,
+                reclaim_delay: true,
+                thrashing_delay: true,
+                compaction_delay: true,
+                write_protect_copy_delay: true,
+            },
+            cpu_delay_ns: Some(1),
+            block_io_delay_ns: Some(1),
+            swapin_delay_ns: Some(1),
+            reclaim_delay_ns: None,
+            thrashing_delay_ns: None,
+            compaction_delay_ns: None,
+            write_protect_copy_delay_ns: None,
+        }];
+        let process_io = ProcessIoObservation {
+            elapsed,
+            capability: IoCapability::Available,
+            processes: vec![ProcessIoInterval {
+                key: key(1),
+                name: "p1".into(),
+                read_bytes: Some(1),
+                write_bytes: None,
+                cancelled_write_bytes: None,
+                rchar: None,
+                wchar: None,
+            }],
+            issues: ProcessIoCollectionIssues::default(),
+            regressed: vec![],
+        };
+        let scope = cgroup_process_scopes(Some(&cgroup), Some(&cpu), Some(&process_io))
+            .pop()
+            .unwrap();
+        for role in [
+            ProcessRole::CpuVictim,
+            ProcessRole::CpuSuspect,
+            ProcessRole::MemoryVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+            ProcessRole::IoSuspect,
+        ] {
+            let list = scope.roles.iter().find(|list| list.role == role).unwrap();
+            assert!(!list.candidates.is_empty(), "{role:?}");
+        }
+        let suspects = scope
+            .roles
+            .iter()
+            .find(|list| list.role == ProcessRole::MemorySuspect)
+            .unwrap();
+        assert_eq!(suspects.candidates.len(), 5);
+        assert_eq!(
+            suspects
+                .candidates
+                .iter()
+                .map(|candidate| candidate.key.pid)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
+    }
+    macro_rules! partial_window_case {
+        ($name:ident, $mutate:expr) => {
+            #[test]
+            fn $name() {
+                let mut observation = cpu(vec![], vec![]);
+                $mutate(&mut observation);
+                assert_eq!(
+                    memory_suspect_completeness(observation),
+                    ProcessRoleCompleteness::Partial
+                );
+            }
+        };
+    }
+    partial_window_case!(
+        rss_enumeration_error_is_partial,
+        |cpu: &mut CpuProcessObservation| cpu.collection_issues.enumeration_errors = 1
+    );
+    partial_window_case!(
+        rss_disappearance_is_partial,
+        |cpu: &mut CpuProcessObservation| cpu.collection_issues.disappeared = 1
+    );
+    partial_window_case!(
+        rss_permission_is_partial,
+        |cpu: &mut CpuProcessObservation| cpu.collection_issues.permission_denied = 1
+    );
+    partial_window_case!(
+        rss_unreadable_is_partial,
+        |cpu: &mut CpuProcessObservation| cpu.collection_issues.unreadable = 1
+    );
+    partial_window_case!(
+        rss_malformed_is_partial,
+        |cpu: &mut CpuProcessObservation| cpu.collection_issues.malformed = 1
+    );
+    partial_window_case!(
+        rss_appeared_is_partial,
+        |cpu: &mut CpuProcessObservation| cpu.collection_issues.appeared = 1
+    );
+    partial_window_case!(rss_exited_is_partial, |cpu: &mut CpuProcessObservation| {
+        cpu.collection_issues.exited = 1
+    });
+    #[test]
+    fn fault_regression_does_not_weaken_rss_growth_or_taskstats_roles() {
+        let process = key(1);
+        let mut observation = cpu(vec![], vec![]);
+        observation.schedstat_capability = SchedstatCapability::Unsupported;
+        observation.process_resource_evidence = vec![resource(process, Some(1), None, Some(0))];
+        observation.collection_issues.resource_counter_regressed = 1;
+        observation.taskstats_capability = TaskstatsCapability::Available;
+        observation.delay_accounting = DelayAccountingState::Enabled;
+        observation.taskstats = vec![crate::taskstats::TaskstatsInterval {
+            key: process,
+            min_uapi_version: 13,
+            field_support: crate::taskstats::TaskstatsFieldSupport {
+                cpu_delay: true,
+                block_io_delay: true,
+                swapin_delay: true,
+                reclaim_delay: true,
+                thrashing_delay: true,
+                compaction_delay: true,
+                write_protect_copy_delay: true,
+            },
+            cpu_delay_ns: Some(0),
+            block_io_delay_ns: Some(0),
+            swapin_delay_ns: Some(0),
+            reclaim_delay_ns: Some(0),
+            thrashing_delay_ns: Some(0),
+            compaction_delay_ns: Some(0),
+            write_protect_copy_delay_ns: Some(0),
+        }];
+        let scope = host_process_scope(
+            Some(&observation),
+            None,
+            Some(Confidence::High),
+            Some(Confidence::High),
+            Some(Confidence::High),
+        );
+        for role in [
+            ProcessRole::CpuVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+        ] {
+            assert_eq!(
+                scope
+                    .roles
+                    .iter()
+                    .find(|list| list.role == role)
+                    .unwrap()
+                    .completeness,
+                ProcessRoleCompleteness::Complete,
+                "unrelated fault regression weakened {role:?}"
+            );
+        }
+    }
+    partial_window_case!(
+        rss_overflow_is_partial,
+        |cpu: &mut CpuProcessObservation| cpu.collection_issues.resource_value_overflow = 1
+    );
+    #[test]
+    fn rss_cap_is_partial() {
+        let mut observation = cpu(vec![], vec![]);
+        observation.collection_issues.limit_reached = true;
+        assert_eq!(
+            memory_suspect_completeness(observation),
+            ProcessRoleCompleteness::Partial
+        );
+    }
+    #[test]
+    fn scoped_roles_keep_positive_partial_taskstats_and_direct_cpu_first() {
+        let first = key(1);
+        let second = key(2);
+        let mut observation = cpu(
+            vec![
+                ProcessCpuInterval {
+                    key: first,
+                    name: "one".into(),
+                    state: 'R',
+                    cpu_ticks: 25,
+                    cpu_fraction_of_one: 0.25,
+                },
+                ProcessCpuInterval {
+                    key: second,
+                    name: "two".into(),
+                    state: 'R',
+                    cpu_ticks: 24,
+                    cpu_fraction_of_one: 0.24,
+                },
+            ],
+            vec![ProcessSchedulerDelayInterval {
+                key: second,
+                name: "two".into(),
+                task_count: 1,
+                running_ns: 0,
+                runnable_wait_ns: 1,
+                runnable_delay_fraction: 0.0,
+                timeslices: 1,
+            }],
+        );
+        observation.process_resource_evidence = vec![
+            resource(first, Some(2), Some(3), Some(4)),
+            resource(second, Some(0), Some(0), Some(0)),
+        ];
+        observation.taskstats_capability = TaskstatsCapability::Partial;
+        observation.delay_accounting = DelayAccountingState::Unknown;
+        observation
+            .taskstats
+            .push(crate::taskstats::TaskstatsInterval {
+                key: first,
+                min_uapi_version: 13,
+                field_support: crate::taskstats::TaskstatsFieldSupport {
+                    cpu_delay: true,
+                    block_io_delay: true,
+                    swapin_delay: true,
+                    reclaim_delay: true,
+                    thrashing_delay: true,
+                    compaction_delay: true,
+                    write_protect_copy_delay: true,
+                },
+                cpu_delay_ns: Some(100),
+                block_io_delay_ns: Some(100),
+                swapin_delay_ns: Some(99),
+                reclaim_delay_ns: None,
+                thrashing_delay_ns: None,
+                compaction_delay_ns: None,
+                write_protect_copy_delay_ns: None,
+            });
+        let scope = host_process_scope(
+            Some(&observation),
+            None,
+            Some(Confidence::High),
+            Some(Confidence::High),
+            Some(Confidence::High),
+        );
+        let role = |role| scope.roles.iter().find(|list| list.role == role).unwrap();
+        assert_eq!(
+            role(ProcessRole::CpuVictim).candidates[0].key,
+            second,
+            "schedstat ranks before taskstats fallback"
+        );
+        assert_eq!(
+            role(ProcessRole::CpuSuspect).candidates.len(),
+            1,
+            "25% is inclusive"
+        );
+        assert_eq!(role(ProcessRole::MemoryVictim).candidates[0].key, first);
+        assert_eq!(
+            role(ProcessRole::MemorySuspect).candidates[0].confidence,
+            Confidence::Low
+        );
+        assert_eq!(role(ProcessRole::IoVictim).candidates[0].key, first);
+        assert_eq!(
+            role(ProcessRole::MemoryVictim).completeness,
+            ProcessRoleCompleteness::Partial
+        );
+        assert_eq!(
+            role(ProcessRole::IoSuspect).completeness,
+            ProcessRoleCompleteness::Unavailable
+        );
+    }
+    #[test]
+    fn missing_telemetry_is_unavailable_and_static_or_decreasing_rss_is_not_a_suspect() {
+        let absent = host_process_scope(
+            None,
+            None,
+            Some(Confidence::Low),
+            Some(Confidence::Low),
+            Some(Confidence::Low),
+        );
+        assert!(
+            absent
+                .roles
+                .iter()
+                .all(|role| role.completeness == ProcessRoleCompleteness::Unavailable)
+        );
+        let mut observation = cpu(vec![], vec![]);
+        observation.process_resource_evidence = vec![resource(key(1), Some(0), Some(0), Some(0))];
+        let scope = host_process_scope(Some(&observation), None, None, Some(Confidence::Low), None);
+        assert!(
+            scope
+                .roles
+                .iter()
+                .find(|role| role.role == ProcessRole::MemorySuspect)
+                .unwrap()
+                .candidates
+                .is_empty()
+        );
+    }
+    #[test]
+    fn taskstats_only_io_victim_is_retained_without_procfs_key() {
+        let mut observation = cpu(vec![], vec![]);
+        observation.taskstats_capability = TaskstatsCapability::Partial;
+        observation
+            .taskstats
+            .push(crate::taskstats::TaskstatsInterval {
+                key: key(7),
+                min_uapi_version: 1,
+                field_support: crate::taskstats::TaskstatsFieldSupport {
+                    block_io_delay: true,
+                    ..Default::default()
+                },
+                cpu_delay_ns: None,
+                block_io_delay_ns: Some(4),
+                swapin_delay_ns: None,
+                reclaim_delay_ns: None,
+                thrashing_delay_ns: None,
+                compaction_delay_ns: None,
+                write_protect_copy_delay_ns: None,
+            });
+        let scope = host_process_scope(
+            Some(&observation),
+            None,
+            None,
+            None,
+            Some(Confidence::Medium),
+        );
+        let io = scope
+            .roles
+            .iter()
+            .find(|role| role.role == ProcessRole::IoVictim)
+            .unwrap();
+        assert_eq!(io.candidates[0].key, key(7));
+        assert_eq!(io.completeness, ProcessRoleCompleteness::Partial);
+    }
+    #[test]
+    fn missing_procfs_block_delay_cannot_complete_io_negative() {
+        let mut observation = cpu(vec![], vec![]);
+        observation.delay_accounting = DelayAccountingState::Enabled;
+        observation.task_stat_collection_issues.tasks_read = 1;
+        observation.process_resource_evidence = vec![resource(key(1), Some(0), Some(0), None)];
+        let scope = host_process_scope(Some(&observation), None, None, None, Some(Confidence::Low));
+        assert_eq!(
+            scope
+                .roles
+                .iter()
+                .find(|role| role.role == ProcessRole::IoVictim)
+                .unwrap()
+                .completeness,
+            ProcessRoleCompleteness::Partial
+        );
+    }
+    macro_rules! memory_version_completeness_case {
+        ($name:ident, $support:expr, $expected:expr) => {
+            #[test]
+            fn $name() {
+                let mut observation = cpu(vec![], vec![]);
+                observation.process_resource_evidence =
+                    vec![resource(key(1), Some(0), Some(0), Some(0))];
+                observation.taskstats_capability = TaskstatsCapability::Available;
+                observation.delay_accounting = DelayAccountingState::Enabled;
+                observation
+                    .taskstats
+                    .push(crate::taskstats::TaskstatsInterval {
+                        key: key(1),
+                        min_uapi_version: 13,
+                        field_support: $support,
+                        cpu_delay_ns: Some(0),
+                        block_io_delay_ns: Some(0),
+                        swapin_delay_ns: Some(0),
+                        reclaim_delay_ns: Some(0),
+                        thrashing_delay_ns: Some(0),
+                        compaction_delay_ns: Some(0),
+                        write_protect_copy_delay_ns: Some(0),
+                    });
+                let scope =
+                    host_process_scope(Some(&observation), None, None, Some(Confidence::Low), None);
+                assert_eq!(
+                    scope
+                        .roles
+                        .iter()
+                        .find(|role| role.role == ProcessRole::MemoryVictim)
+                        .unwrap()
+                        .completeness,
+                    $expected
+                );
+            }
+        };
+    }
+    memory_version_completeness_case!(
+        memory_version_one_is_partial,
+        crate::taskstats::TaskstatsFieldSupport {
+            swapin_delay: true,
+            ..Default::default()
+        },
+        ProcessRoleCompleteness::Partial
+    );
+    memory_version_completeness_case!(
+        memory_version_seven_is_partial,
+        crate::taskstats::TaskstatsFieldSupport {
+            swapin_delay: true,
+            reclaim_delay: true,
+            ..Default::default()
+        },
+        ProcessRoleCompleteness::Partial
+    );
+    memory_version_completeness_case!(
+        memory_version_nine_is_partial,
+        crate::taskstats::TaskstatsFieldSupport {
+            swapin_delay: true,
+            reclaim_delay: true,
+            thrashing_delay: true,
+            ..Default::default()
+        },
+        ProcessRoleCompleteness::Partial
+    );
+    memory_version_completeness_case!(
+        memory_version_eleven_is_partial,
+        crate::taskstats::TaskstatsFieldSupport {
+            swapin_delay: true,
+            reclaim_delay: true,
+            thrashing_delay: true,
+            compaction_delay: true,
+            ..Default::default()
+        },
+        ProcessRoleCompleteness::Partial
+    );
+    memory_version_completeness_case!(
+        memory_version_thirteen_is_complete,
+        crate::taskstats::TaskstatsFieldSupport {
+            swapin_delay: true,
+            reclaim_delay: true,
+            thrashing_delay: true,
+            compaction_delay: true,
+            write_protect_copy_delay: true,
+            ..Default::default()
+        },
+        ProcessRoleCompleteness::Complete
+    );
     #[test]
     fn boundaries_are_exact() {
         assert_eq!(severity_for_psi(0.009), Severity::None);

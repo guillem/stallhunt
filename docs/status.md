@@ -4,19 +4,35 @@ Last updated: 2026-08-24
 
 ## Current milestone
 
-**Post-Milestone 8 — UX and watch-attribution release v0.3.0**
+**v0.4.0 in progress — scoped process attribution and widescreen TUI**
+
+The package and manual are prepared as 0.4.0; this is not a published release.
+The currently published release remains v0.3.0. Controlled-host, cleanup,
+dependency-review, and CI gates pass; do not tag, merge, or publish v0.4.0
+without explicit owner authorization.
 
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
 explicit-`hunt` parity, and rejects root hunt flags mixed with a subcommand.
-Watch now transports the analyzers' bounded CPU victim/suspect and I/O suspect
-candidates through current signals, lifecycle findings, piped text, additive
-schema-1 JSON, and the TUI. Unconfirmed and resolved findings label retained
-candidates as last observed. Memory/cgroup process roles and I/O victims remain
-unsupported. ADR-0014 records both contracts. No analyzer rule, telemetry
-source, pressure finding kind, remaining M8 chain, or M7 probe was added, and
-the repository remains parked otherwise.
-Do not start M7 merely because eBPF is interesting; add a probe only for
+The existing bounded walk now retains leader RSS/RSS growth in bytes, fault
+deltas, and stable-task block-I/O delay ticks. The optional bounded TASKSTATS
+GET collector normalizes version-gated delays behind separate transport and
+delay-accounting states. Host- and cgroup-scoped analyzer-owned six-role attribution emits
+canonical schema-2 `process_scopes` in hunt and watch JSON, with PSI gating,
+deterministic top-five ranking, typed completeness, and explicit stale lifecycle
+retention. Cgroup roles rank full stable direct/descendant membership independently
+of host rankings and make only their scope partial on membership gaps. Schema-2 recordings persist normalized procfs/taskstats evidence while
+schema-1 replay deliberately strips it. Cgroup roles are exposed in schema-2,
+legacy/compact text, lifecycle detail, and the responsive watch TUI. At 120×30
+or larger, watch keeps Lifecycle, Current, History, and a layout-derived,
+Unicode-aware scrollable Detail on the left while rendering all six selected
+host/cgroup roles on the right; compact terminals show six role summaries and
+can explicitly expand Detail. EXP-0010 records successful controlled-host
+rootless degradation, permitted CPU/block-I/O/memory taskstats evidence in host
+and cgroup scopes, and capable 512-TGID/member-ceiling overhead. The temporary
+binary capability was removed and the operator restored the sysctl. Do not
+start
+M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
 that test still requires a caller-owned delegated subtree that already contains
@@ -33,26 +49,29 @@ the test process and does not mutate the hierarchy.
   rendering, deterministic fixtures, a healthy-host smoke, and a delegated-
   cgroup harmful-pressure acceptance are recorded. The live run produced
   high-severity `memory_swap_pressure` from exact host PSI `some`. Reclaim-only
-  and possible-thrashing labels remain fixture-validated; there is still no
-  process attribution.
+  and possible-thrashing labels remain fixture-validated. The original M2
+  finding has no finding-local process fields; v0.4 adds separate PSI-gated
+  scoped memory roles, whose taskstats path passed controlled host-and-cgroup
+  validation in EXP-0010.
 - **M3 complete within its deliberately limited exit condition:** PSI-backed
   block-I/O pressure and same-window activity candidates were validated by the
-  recorded controlled run. Victim attribution, process-device mapping, and
-  causality remain explicitly unsupported.
+  recorded controlled run. v0.4 adds scoped delay-based I/O victim roles, but
+  process-device mapping and causality remain explicitly unsupported and the
+  taskstats path passed controlled host-and-cgroup validation in EXP-0010.
 - **M4 implemented:** bounded cgroup-v2 collection, scoped analysis,
   completeness semantics, controller context, and deterministic coverage are
   complete. Live delegated-scope validation is available opt-in and cannot be
   assumed on an arbitrary host.
 - **M5 complete within its exit condition:** versioned normalized-observation
   recordings, `record`/`replay`/`redact`, identifier redaction, 0600 file
-  creation, and deterministic re-analysis are implemented. Pre-1.0 recordings
-  have no compatibility promise (ADR-0007). There is still no multi-window
-  recording.
+  creation, and deterministic re-analysis are implemented. New recordings use
+  schema 2; schema 1 remains readable and redactable (ADR-0016). There is still
+  no multi-window recording.
 - **M6 complete within its exit condition:** `watch` classifies host and
   bounded cgroup pressure findings as new, persistent, or resolved across
   contiguous rolling windows, keeps 16 history windows, and does not store full
-  finding evidence in its JSON stream. Piped text and additive schema-1 JSON
-  expose bounded CPU victim/suspect and I/O suspect candidates. Per
+  finding evidence in its JSON stream. Piped text and schema-2 JSON expose six
+  bounded analyzer-owned role lists for host and cgroup scopes. Per
   ADR-0013, a TTY renders an interactive TUI over that same lifecycle model
   (not a utilization dashboard) instead of the earlier screen-clearing text.
   A second SIGINT while draining terminates immediately with the conventional
@@ -123,6 +142,17 @@ the test process and does not mutate the hierarchy.
   endpoint after the existing PID cap. Direct task schedstat reads determine
   availability; task churn, TID reuse, permissions, malformed data, and caps are
   explicit JSON context. Candidate delay is raw summed-thread evidence.
+- The v0.4 procfs-normalization slice reuses that bounded PID/task walk: it
+  retains leader RSS and RSS growth in checked bytes, minor/major-fault deltas,
+  and checked stable-task block-I/O delay-tick sums. Per-thread RSS is never
+  summed. RSS is a gauge, so a valid decrease produces zero growth; missing
+  trailing `stat` fields, negative RSS, identity churn, monotonic-counter
+  regression, and aggregate overflow remain explicit unavailable or partial
+  evidence rather than fabricated zeroes. Task-stat completeness is tracked
+  independently of schedstat, so block-I/O evidence can remain usable when
+  schedstat is unavailable. Schema-1 recordings omit this new evidence. It
+  adds no taskstats access,
+  process role inference, cgroup attribution, or presentation behavior.
 - M1.5 analyzes normalized CPU evidence without reading procfs: exact-interval
   CPU PSI alone establishes the resource verdict. The effective diagnostic and
   resource-confidence window is the shorter of requested and measured PSI
@@ -194,7 +224,7 @@ the test process and does not mutate the hierarchy.
   13.6029889%, three device candidates, and two process-I/O candidates.
 - M4 discovers a cgroup2 mount from `/proc/self/mountinfo`, parses unified
   `0::` membership, and uses stat-cgroup-stat identity validation. It selects
-  the lowest 256 visible PIDs per endpoint and reads only mapped cgroups plus
+  the lowest 512 visible PIDs per endpoint and reads only mapped cgroups plus
   ancestors, capped at 512 groups, depth 64, 4,096 path bytes, 64 KiB per file,
   8 MiB per snapshot, and 4,096 attempted reads. These implementation limits
   are more conservative than the 1,024-PID/2,048-group ADR ceilings.
@@ -225,12 +255,11 @@ the test process and does not mutate the hierarchy.
   finding. History is capped at 16 compact windows. A TTY renders an
   interactive TUI (ADR-0013); piped text appends `--- window N ---` frames
   and JSON emits one `stallhunt.watch_window` object per window. Every surface
-  exposes bounded CPU runnable-delay victims, same-window CPU-consumption
-  suspects, and same-window process-I/O suspects when supported. Confirmed
-  lifecycle findings refresh candidates; unconfirmed or resolved findings
-  retain them with a stale/last-observed label. Current JSON also distinguishes
-  available, unavailable, and not-assessed candidate roles while retaining
-  schema version 1. Watch JSON is not hunt JSON and not a recording. Scoped
+  exposes bounded CPU, memory, and I/O victim/suspect roles when supported.
+  Confirmed lifecycle findings refresh candidates; unconfirmed or resolved
+  findings retain them with a stale/last-observed label. Schema-2 JSON
+  distinguishes available, partial, unavailable, and not-assessed roles. Watch
+  JSON is not hunt JSON and not a recording. Scoped
   cgroup lifecycle `kind` values name the resource and any
   reclaim, swap, possible-thrashing, or quota-throttle label; identity
   remains path plus resource.
@@ -287,6 +316,11 @@ the test process and does not mutate the hierarchy.
   with 370 visible PIDs and ~1,587--2,099 stable tasks: about 6 MiB RSS and
   110--210 ms PSI-window skew on a one-second hunt. The 4,096-PID and 16,384-task
   caps were not reached.
+- The new procfs resource evidence is raw normalized context only. Delayacct
+  block-I/O ticks can be absent or disabled, and zero or unavailable values do
+  not establish that a process suffered no I/O delay. EXP-0010 supplies
+  controlled-host TASKSTATS acceptance; roles still consume positive counters
+  conservatively and expose collection gaps explicitly.
 - GitHub Actions runs locked tests on Rust 1.85 and formatting, Clippy, and
   locked tests on stable Rust. The five environment-dependent Linux acceptance
   tests remain opt-in rather than CI workloads.
@@ -305,15 +339,18 @@ the test process and does not mutate the hierarchy.
   `STALLHUNT_MEMORY_ACCEPTANCE_PATH` and skips when that delegated parent is
   absent.
 - M3's controlled PSI/resource and same-window-candidate exit is validated,
-  but it has not validated I/O victims, process-device mapping, or causality.
-  EXP-0007 measured process-I/O collection at 129--194 intervals on that
-  workstation, still below the 1,024-PID cap.
+  but the original run did not validate I/O victims, process-device mapping,
+  or causality. EXP-0010 later observed two procfs block-I/O-delay victims;
+  taskstats victims remain unvalidated and the existing acceptance degraded on
+  partial process-I/O. EXP-0007 measured process-I/O collection at 129--194
+  intervals on that workstation, still below the 1,024-PID cap.
 - The ignored cgroup acceptance test requires a caller-provided, uniquely owned
   delegated subtree. It safely skips when that prerequisite is absent, so an
   arbitrary host does not yet provide controlled per-cgroup pressure evidence.
 - The cgroup collector adds a second independent procfs PID walk rather than
   reusing the existing CPU or process-I/O selection. EXP-0007 found that walk
-  already at its 256-PID cap on a 370-PID host (94 groups, partial completeness).
+  already at its pre-v0.4 PID cap on a 370-PID host (94 groups, partial completeness);
+  the current collector cap is 512.
   Extra high-numbered helper PIDs did not increase the selected cgroup set.
 - M5 recordings are pre-1.0 and may become unreadable after a schema change.
   Identifier redaction is not cryptographic anonymization: PIDs, start times,
@@ -322,11 +359,11 @@ the test process and does not mutate the hierarchy.
   interval. Recordings do not include extra host identity such as hostname or
   kernel version.
 - Watch JSON carries bounded process-candidate evidence but still omits full
-  observations, raw resource evidence, and qualifiers. CPU suspects and I/O
-  suspects are same-window correlation, while CPU victims are observed summed
-  runnable delay rather than proof of user-visible harm. I/O victims and
-  memory/cgroup process roles remain unsupported. A disappeared cgroup finding
-  stays unconfirmed until that scope is observed without ranked pressure.
+  observations, raw resource evidence, and qualifiers. Schema-2 also carries
+  canonical host and cgroup six-role lists. CPU suspects and I/O suspects are
+  same-window correlation, while CPU victims are observed summed runnable delay rather
+  than proof of user-visible harm. A disappeared cgroup finding stays
+  unconfirmed until that scope is observed without ranked pressure.
   Unlimited `watch` without `--count` samples until interrupted and drains the
   current window after the first SIGINT; a second SIGINT exits immediately.
   Consecutive 100 ms windows remain smoke observations, same as hunt.
@@ -351,14 +388,16 @@ the test process and does not mutate the hierarchy.
 
 ## Pending work
 
-The repository is intentionally parked after the scoped possible-thrashing
-slice. No additional M8 chain or M7 probe is approved.
+The approved v0.4.0 vertical slice now has bounded procfs/taskstats evidence,
+host and cgroup six-role attribution, and schema-2 outputs/recording migration.
+Release metadata is prepared. Controlled-host validation passed in EXP-0010.
+Remaining work is explicit owner authorization and the normal PR merge/release
+workflow. No additional M8 chain or M7 probe is part of this slice.
 
 Diagnostic and attribution gaps:
 
-- host memory findings still have no process attribution;
-- I/O findings still have no affected-workload attribution or process-to-device
-  mapping;
+- host memory and I/O roles remain conservative candidates rather than causal
+  proof; process-to-device mapping remains unsupported;
 - event-level scheduler, off-CPU, block-request, lock, and network evidence is
   absent because M7 has not started;
 - CPU–I/O, host–cgroup, cross-cgroup, and process-device chains remain
@@ -368,9 +407,9 @@ Diagnostic and attribution gaps:
 
 Validation gaps:
 
-- scoped reclaim, swap, possible-thrashing, and quota-throttle labels are
-  deterministic-test validated but do not have a controlled live scoped-
-  pressure acceptance result;
+- scoped swap now has a controlled live result; scoped reclaim-only,
+  possible-thrashing, and quota-throttle labels remain deterministic-test
+  validated without a controlled live scoped-pressure result;
 - the cgroup acceptance test is opt-in observational coverage and requires a
   caller-owned delegated subtree;
 - host reclaim-only and possible-thrashing remain fixture-validated, while the
@@ -380,8 +419,13 @@ Validation gaps:
 
 Operational and delivery gaps:
 
-- cgroup collection reaches its 256-PID selection cap on the measured
-  workstation, so scoped context is partial and can omit higher-PID groups;
+- historical cgroup collection reached its pre-v0.4 PID selection cap;
+  EXP-0010 now records capable 512-TGID and 512-PID cgroup-membership-ceiling
+  overhead after safely disambiguating equivalent cgroupfs aliases;
+- deterministic codec, attribution, migration, renderer, TUI, stable/MSRV,
+  package, and local PTY gates pass;
+- the v0.4.0 release remains blocked only on explicit owner authorization and
+  the normal merge/release workflow;
 - unlimited watch drains gracefully: the first SIGINT installs a flag so the
   in-flight window completes and is written before exit;
 - `MANIFEST.txt` (tracked-file byte sizes) predates several source files,
@@ -406,12 +450,10 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Write down one concrete diagnostic question and the independent evidence needed
-to answer it before selecting another feature. No such question is currently
-selected. Do not start Milestone 7 unless the question cannot be answered with
-current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain unless
-independent linking evidence already exists; do not treat coincident PSI as a
-path, and do not link host findings to cgroup findings.
+Obtain explicit owner authorization, then complete the normal PR merge and
+release workflow for the already prepared v0.4.0 metadata. Do not start
+Milestone 7 or add another M8 chain;
+coincident PSI still does not establish a causal path.
 
 ## Current design risks
 
@@ -470,7 +512,7 @@ Mitigation:
 
 ### R7: Cgroup bounded-selection blind spots
 
-The deterministic lowest-256-PID cgroup selection is already capped on the
+The deterministic lowest-512-PID cgroup selection can be capped on the
 measured workstation. Relevant higher-PID cgroups can be omitted even though
 the retained scoped findings are valid.
 
@@ -484,6 +526,25 @@ Mitigation:
 
 Workstation-scale collector cost is recorded in EXP-0007. Do not chase the
 4,096-PID or 16,384-task caps without a quota-aware setup.
+
+### R8: Transitive dependency audit warnings
+
+`cargo audit` 0.22.2 exits successfully for the current lockfile but warns that
+`paste` is unmaintained (RUSTSEC-2024-0436) and that `lru` has two unsoundness
+advisories (RUSTSEC-2026-0002 and RUSTSEC-2026-0253). They arrive through the
+pinned ratatui 0.29 dependency graph. Ratatui 0.30.0 requires Rust 1.86, while
+0.30.1 or newer requires Rust 1.88; both are above the 1.85 MSRV, so an upgrade
+is not an automatic fix.
+
+Mitigation:
+
+- do not claim a clean audit or use an unsupported `--omit=dev` flag;
+- retain the lockfile and do not suppress the warnings;
+- ratatui's production `lru` call path uses `get_or_insert`, not the advised
+  `IterMut` or `pop` APIs, while `paste` is a build-time maintenance warning;
+- accept this narrow exposure for v0.4.0 after technical review, and revisit it
+  if the call path, advisories, MSRV, or dependency versions change;
+- keep the full-lockfile audit result and disposition in EXP-0009.
 
 ## Known open decisions
 
@@ -510,13 +571,83 @@ Decided in ADR-0013:
 Decided in ADR-0014:
 
 - root hunt options have explicit-`hunt` parity and conflict with subcommands;
-- watch carries additive typed process candidates in schema version 1 and
-  labels retained lifecycle candidates as last observed.
+- the earlier schema-1 watch attribution contract is historical and is
+  superseded by ADR-0016's schema-2 scoped role model.
 
 These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-24, operator-provided `CAP_NET_ADMIN` enabled bounded TASKSTATS GET
+without Stallhunt performing elevation. Controlled CPU, memory, and I/O
+workloads produced PSI-backed taskstats victims in both host and exact child-
+cgroup scopes: CPU reached 16.66%/13.86% host/child PSI with five candidates;
+memory reached 29.38%/35.58% with a direct reclaim-dominant victim; and I/O
+reached 11.70%/11.75% with two 1.49–1.52 s block-delay victims. A stable
+512-extra-process run completed 1,024 GETs and 512 intervals while the cgroup
+walk reached its 512-PID ceiling, retained 97 groups, and stayed within all
+budgets. Three release runs took 1.20–1.23 s wall, 0.04–0.05 s user,
+0.15–0.17 s system, and 10,216–14,240 KiB RSS. Equivalent duplicate cgroupfs
+mounts were safely disambiguated by commit `5699fd4`; different device/root
+views remain rejected. All owned workloads and generated cgroups/directories
+were cleaned, and rebuilding the release binary removed its temporary file
+capability. The operator then restored `kernel.task_delayacct=0`, which
+Stallhunt verified. See EXP-0010.
+
+On 2026-08-24, the operator enabled `kernel.task_delayacct` before owned
+workloads on Linux 7.2.0-ogc4.1.fc44.x86_64. Rootless Stallhunt correctly
+reported delay accounting enabled but taskstats permission denied. A
+512-extra-process run selected exactly 512 TGIDs, set the limit flag, made zero
+successful queries after two endpoint permission denials, and exhausted no
+protocol budgets. CPU acceptance passed with 46.51% exact PSI `some`, five
+victims, and three suspects. Bounded I/O produced 12.69% exact PSI `some` and
+procfs I/O victims, while correctly retaining partial process-I/O capability.
+Release-binary one-second overhead remained 1.14–1.17 s wall, 0.02–0.03 s
+user, 0.11–0.14 s system, and 8,476–11,040 KiB RSS with 512 extra processes.
+That first phase preceded the capable and scoped continuation recorded above.
+
+Release preparation on 2026-08-24 changed the package, binary, manual, and
+recording example version to 0.4.0 without publishing it. The current local
+tree passed formatting, locked offline Clippy, and locked offline tests (262
+passed, one fixture writer ignored; 15 CLI, three documentation, and three
+replay-fixture integration tests passed; five Linux acceptance tests remain
+ignored). The release build printed `stallhunt 0.4.0`; `groff -man -Tascii`
+accepted the manual; and the release-binary PTY check verified alternate-screen
+cleanup and terminal-state restoration. A local v0.4.0 tarball staging
+inspection contained exactly the binary, README, both licenses, and manual. No
+tag or GitHub Release was made.
+
+`cargo-audit` 0.22.2's supported full-lockfile command exited 0 with three
+warnings: RUSTSEC-2024-0436 for `paste`, and RUSTSEC-2026-0002 plus
+RUSTSEC-2026-0253 for `lru`, transitively via ratatui 0.29. Its help has no
+`--omit=dev` option; the planned literal command is not valid for this version.
+Technical review accepted this narrow exposure for v0.4.0 because the advised
+`lru` APIs are not used by ratatui's production path and `paste` is a
+maintenance-only warning. The audit is not clean; warnings remain visible and
+must be revisited when the call path, advisories, dependencies, or MSRV change.
+
+On 2026-08-24, the v0.4 procfs/taskstats collector slices passed deterministic
+parser, protocol, scripted collection, and interval tests for leader RSS,
+missing/negative fields, fault and block-I/O counter regression, overflow,
+task churn, PID/TID reuse, lowest-512 TGID selection, identity bracketing,
+`ESRCH`, TASKSTATS UAPI version prefixes/offsets, malformed nested replies,
+response/time budgets, and capability degradation. Recording
+redaction and schema-1 replay compatibility were also exercised. The complete
+local formatting, locked offline Clippy, and locked offline test gates passed:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --locked --offline --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --offline --workspace --all-features
+```
+
+The bounded local PTY check observed alternate-screen enter/leave and restored
+the original terminal state after one TUI window. At this release-preparation
+point the optional Linux acceptance tests remained skipped and no controlled-
+host taskstats validation had run. EXP-0010 subsequently recorded rootless and
+permitted CPU, block-I/O, and memory acceptance in host/cgroup scopes plus
+capable 512-TGID and 512-PID membership-ceiling overhead.
 
 On 2026-08-24, the v0.3.0 release preparation validated implicit root-hunt
 option parity and conflicts, typed watch process attribution across lifecycle,
@@ -672,7 +803,7 @@ checked-in related-evidence text fixture and structural hunt JSON.
 Earlier the same day, EXP-0007 measured a current release binary on Linux
 7.1.5 with about 370 visible PIDs and ~1,587 stable tasks. Three one-second
 hunts used about 6 MiB RSS and 110--210 ms PSI-window skew; cgroup collection
-was already at its 256-PID cap. Adding 64 sleepers or 512 sleeping threads
+was already at its pre-v0.4 PID cap. The current collector cap is 512. Adding 64 sleepers or 512 sleeping threads
 stayed under the CPU and process-I/O caps. `many_pids` now uses a Python helper
 so failed forks cannot retry into a sleeper leak.
 

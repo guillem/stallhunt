@@ -159,15 +159,17 @@ the nested capability state is authoritative and may still be `unsupported`,
 M2 extends the same `hunt` with a separate host-memory assessment and reports
 memory PSI, meminfo, and vmstat capabilities. Exact-interval memory PSI `some`
 controls the memory verdict; memory `full` is displayed as separately-qualified
-all-non-idle-task stall context and is not added to `some`. Text makes the
-host-wide/no-process-attribution limit explicit. JSON retains memory
-observation, evidence, counter availability, and qualifiers even where the
-concise text renders only the relevant finding/context.
+all-non-idle-task stall context and is not added to `some`. Text distinguishes
+the host-wide resource finding from v0.4's separate PSI-gated scoped process
+roles. JSON retains memory observation, evidence, counter availability,
+qualifiers, and canonical process scopes even where concise text renders only
+the relevant finding/context.
 
 M3 adds a separately ranked I/O assessment. Its text explicitly distinguishes
-the PSI verdict from disk and process I/O-accounting activity candidates, labels
-them same-window/non-causal, and states that affected workloads and
-process-to-device mapping are unavailable. JSON adds I/O observation, PSI/full
+the PSI verdict from disk and process I/O-accounting activity candidates and
+labels them same-window/non-causal. v0.4 separately reports scoped delay-based
+victim roles while preserving the caveat that process-to-device mapping and
+causality are unavailable. JSON adds I/O observation, PSI/full
 state, diskstats/process-I/O context, candidates, capabilities, and qualifiers
 without changing prior resource objects.
 
@@ -183,8 +185,10 @@ snapshot or controller files are incomplete; this also makes the top-level hunt
 status `incomplete`, without discarding valid host findings.
 
 M5 adds `record`, `replay`, and `redact`. Recordings are not hunt JSON: they
-store normalized observations under `kind` `stallhunt.recording` schema
-version 1. Legacy `bottleneck.recording` files are accepted on replay. Replay
+store normalized observations under `kind` `stallhunt.recording`. New files
+use schema version 2; schema-1 and legacy `bottleneck.recording` files are
+accepted on replay, with schema-1 process-resource/taskstats evidence treated
+as unavailable. Replay
 uses the same text/JSON renderers as `hunt`, with the recorded requested
 duration. Invalid recordings exit 1. Missing `--output` or an invalid invocation
 still exits 2. New recording files are created mode 0600 and are not
@@ -209,6 +213,16 @@ identity remains path plus resource, so a mechanism change stays `persistent`. U
 `hunt --json` or `record` when the full evidence payload is required. Invalid
 `--count` still exits 2.
 
+Schema-2 hunt/replay JSON and watch JSON include canonical host and
+PSI-pressured cgroup `process_scopes` with all six process roles. Legacy
+hunt/replay text and watch text render every host and cgroup scope explicitly.
+On a terminal, hunt/replay presents compact per-scope role counts and top
+candidates. `watch` renders all five retained candidates in a responsive role
+grid at 120×30 or larger; smaller terminals retain six role summaries and
+expandable, scrollable detail. Candidate
+lists are bounded and may be marked partial; retained lifecycle lists are
+explicitly stale rather than presented as current evidence.
+
 Tracked watch pressure kinds are:
 
 - host: `cpu_scheduling_contention`, `memory_pressure`,
@@ -224,22 +238,23 @@ window summary but do not create tracked identities. A mechanism change updates
 the lifecycle row's `kind` while preserving host-resource identity or cgroup
 path-plus-resource identity.
 
-Every watch surface includes a Processes section/object. Current CPU signals
-may contain ranked `cpu_victim` candidates with runnable-delay evidence and
-`cpu_suspect` candidates with same-window CPU-consumption evidence. Current
-I/O signals may contain ranked `io_suspect` candidates with same-window
-process-I/O evidence. Each candidate carries a stable process key, terminal-safe
-name, confidence, typed evidence, and its analyzer label. CPU victims, CPU
-suspects, and I/O suspects are correlation-qualified candidates, not proof of
-harm or causality. I/O victims and process attribution for memory or cgroup
-findings are explicitly unsupported.
+Every watch surface transports analyzer-owned CPU, memory, and I/O victim and
+suspect lists for the host scope, while schema-2 and lifecycle records also
+carry cgroup-resource pairs. Each candidate carries a stable process key,
+terminal-safe name, confidence, typed evidence, and its analyzer label. Direct
+delay evidence and heuristic fallbacks remain distinguishable, and candidates
+are correlation-qualified rather than proof of harm or causality. Cgroup
+lifecycle findings carry their matching victim/suspect pair; stale retention is
+matched by cgroup path plus resource identity.
 
-Lifecycle findings repeat their last observed process candidates. A confirmed
+Lifecycle findings repeat their last observed process candidates and role-list
+availability. A confirmed
 persistent finding refreshes those candidates from the current window; an
 unconfirmed persistent or resolved finding labels them as **last observed** so
 they cannot be mistaken for current activity. Empty and unavailable role lists
-are rendered explicitly rather than omitted. This additive JSON field keeps
-`schema_version: 1`; consumers must tolerate absent fields from older producers.
+are rendered explicitly rather than omitted. Watch JSON uses schema version 2
+and exposes the canonical `process_scopes` collection while retaining the
+earlier flat candidate fields.
 
 ## Human output structure
 
@@ -386,8 +401,8 @@ Representative Milestone 1 finding shape (optional context fields are omitted he
 
 ```json
 {
-  "schema_version": 1,
-  "tool_version": "0.3.0",
+  "schema_version": 2,
+  "tool_version": "0.4.0",
   "requested_observation": {
     "duration_ms": 10000
   },
@@ -540,20 +555,19 @@ alongside the lifecycle panels, never the centerpiece.
 
 The differentiator is diagnosis.
 
-Panels: a title bar (window index, interval, key hints); a **Processes** panel
-with CPU victims, CPU suspects, and I/O suspects; a **Lifecycle**
-list of tracked findings (state, identity, kind, severity, age, and prior
-severity on a change); a **Current window** summary of CPU/memory/I-O
-status plus a scoped-cgroup-pressure count; a **History** strip mapping the
-last windows' severity to a glyph ramp per resource; a **Detail** pane for
-the selected finding, shown on request, with its full qualifier
-messages — the "Context and limitations" detail is not behind `--verbose`
-in the TUI, because the interaction model has no static "less verbose"
-default to begin with; a help overlay; and a persistent footer restating
-that watch tracks findings, not utilization.
+At 120×30 or larger, a 55% left column keeps the **Lifecycle** list, **Current
+window**, **History**, and scrollable **Detail** pane visible. The remaining
+right column is a two-column/three-row process-role grid: CPU, memory, and I/O
+victim/suspect lists, with all five retained candidates in each cell. It follows
+the exact selected host or cgroup path. Compact terminals show six role
+summaries and collapse Detail by default; an explicit Detail choice survives a
+resize and can replace Current/History. Detail includes every role plus full
+qualifiers; it is not behind `--verbose`. A help overlay and persistent footer
+restate that watch tracks findings, not utilization.
 
 Keys: `q`/`Esc` quit; `↑`/`k` and `↓`/`j` select a lifecycle row;
-`Enter`/`Space` toggle that row's detail pane; `h`/`?` toggle the help
+`Enter`/`Space` toggle detail visibility; `PageUp`/`PageDown` and `Home`/`End`
+scroll the wrapped detail content; `h`/`?` toggle the help
 overlay; `Ctrl-C` is the same two-stage interrupt described above for
 unlimited `watch` runs — the first drains the in-flight window before
 exiting, the second exits immediately — except that in raw mode a local

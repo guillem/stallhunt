@@ -119,8 +119,11 @@ On a controlled CPU-saturation scenario, the tool identifies CPU contention and 
 
 Status: complete. The delegated-cgroup acceptance produced a PSI-backed
 harmful-memory finding (`memory_swap_pressure`) without unconstrained host-wide
-allocation. Reclaim-only and possible-thrashing labels remain fixture-validated;
-the slice still makes no process attribution.
+allocation. Reclaim-only and possible-thrashing labels remain fixture-validated.
+v0.4 adds conservative scoped memory-role attribution only when matching PSI
+pressure exists: taskstats memory-delay evidence is preferred, major faults are
+a low-confidence victim fallback, and positive RSS growth is the only suspect
+signal.
 
 Goal:
 
@@ -184,7 +187,7 @@ Deliver:
 
 - cgroup-v2 mount discovery using mountinfo and `0::` unified membership only;
 - stat-cgroup-stat stable mapping under ADR-0006's 1,024-PID ceiling; the
-  implementation currently selects at most 256 PIDs;
+  implementation currently selects at most 512 PIDs;
 - mapped cgroups plus ancestors only under ADR-0006's 2,048-group ceiling; the
   implementation currently retains at most 512 groups with depth/path/
   file-byte, snapshot-byte, and read-attempt budgets;
@@ -222,9 +225,11 @@ Status: complete. Finding-lifecycle watch over contiguous rolling windows is
 implemented. ADR-0008 records the lifecycle contract; ADR-0013 replaced its
 TTY presentation with an interactive `ratatui`/`crossterm` TUI whose panels
 are that same lifecycle model, not a utilization dashboard. Piped text and
-`--json` are unchanged. The first SIGINT drains the in-flight window before
-exit and a second SIGINT terminates immediately, on both the piped and TUI
-paths; there is still no multi-window recording.
+JSON remain append-only watch-window streams; v0.4 moves JSON to schema 2 and
+adds canonical host/cgroup process scopes to both surfaces. The first SIGINT
+drains the in-flight window before exit and a second SIGINT terminates
+immediately, on both the piped and TUI paths; there is still no multi-window
+recording.
 
 Goal:
 
@@ -236,6 +241,19 @@ Deliver:
 - finding lifecycle (new/persistent/resolved),
 - terminal refresh,
 - bounded history.
+
+## v0.4 cross-cutting slice — scoped attribution and responsive watch
+
+Status: implementation, deterministic/local validation, and EXP-0010
+controlled-host taskstats/512-TGID/member-ceiling validation complete; release
+awaits explicit owner authorization and the normal merge/release workflow. The
+cleanup and dependency-warning disposition are recorded in `status.md` and
+`experiments.md`.
+
+This vertical slice adds bounded procfs/taskstats process evidence, six
+analyzer-owned roles for matching host and cgroup PSI scopes, schema-2
+recording/output compatibility, and widescreen/compact watch presentation. It
+does not add a new pressure finding, process-device mapping, or causal edge.
 
 ## Milestone 7 — eBPF precision probes
 

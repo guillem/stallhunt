@@ -44,23 +44,6 @@ pub fn terminal_width() -> usize {
     parse_terminal_width(columns_env.as_deref(), queried)
 }
 
-/// Char-count truncation to at most `width` characters, appending `…` when
-/// truncated. Consistent with `render::terminal_name`'s approach: no
-/// unicode-width dependency, a simple upper bound on rendered length.
-pub fn truncate_ellipsis(text: &str, width: usize) -> String {
-    if width == 0 {
-        return String::new();
-    }
-    let char_count = text.chars().count();
-    if char_count <= width {
-        return text.to_owned();
-    }
-    let keep = width.saturating_sub(1).max(1);
-    let mut truncated: String = text.chars().take(keep).collect();
-    truncated.push('…');
-    truncated
-}
-
 fn parse_terminal_width(columns_env: Option<&str>, queried: Option<u16>) -> usize {
     columns_env
         .and_then(|value| value.parse::<usize>().ok())

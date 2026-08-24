@@ -144,6 +144,9 @@ text/JSON renderer (`watch::render_window`) and the terminal UI
 rather than re-deriving it. The TUI's `draw` function is pure over `App`
 state (no terminal access, no clock reads), so it is testable against
 `ratatui::backend::TestBackend`; only `tui::run` touches the real terminal.
+The pinned ratatui 0.29 build enables `unstable-rendered-line-info` solely so
+detail scrolling uses the widget's exact `WordWrapper` line count; this avoids
+an independently approximated scroll bound diverging from rendered wrapping.
 Severity color in the TUI shares its vocabulary with the compact report's
 ANSI painting through `style::SeverityTone`/`style::severity_tone` — one
 mapping from severity to visual weight, expressed as two backends
@@ -152,9 +155,14 @@ mapping from severity to visual weight, expressed as two backends
 severity looks like.
 
 Watch carries process attribution forward as typed analyzer output rather than
-reconstructing it in a renderer. Supported current signals contain bounded CPU
-runnable-delay victims, CPU-consumption suspects, or I/O-activity suspects;
-memory, cgroup, and I/O-victim process roles remain absent by design. The
+reconstructing it in a renderer. Host and scoped-cgroup signals carry the two
+resource-matching lists from canonical six-role scopes. Cgroup ranking filters
+the full stable direct-or-descendant membership set by `ProcessKey`, while host
+ranking remains independent; no renderer uses the five displayed cgroup
+members as inference input. Schema-2 and lifecycle transport are implemented;
+presentation renders those host and cgroup role lists without recalculating
+them: wide watch uses the selected scope's exact path/resource identity, while
+compact views retain summaries plus navigable detail. The
 tracker refreshes candidates on confirmed pressure windows and marks retained
 last-observed candidates stale on unconfirmed or resolved lifecycle findings.
 Text, JSON, and TUI therefore expose the same candidate evidence and cannot
@@ -228,8 +236,9 @@ tools/
 ```
 
 There is no generic telemetry framework. `cpu.rs` keeps the narrow procfs
-CPU/process raw and interval model together; it deliberately aggregates stable
-task schedstat counters but does not assign attribution roles. `analysis.rs` is
+CPU/process raw and interval model together; it aggregates stable task
+schedstat and block-I/O-delay counters, while retaining leader-only RSS and
+fault deltas, but does not assign attribution roles. `analysis.rs` is
 a narrow pure boundary that consumes only normalized
 PSI and CPU/process interval observations and emits typed serializable CPU
 findings. A valid PSI interval is sufficient for the CPU resource verdict;
@@ -244,9 +253,11 @@ each CPU PSI, memory PSI, CPU/process, and memory-context pair has its own
 monotonic interval because the reads are sequential. Memory PSI `some` is the
 resource-verdict boundary. Memory `full` is a separately validated subset of
 `some`, never additive evidence. `/proc/meminfo` and `/proc/vmstat` only add
-mechanism/context qualifiers. The collector performs no PID walk for memory, so
-the initial host-wide finding deliberately has no process attribution. VM rates
-use the independently measured memory-context interval; mechanism confidence is
+mechanism/context qualifiers. Memory collection adds no independent PID walk;
+v0.4's analyzer instead reuses normalized evidence from the bounded CPU/process
+walk to build separate PSI-gated host/cgroup memory role lists. The original
+host-wide memory finding remains distinct from those roles. VM rates use the
+independently measured memory-context interval; mechanism confidence is
 separate from pressure confidence.
 
 M3 keeps exact I/O PSI separate from disk/process I/O activity. Diskstats and
@@ -262,7 +273,10 @@ finding and candidates, not those unsupported attribution claims.
 M4 implements ADR-0006's cgroup-v2-only, membership-first collector: it
 discovers the actual cgroup2 mount from mountinfo, reads the unified `0::`
 membership form, and maps a bounded selected PID set by `stat` → cgroup →
-`stat` identity checks. It collects only mapped cgroups and ancestors under
+`stat` identity checks. Duplicate mount-point
+aliases are collapsed only when both the cgroupfs device and exposed hierarchy
+root match; distinct hierarchies remain an unavailable ambiguity. It collects
+only mapped cgroups and ancestors under
 explicit PID, group, depth, path, and file-byte budgets. Per-cgroup exact PSI
 is an explicitly scoped verdict; CPU, memory, and I/O controller deltas remain
 qualified context. Selected `memory.stat` page deltas may label an already

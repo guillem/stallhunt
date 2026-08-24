@@ -1,4 +1,4 @@
-STALLHUNT · observed 10s · verdict: CPU scheduling contention observed [high] · confidence high
+STALLHUNT · observed 10s · verdict: CPU scheduling con… [high] · confidence high
 
  CPU     [high] PSI some 20.00%   contention observed
    victims (observed runnable delay; not confirmed harm)
@@ -14,6 +14,21 @@ STALLHUNT · observed 10s · verdict: CPU scheduling contention observed [high] 
      1. writer [42]   medium
  Cgroup  [moderate] /workload.service (memory) · scoped pressure
  Cgroup  [moderate] /workload.service (io) · scoped pressure
+
+ Process roles (host)
+   CPU victims     1 · worker
+   CPU suspects    2 · build
+   Memory victims  unavailable/incomplete
+   Memory suspects unavailable/incomplete
+   I/O victims     unavailable/incomplete
+   I/O suspects    1 · writer
+ Process roles (cgroup /workload.service)
+   CPU victims     unavailable/incomplete
+   CPU suspects    unavailable/incomplete
+   Memory victims  unavailable/incomplete
+   Memory suspects unavailable/incomplete
+   I/O victims     unavailable/incomplete
+   I/O suspects    none
 
  Related evidence: Memory reclaim pressure is consistent with block-I/O pressure in the same window. · confidence low
  (+1 more related finding(s))

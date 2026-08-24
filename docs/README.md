@@ -2,14 +2,15 @@
 
 This directory is the durable design and project-memory layer.
 
-Milestones 1–6 are functionally complete. Milestone 8's first two conservative
+Milestones 1–6 are functionally complete. The source tree is prepared for the
+v0.4 scoped-attribution and responsive-TUI release, including schema 2 and
+bounded optional taskstats evidence. Publication awaits explicit owner
+authorization and the normal merge/release workflow; EXP-0010 records the
+passed taskstats/512-TGID/member-ceiling validation, cleanup, and reviewed
+dependency-warning disposition. Milestone 8's first two conservative
 evidence-chain slices relate memory mechanism pressure to I/O pressure, first
-host-wide and then same-cgroup, without claiming causality. Scoped cgroup
-findings can also carry reclaim, swap, possible-thrashing, or quota-throttle
-context labels without creating pressure. The repository is currently parked;
-`status.md` is the authoritative record of implemented behavior, pending work,
-and the gate for selecting a future slice. `experiments.md` retains controlled
-validation and overhead evidence.
+host-wide and then same-cgroup, without claiming causality. `experiments.md`
+retains controlled validation, overhead evidence, and precise open gaps.
 
 ## Read this first
 
@@ -56,6 +57,8 @@ Accepted initial decisions:
 - ADR-0012: Stallhunt product identity, clap CLI, MSRV, Linux baseline, and JSON kinds
 - ADR-0013: watch finding-lifecycle TUI and styled hunt/replay terminal report
 - ADR-0014: implicit hunt options and additive watch process attribution
+- ADR-0015: bounded procfs/taskstats process evidence with no privilege elevation
+- ADR-0016: scoped six-role process attribution, schema-2 compatibility, and responsive TUI behavior
 
 ## Documentation rules
 

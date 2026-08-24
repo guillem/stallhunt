@@ -198,7 +198,8 @@ Continuous rolling diagnosis.
 M6 implements finding-lifecycle watch over contiguous rolling windows; see
 ADR-0008. ADR-0013 gives it an interactive TUI on a terminal, displaying that
 same lifecycle model rather than a utilization dashboard. Piped output and
-`--json` are unchanged.
+`--json` remain append-only watch-window streams; schema 2 adds canonical
+host/cgroup process scopes without turning watch into a utilization monitor.
 
 ### `explain`
 

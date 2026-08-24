@@ -6,6 +6,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-24
+
+### Added
+
+- Scoped, analyzer-owned process attribution for CPU, memory, and I/O victims
+  and suspects. Host and PSI-pressured cgroup scopes each retain up to five
+  deterministic candidates per role, with evidence, confidence, and
+  completeness kept separate from the resource verdict.
+- Bounded procfs leader RSS/RSS-growth, fault, and stable-task block-I/O-delay
+  evidence, plus optional, permission-gated TASKSTATS GET collection. TASKSTATS
+  is strictly bounded and never enables delay accounting or elevates privilege.
+- Canonical schema-2 `process_scopes` in hunt/replay and watch JSON. Schema-1
+  recordings remain readable and redactable, but replay their absent v0.4
+  process evidence as unavailable.
+- Responsive watch presentation: at 120x30 and larger, a selected-scope
+  six-role grid appears beside lifecycle, current, history, and scrollable
+  detail. Compact terminals retain navigable summaries.
+
+### Changed
+
+- New recordings use schema 2. Derived candidates remain out of recordings so
+  replay always re-runs the current analyzer.
+- Watch lifecycle retention preserves scoped role lists as explicitly stale
+  evidence rather than presenting previous candidates as current.
+
 ## [0.3.0] - 2026-08-24
 
 ### Added

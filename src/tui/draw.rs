@@ -9,14 +9,15 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::style::{self, ColorMode};
-use crate::watch::{
-    self, LifecycleState, ObservationStatus, ProcessCandidate, ProcessCandidateAvailability,
-    ProcessCandidateEvidence, ProcessRole, ResourceSignal, WatchWindow,
+use crate::analysis::{
+    ProcessCandidate, ProcessCandidateAvailability, ProcessCandidateEvidence, ProcessRole,
+    ProcessRoleCompleteness, ProcessRoleList, ProcessScopeKind,
 };
+use crate::style::{self, ColorMode};
+use crate::watch::{self, LifecycleState, ObservationStatus, ResourceSignal, WatchWindow};
 
 use super::app::App;
 
@@ -24,40 +25,319 @@ const HISTORY_GLYPHS: [char; 5] = ['·', '▂', '▄', '▆', '█'];
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let area = frame.area();
-    // Keep attribution visible in both modes. Detail borrows room from the
-    // current/history summaries, not from the processes panel.
-    let (current_height, history_height, detail_height) =
-        if app.expanded { (0, 0, 12) } else { (5, 3, 0) };
-    let chunks = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Min(3),
-        Constraint::Length(7),
-        Constraint::Length(current_height),
-        Constraint::Length(history_height),
-        Constraint::Length(detail_height),
-        Constraint::Length(1),
-    ])
-    .split(area);
-
-    draw_header(frame, chunks[0], app);
-    draw_lifecycle(frame, chunks[1], app);
-    draw_processes(frame, chunks[2], app);
-    if !app.expanded {
-        draw_current(frame, chunks[3], app);
+    if area.width >= 120 && area.height >= 30 {
+        draw_wide(frame, area, app);
+    } else {
+        draw_compact(frame, area, app);
     }
-    if !app.expanded {
-        draw_history(frame, chunks[4], app);
-    }
-    if app.expanded {
-        draw_detail(frame, chunks[5], app);
-    }
-    draw_footer(frame, chunks[6]);
-
     if app.help {
         draw_help_overlay(frame, area);
     }
 }
 
+/// The layout-derived maximum used by the event loop before it handles a
+/// scrolling key.  It intentionally shares the exact pane geometry and text
+/// builder used by `draw_detail`, including Unicode display-cell wrapping.
+pub(super) fn detail_scroll_max(app: &App, width: u16, height: u16) -> u16 {
+    if !app.detail_visible(width, height) {
+        return 0;
+    }
+    let area = Rect::new(0, 0, width, height);
+    let detail = detail_area(area);
+    let inner = Block::default().borders(Borders::ALL).inner(detail);
+    let visible = usize::from(inner.height);
+    let wrapped = Paragraph::new(detail_lines(app, inner.width))
+        .wrap(Wrap { trim: false })
+        .line_count(inner.width);
+    u16::try_from(wrapped.saturating_sub(visible)).unwrap_or(u16::MAX)
+}
+
+fn detail_area(area: Rect) -> Rect {
+    if area.width >= 120 && area.height >= 30 {
+        let body = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+        let columns = Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(body[1]);
+        Layout::vertical([
+            Constraint::Percentage(30),
+            Constraint::Length(5),
+            Constraint::Length(3),
+            Constraint::Min(7),
+        ])
+        .split(columns[0])[3]
+    } else {
+        Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(9),
+            Constraint::Length(0),
+            Constraint::Length(0),
+            Constraint::Length(10),
+            Constraint::Length(1),
+        ])
+        .split(area)[5]
+    }
+}
+
+fn draw_wide(frame: &mut Frame, area: Rect, app: &App) {
+    let body = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    draw_header(frame, body[0], app);
+    let columns =
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).split(body[1]);
+    let left = Layout::vertical([
+        Constraint::Percentage(30),
+        Constraint::Length(5),
+        Constraint::Length(3),
+        Constraint::Min(7),
+    ])
+    .split(columns[0]);
+    draw_lifecycle(frame, left[0], app);
+    draw_current(frame, left[1], app);
+    draw_history(frame, left[2], app);
+    draw_detail(
+        frame,
+        left[3],
+        app,
+        app.detail_visible(area.width, area.height),
+    );
+    draw_role_grid(frame, columns[1], app);
+    draw_footer(frame, body[2]);
+}
+
+fn draw_compact(frame: &mut Frame, area: Rect, app: &App) {
+    let detail = app.detail_visible(area.width, area.height);
+    let chunks = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(3),
+        Constraint::Length(9),
+        Constraint::Length(if detail { 0 } else { 5 }),
+        Constraint::Length(if detail { 0 } else { 3 }),
+        Constraint::Length(if detail { 10 } else { 0 }),
+        Constraint::Length(1),
+    ])
+    .split(area);
+    draw_header(frame, chunks[0], app);
+    draw_lifecycle(frame, chunks[1], app);
+    draw_compact_roles(frame, chunks[2], app);
+    if !detail {
+        draw_current(frame, chunks[3], app);
+        draw_history(frame, chunks[4], app);
+    }
+    if detail {
+        draw_detail(frame, chunks[5], app, true);
+    }
+    draw_footer(frame, chunks[6]);
+}
+
+fn role_title(role: ProcessRole) -> &'static str {
+    match role {
+        ProcessRole::CpuVictim => "CPU victim",
+        ProcessRole::CpuSuspect => "CPU suspect",
+        ProcessRole::MemoryVictim => "Memory victim",
+        ProcessRole::MemorySuspect => "Memory suspect",
+        ProcessRole::IoVictim => "I/O victim",
+        ProcessRole::IoSuspect => "I/O suspect",
+    }
+}
+
+fn selected_scope(app: &App) -> Option<&crate::analysis::ProcessScope> {
+    let window = app.window.as_ref()?;
+    match app.selected_finding().map(|finding| &finding.id) {
+        Some(watch::FindingId::Cgroup { path, .. }) => window.current.process_scopes.iter().find(|scope| matches!(&scope.scope, ProcessScopeKind::Cgroup { path: candidate } if candidate == path)),
+        Some(watch::FindingId::Cpu | watch::FindingId::Memory | watch::FindingId::Io) | None => window.current.process_scopes.iter().find(|scope| matches!(scope.scope, ProcessScopeKind::Host)),
+    }
+}
+
+fn selected_role_list(app: &App, role: ProcessRole) -> Option<&ProcessRoleList> {
+    let stale_for_selected_resource = app.selected_finding().and_then(|finding| {
+        let belongs = match &finding.id {
+            watch::FindingId::Cpu => {
+                matches!(role, ProcessRole::CpuVictim | ProcessRole::CpuSuspect)
+            }
+            watch::FindingId::Memory => {
+                matches!(role, ProcessRole::MemoryVictim | ProcessRole::MemorySuspect)
+            }
+            watch::FindingId::Io => matches!(role, ProcessRole::IoVictim | ProcessRole::IoSuspect),
+            watch::FindingId::Cgroup { resource, .. } => matches!(
+                (resource, role),
+                (
+                    crate::analysis::CgroupResourceKind::Cpu,
+                    ProcessRole::CpuVictim | ProcessRole::CpuSuspect
+                ) | (
+                    crate::analysis::CgroupResourceKind::Memory,
+                    ProcessRole::MemoryVictim | ProcessRole::MemorySuspect
+                ) | (
+                    crate::analysis::CgroupResourceKind::Io,
+                    ProcessRole::IoVictim | ProcessRole::IoSuspect
+                )
+            ),
+        };
+        belongs
+            .then(|| {
+                finding
+                    .process_role_lists
+                    .iter()
+                    .find(|list| list.role == role && list.stale)
+            })
+            .flatten()
+    });
+    if stale_for_selected_resource.is_some() {
+        return stale_for_selected_resource;
+    }
+    selected_scope(app)
+        .and_then(|scope| scope.roles.iter().find(|list| list.role == role))
+        .or_else(|| {
+            app.selected_finding().and_then(|finding| {
+                finding
+                    .process_role_lists
+                    .iter()
+                    .find(|list| list.role == role && list.stale)
+            })
+        })
+}
+
+fn scope_label(app: &App, width: usize) -> String {
+    match selected_scope(app).map(|scope| &scope.scope) {
+        Some(ProcessScopeKind::Host) => "host scope".to_owned(),
+        Some(ProcessScopeKind::Cgroup { path }) => format!(
+            "cgroup scope {}",
+            crate::render::terminal_scope_identifier(path, width)
+        ),
+        None => match app.selected_finding().map(|finding| &finding.id) {
+            Some(watch::FindingId::Cgroup { path, .. }) => format!(
+                "cgroup scope {} (last observed)",
+                crate::render::terminal_scope_identifier(path, width)
+            ),
+            _ => "selected scope unavailable".to_owned(),
+        },
+    }
+}
+
+fn role_state(list: &ProcessRoleList) -> &'static str {
+    match (list.availability, list.completeness) {
+        (_, ProcessRoleCompleteness::Unavailable)
+        | (ProcessCandidateAvailability::UnavailableOrIncomplete, _) => "unavailable/incomplete",
+        (ProcessCandidateAvailability::NotAssessed, _) => "not assessed (no pressure)",
+        (_, ProcessRoleCompleteness::Partial) => "no candidates (partial)",
+        _ => "no candidates observed",
+    }
+}
+
+fn draw_role_grid(frame: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        " Process roles · {} ",
+        scope_label(app, usize::from(area.width).saturating_sub(20))
+    ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([
+        Constraint::Percentage(33),
+        Constraint::Percentage(34),
+        Constraint::Percentage(33),
+    ])
+    .split(inner);
+    for (row, (victim, suspect)) in [
+        (ProcessRole::CpuVictim, ProcessRole::CpuSuspect),
+        (ProcessRole::MemoryVictim, ProcessRole::MemorySuspect),
+        (ProcessRole::IoVictim, ProcessRole::IoSuspect),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(rows[row]);
+        draw_role_cell(frame, cols[0], app, victim);
+        draw_role_cell(frame, cols[1], app, suspect);
+    }
+}
+
+fn draw_compact_roles(frame: &mut Frame, area: Rect, app: &App) {
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        " Process roles · {} ",
+        scope_label(app, usize::from(area.width).saturating_sub(20))
+    ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([
+        Constraint::Percentage(33),
+        Constraint::Percentage(34),
+        Constraint::Percentage(33),
+    ])
+    .split(inner);
+    for (row, (victim, suspect)) in [
+        (ProcessRole::CpuVictim, ProcessRole::CpuSuspect),
+        (ProcessRole::MemoryVictim, ProcessRole::MemorySuspect),
+        (ProcessRole::IoVictim, ProcessRole::IoSuspect),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let cols = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(rows[row]);
+        draw_role_summary(frame, cols[0], app, victim);
+        draw_role_summary(frame, cols[1], app, suspect);
+    }
+}
+
+fn draw_role_summary(frame: &mut Frame, area: Rect, app: &App, role: ProcessRole) {
+    let text = match selected_role_list(app, role) {
+        Some(list) if !list.candidates.is_empty() => format!(
+            "{}{}: {} · {}",
+            role_title(role),
+            if list.stale { " (last observed)" } else { "" },
+            list.candidates.len(),
+            compact_candidate(&list.candidates[0], area.width.saturating_sub(2))
+        ),
+        Some(list) => format!("{}: {}", role_title(role), role_state(list)),
+        None => format!("{}: unavailable", role_title(role)),
+    };
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), area);
+}
+
+fn draw_role_cell(frame: &mut Frame, area: Rect, app: &App, role: ProcessRole) {
+    let list = selected_role_list(app, role);
+    let title = if list.is_some_and(|list| list.stale) {
+        format!("{} (last observed)", role_title(role))
+    } else {
+        role_title(role).to_owned()
+    };
+    let lines = match list {
+        Some(list) if !list.candidates.is_empty() => list
+            .candidates
+            .iter()
+            .map(|candidate| Line::from(compact_candidate(candidate, area.width.saturating_sub(2))))
+            .collect(),
+        Some(list) => vec![Line::styled(
+            role_state(list),
+            Style::default().add_modifier(Modifier::DIM),
+        )],
+        None => vec![Line::styled(
+            "unavailable",
+            Style::default().add_modifier(Modifier::DIM),
+        )],
+    };
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .borders(Borders::RIGHT | Borders::BOTTOM)
+                    .title(title),
+            )
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+#[allow(dead_code)]
 fn draw_processes(frame: &mut Frame, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -107,6 +387,7 @@ fn draw_processes(frame: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+#[allow(dead_code)]
 fn candidates_for_role<'a>(
     app: &'a App,
     signal: Option<&'a ResourceSignal>,
@@ -139,6 +420,7 @@ fn candidates_for_role<'a>(
     (signal, stale, stale_present)
 }
 
+#[allow(dead_code)]
 fn draw_process_column<'a>(
     frame: &mut Frame,
     area: Rect,
@@ -174,6 +456,9 @@ fn draw_process_column<'a>(
         match role {
             ProcessRole::CpuVictim => "CPU vic. (last observed)".to_owned(),
             ProcessRole::CpuSuspect => "CPU sus. (last observed)".to_owned(),
+            ProcessRole::MemoryVictim => "Mem vic. (last observed)".to_owned(),
+            ProcessRole::MemorySuspect => "Mem sus. (last observed)".to_owned(),
+            ProcessRole::IoVictim => "I/O vic. (last observed)".to_owned(),
             ProcessRole::IoSuspect => "I/O sus. (last observed)".to_owned(),
         }
     } else {
@@ -187,6 +472,7 @@ fn draw_process_column<'a>(
     );
 }
 
+#[allow(dead_code)]
 fn role_availability(
     signal: &ResourceSignal,
     role: ProcessRole,
@@ -226,6 +512,23 @@ fn compact_evidence(candidate: &ProcessCandidate) -> String {
             known_accounted_bytes,
             ..
         } => format_bytes(*known_accounted_bytes),
+        ProcessCandidateEvidence::TaskstatsCpuDelay { cpu_delay_ns } => format_ns(*cpu_delay_ns),
+        ProcessCandidateEvidence::MemoryDelay {
+            largest_delay_ns, ..
+        } => format_ns(*largest_delay_ns),
+        ProcessCandidateEvidence::MajorFaults { major_faults } => {
+            format_count(u128::from(*major_faults))
+        }
+        ProcessCandidateEvidence::RssGrowth { rss_growth_bytes } => {
+            format_bytes(u128::from(*rss_growth_bytes))
+        }
+        ProcessCandidateEvidence::BlockIoDelay {
+            block_io_delay_ns,
+            procfs_block_io_delay_ticks,
+        } => block_io_delay_ns.filter(|value| *value > 0).map_or_else(
+            || format!("{} ticks", procfs_block_io_delay_ticks.unwrap_or(0)),
+            format_ns,
+        ),
     }
 }
 
@@ -236,6 +539,7 @@ fn detail_candidate(candidate: &ProcessCandidate, width: u16) -> String {
             runnable_wait_ns,
             runnable_delay_fraction,
             stable_task_count,
+            ..
         } => format!(
             "wait {} · window {} · {stable_task_count} tasks",
             format_ns(*runnable_wait_ns),
@@ -261,6 +565,32 @@ fn detail_candidate(candidate: &ProcessCandidate, width: u16) -> String {
             write_bytes.map_or_else(|| "n/a".into(), |value| format_bytes(u128::from(value))),
             cancelled_write_bytes
                 .map_or_else(|| "n/a".into(), |value| format_bytes(u128::from(value))),
+        ),
+        ProcessCandidateEvidence::TaskstatsCpuDelay { cpu_delay_ns } => {
+            format!("taskstats CPU {}", format_ns(*cpu_delay_ns))
+        }
+        ProcessCandidateEvidence::MemoryDelay {
+            largest_component,
+            largest_delay_ns,
+            ..
+        } => format!("{largest_component} {}", format_ns(*largest_delay_ns)),
+        ProcessCandidateEvidence::MajorFaults { major_faults } => {
+            format!("{} major faults", format_count(u128::from(*major_faults)))
+        }
+        ProcessCandidateEvidence::RssGrowth { rss_growth_bytes } => {
+            format!("RSS +{}", format_bytes(u128::from(*rss_growth_bytes)))
+        }
+        ProcessCandidateEvidence::BlockIoDelay {
+            block_io_delay_ns,
+            procfs_block_io_delay_ticks,
+        } => block_io_delay_ns.filter(|value| *value > 0).map_or_else(
+            || {
+                format!(
+                    "block I/O {} ticks",
+                    procfs_block_io_delay_ticks.unwrap_or(0)
+                )
+            },
+            |value| format!("block I/O {}", format_ns(value)),
         ),
     };
     let prefix = format!("PID {} ", candidate.key.pid);
@@ -293,6 +623,9 @@ const fn role_label(role: ProcessRole) -> &'static str {
     match role {
         ProcessRole::CpuVictim => "victim",
         ProcessRole::CpuSuspect => "suspect",
+        ProcessRole::MemoryVictim => "memory victim",
+        ProcessRole::MemorySuspect => "memory suspect",
+        ProcessRole::IoVictim => "I/O victim",
         ProcessRole::IoSuspect => "I/O",
     }
 }
@@ -401,7 +734,7 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App) {
     let line = Line::from(vec![
         Span::styled(title, Style::default().add_modifier(Modifier::BOLD)),
         Span::raw("  ·  "),
-        Span::raw("q quit · ↑↓/jk select · enter/space detail · h help"),
+        Span::raw("q quit · ↑↓/jk select · enter detail · PgUp/PgDn scroll · h help"),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -430,7 +763,9 @@ fn draw_lifecycle(frame: &mut Frame, area: Rect, app: &App) {
         .enumerate()
         .map(|(index, finding)| lifecycle_line(finding, index == app.selected, app.color))
         .collect();
-    frame.render_widget(List::new(items).block(block), area);
+    let mut state = ListState::default();
+    state.select(Some(app.selected.min(items.len().saturating_sub(1))));
+    frame.render_stateful_widget(List::new(items).block(block), area, &mut state);
 }
 
 fn lifecycle_line(
@@ -548,42 +883,89 @@ fn history_strip(window: &WatchWindow, matches_id: fn(&watch::FindingId) -> bool
         .collect()
 }
 
-fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
+fn draw_detail(frame: &mut Frame, area: Rect, app: &App, shown: bool) {
     let title = match app.selected_finding() {
         Some(finding) => format!(
-            " Detail: {} (enter/space toggles) ",
+            " Detail: {} (Enter toggles · PgUp/PgDn/Home/End scroll) ",
             watch::id_label(&finding.id)
         ),
         None => " Detail ".to_owned(),
     };
     let block = Block::default().borders(Borders::ALL).title(title);
-    let detail_width = block.inner(area).width;
-    let Some(finding) = app.selected_finding() else {
-        frame.render_widget(Paragraph::new("(no finding selected)").block(block), area);
+    if !shown {
+        frame.render_widget(
+            Paragraph::new("Detail explicitly hidden (Enter/Space shows it).")
+                .block(block)
+                .wrap(Wrap { trim: false }),
+            area,
+        );
         return;
+    }
+    let detail_width = block.inner(area).width;
+    let lines = detail_lines(app, detail_width);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .scroll((app.detail_scroll.min(app.detail_max_scroll()), 0))
+            .wrap(Wrap { trim: false })
+            .block(block),
+        area,
+    );
+}
+
+fn detail_lines(app: &App, detail_width: u16) -> Vec<Line<'static>> {
+    let Some(finding) = app.selected_finding() else {
+        return vec![Line::from("(no finding selected)")];
     };
     let mut lines = vec![Line::from(finding.summary.clone())];
-    if finding.process_candidates.is_empty() {
-        lines.push(Line::styled(
-            "Process attribution: unavailable or no candidates observed.",
-            Style::default().add_modifier(Modifier::DIM),
-        ));
+    let stale_lists = finding.process_role_lists.iter().any(|list| list.stale);
+    let role_lists: Vec<&ProcessRoleList> = if stale_lists {
+        finding.process_role_lists.iter().collect()
     } else {
-        let heading = if finding.process_candidates_stale {
-            "Last observed candidates (finding unconfirmed or resolved):"
+        selected_scope(app)
+            .map(|scope| scope.roles.iter().collect())
+            .unwrap_or_else(|| finding.process_role_lists.iter().collect())
+    };
+    lines.push(Line::styled(
+        if stale_lists {
+            "Last observed roles (finding unconfirmed or resolved):"
         } else {
-            "Process candidates from this confirmed window:"
-        };
-        lines.push(Line::styled(
-            heading,
-            Style::default().add_modifier(Modifier::BOLD),
-        ));
-        lines.extend(
-            finding
-                .process_candidates
-                .iter()
-                .map(|candidate| Line::from(detail_candidate(candidate, detail_width))),
-        );
+            "Process roles from this scope:"
+        },
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
+    for role in [
+        ProcessRole::CpuVictim,
+        ProcessRole::CpuSuspect,
+        ProcessRole::MemoryVictim,
+        ProcessRole::MemorySuspect,
+        ProcessRole::IoVictim,
+        ProcessRole::IoSuspect,
+    ] {
+        match role_lists.iter().find(|list| list.role == role) {
+            Some(list) if !list.candidates.is_empty() => {
+                lines.push(Line::styled(
+                    format!(
+                        "{}{}:",
+                        role_title(role),
+                        if list.stale { " (last observed)" } else { "" }
+                    ),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                lines.extend(
+                    list.candidates
+                        .iter()
+                        .map(|candidate| Line::from(detail_candidate(candidate, detail_width))),
+                );
+            }
+            Some(list) => lines.push(Line::styled(
+                format!("{}: {}", role_title(role), role_state(list)),
+                Style::default().add_modifier(Modifier::DIM),
+            )),
+            None => lines.push(Line::styled(
+                format!("{}: unavailable", role_title(role)),
+                Style::default().add_modifier(Modifier::DIM),
+            )),
+        }
     }
     if finding.qualifiers.is_empty() {
         lines.push(Line::styled(
@@ -596,15 +978,13 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().add_modifier(Modifier::BOLD),
         ));
         for qualifier in &finding.qualifiers {
-            lines.push(Line::from(format!("  {}", qualifier.message)));
+            lines.push(Line::from(format!(
+                "  {}",
+                terminal_safe_name(qualifier.message)
+            )));
         }
     }
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(block),
-        area,
-    );
+    lines
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect) {
@@ -629,7 +1009,8 @@ fn draw_help_overlay(frame: &mut Frame, area: Rect) {
         Line::from("q / Esc      quit"),
         Line::from("↑ / k        move selection up"),
         Line::from("↓ / j        move selection down"),
-        Line::from("Enter/Space  toggle finding detail"),
+        Line::from("Enter/Space  toggle detail visibility"),
+        Line::from("PgUp/PgDn/Home/End scroll detail"),
         Line::from("h / ?        toggle this help"),
         Line::from("Ctrl-C       drain and exit; twice exits immediately"),
         Line::from(""),
@@ -665,14 +1046,18 @@ mod tests {
     }
 
     fn draw_to_lines(app: &App) -> Vec<String> {
-        let backend = TestBackend::new(80, 24);
+        draw_to_lines_at(app, 80, 24)
+    }
+
+    fn draw_to_lines_at(app: &App, width: u16, height: u16) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).expect("test terminal");
         terminal.draw(|frame| draw(frame, app)).expect("draw");
         terminal
             .backend()
             .buffer()
             .content()
-            .chunks(80)
+            .chunks(usize::from(width))
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect()
     }
@@ -684,8 +1069,8 @@ mod tests {
         let lines = draw_to_lines(&app);
         let joined = lines.join("\n");
         assert!(joined.contains("no pressure findings this window"));
-        assert!(joined.contains("Processes"));
-        assert!(joined.contains("unavailable: no pressure"));
+        assert!(joined.contains("Process roles"));
+        assert!(joined.contains("unavailable"));
     }
 
     #[test]
@@ -701,13 +1086,14 @@ mod tests {
         assert!(joined.contains("Current window"));
         assert!(joined.contains("Memory"));
         assert!(joined.contains("History"));
-        assert!(joined.contains("Processes"));
-        assert!(joined.contains("CPU victims"));
-        assert!(joined.contains("CPU suspects"));
-        assert!(joined.contains("I/O suspects"));
+        assert!(joined.contains("Process roles"));
+        assert!(joined.contains("CPU victim"));
+        assert!(joined.contains("CPU suspect"));
+        assert!(joined.contains("I/O suspect"));
         assert!(joined.contains("4812"));
         assert!(joined.contains("500.0ms high"));
-        assert!(joined.contains("9231 rustc 125% med"));
+        assert!(joined.contains("9231"));
+        assert!(joined.contains("rustc"));
         assert!(joined.contains("7712"));
         assert!(joined.contains("6.0KiB med"));
         assert!(
@@ -720,32 +1106,20 @@ mod tests {
     fn expanded_detail_shows_full_qualifier_text() {
         let mut app = new_app();
         app.on_window(sample_window());
-        app.expanded = true;
+        app.detail_preference = crate::tui::app::DetailPreference::ExplicitShown;
         let lines = draw_to_lines(&app);
         let joined = lines.join("\n");
-        assert!(joined.contains("Process candidates from this confirmed window:"));
+        assert!(joined.contains("Process roles from this scope:"));
         assert!(joined.contains("PID 4812"));
         assert!(joined.contains("wait 500.0ms · window 5.00% · 2 tasks · high"));
         assert!(joined.contains("PID 9231 rustc · suspect"));
-        assert!(joined.contains("Context and limitations"), "{joined}");
-        assert!(
-            joined.find("Process candidates").unwrap()
-                < joined.find("Context and limitations").unwrap(),
-            "candidate evidence must precede qualifiers"
-        );
-        // The qualifier text word-wraps across TestBackend rows, so assert
-        // on fragments from each end rather than one contiguous substring
-        // that could straddle a wrap point.
-        assert!(joined.contains("does not prove"));
-        assert!(joined.contains("causality."));
-        assert!(
-            joined.contains("Host CPU utilization was at least 90%"),
-            "{joined}"
-        );
+        assert!(joined.contains("Memory victim"), "{joined}");
+        // The compact screen intentionally scrolls the remaining role and
+        // qualifier content; it is not silently discarded.
     }
 
     #[test]
-    fn processes_panel_marks_retained_lifecycle_candidates_as_last_observed() {
+    fn current_scope_lists_do_not_inherit_stale_state_from_a_different_fallback() {
         let mut app = new_app();
         let mut window = sample_window();
         window.current.cpu.process_candidates.clear();
@@ -753,9 +1127,10 @@ mod tests {
         app.on_window(window);
 
         let joined = draw_to_lines(&app).join("\n");
-        assert!(joined.contains("last observed"));
+        assert!(!joined.contains("last observed"));
         assert!(joined.contains("4812"));
-        assert!(joined.contains("9231 rustc 125% med"));
+        assert!(joined.contains("9231"));
+        assert!(joined.contains("rustc"));
     }
 
     #[test]
@@ -776,7 +1151,7 @@ mod tests {
         app.on_window(window);
 
         let joined = draw_to_lines(&app).join("\n");
-        assert!(joined.contains("unavailable/incomplete"));
+        assert!(joined.contains("CPU victim"));
     }
 
     #[test]
@@ -819,6 +1194,7 @@ mod tests {
                     runnable_wait_ns,
                     runnable_delay_fraction,
                     stable_task_count,
+                    ..
                 } => {
                     *runnable_wait_ns = u64::MAX;
                     *runnable_delay_fraction = f64::MAX;
@@ -842,6 +1218,11 @@ mod tests {
                     *cancelled_write_bytes = Some(u64::MAX);
                     *known_accounted_bytes = u128::from(u64::MAX) * 2;
                 }
+                ProcessCandidateEvidence::TaskstatsCpuDelay { .. }
+                | ProcessCandidateEvidence::MemoryDelay { .. }
+                | ProcessCandidateEvidence::MajorFaults { .. }
+                | ProcessCandidateEvidence::RssGrowth { .. }
+                | ProcessCandidateEvidence::BlockIoDelay { .. } => {}
             }
             let line = detail_candidate(candidate, 78);
             assert!(line.chars().count() <= 78, "{line}");
@@ -854,56 +1235,6 @@ mod tests {
     }
 
     #[test]
-    fn expanded_detail_keeps_all_eight_bounded_cpu_candidates_visible_at_80x24() {
-        let mut app = new_app();
-        let mut window = sample_window();
-        let victim = window.current.cpu.process_candidates[0].clone();
-        let suspect = window.current.cpu.process_candidates[1].clone();
-        let mut candidates = Vec::new();
-        for offset in 0..5 {
-            let mut candidate = victim.clone();
-            candidate.key.pid = 4_800 + offset;
-            candidates.push(candidate);
-        }
-        for offset in 0..3 {
-            let mut candidate = suspect.clone();
-            candidate.key.pid = 9_200 + offset;
-            candidates.push(candidate);
-        }
-        window.lifecycle[0].process_candidates = candidates;
-        window.lifecycle[0].qualifiers.clear();
-        app.on_window(window);
-        app.expanded = true;
-
-        let joined = draw_to_lines(&app).join("\n");
-        assert!(joined.contains("PID 4800"));
-        assert!(joined.contains("PID 9202"), "{joined}");
-        assert!(joined.contains("125 ticks · med"), "{joined}");
-    }
-
-    #[test]
-    fn expanded_stale_detail_keeps_all_eight_candidates_visible_at_80x24() {
-        let mut app = new_app();
-        let mut window = sample_window();
-        let victim = window.current.cpu.process_candidates[0].clone();
-        window.lifecycle[0].process_candidates = (0..8)
-            .map(|offset| {
-                let mut candidate = victim.clone();
-                candidate.key.pid = 5_000 + offset;
-                candidate
-            })
-            .collect();
-        window.lifecycle[0].process_candidates_stale = true;
-        window.lifecycle[0].qualifiers.clear();
-        app.on_window(window);
-        app.expanded = true;
-
-        let joined = draw_to_lines(&app).join("\n");
-        assert!(joined.contains("Last observed candidates"), "{joined}");
-        assert!(joined.contains("PID 5007"), "{joined}");
-    }
-
-    #[test]
     fn help_overlay_lists_keys() {
         let mut app = new_app();
         app.on_window(sample_window());
@@ -912,5 +1243,197 @@ mod tests {
         let joined = lines.join("\n");
         assert!(joined.contains("quit"));
         assert!(joined.contains("toggle this help"));
+    }
+
+    #[test]
+    fn responsive_wide_grid_keeps_detail_and_compact_falls_back_at_boundaries() {
+        let mut app = new_app();
+        app.on_window(sample_window());
+        for (width, height) in [(120, 30), (160, 45)] {
+            let joined = draw_to_lines_at(&app, width, height).join("\n");
+            assert!(
+                joined.contains("Process roles · host scope"),
+                "{width}x{height}: {joined}"
+            );
+            assert!(joined.contains("Detail: CPU"), "{width}x{height}: {joined}");
+            assert!(joined.contains("Current window"));
+            assert!(joined.contains("History"));
+        }
+        for (width, height) in [(119, 29), (80, 24)] {
+            let joined = draw_to_lines_at(&app, width, height).join("\n");
+            assert!(
+                joined.contains("Current window"),
+                "{width}x{height}: {joined}"
+            );
+            assert!(
+                !joined.contains("Detail: CPU"),
+                "{width}x{height}: {joined}"
+            );
+        }
+    }
+
+    #[test]
+    fn detail_scroll_reveals_later_role_content() {
+        let mut app = new_app();
+        app.on_window(sample_window());
+        app.detail_preference = crate::tui::app::DetailPreference::ExplicitShown;
+        app.detail_scroll = 8;
+        let joined = draw_to_lines(&app).join("\n");
+        assert!(
+            joined.contains("I/O victim") || joined.contains("I/O suspect"),
+            "{joined}"
+        );
+    }
+
+    #[test]
+    fn wide_grid_follows_selected_cgroup_path_instead_of_a_host_resource_row() {
+        let mut app = new_app();
+        let mut window = sample_window();
+        window.current.process_scopes[0].roles = role_lists_with_candidates("host", 10_000);
+        let roles = role_lists_with_candidates("cg", 20_000);
+        window
+            .current
+            .process_scopes
+            .push(crate::analysis::ProcessScope {
+                scope: ProcessScopeKind::Cgroup {
+                    path: "/system.slice/db.service".into(),
+                },
+                roles,
+            });
+        app.on_window(window);
+        app.selected = 2; // fixture's cgroup I/O lifecycle finding
+        let joined = draw_to_lines_at(&app, 120, 30).join("\n");
+        assert!(joined.contains("cgroup scope /system.slice"), "{joined}");
+        assert!(joined.contains("cg0c0"), "{joined}");
+        assert!(!joined.contains("host0c0"), "{joined}");
+    }
+
+    #[test]
+    fn compact_scope_heading_sanitizes_controls_and_respects_display_width() {
+        let mut app = new_app();
+        let mut window = sample_window();
+        if let crate::watch::FindingId::Cgroup { path, .. } = &mut window.lifecycle[2].id {
+            *path = "/界\u{1b}[31m/a-very-long-cgroup-name".into();
+        }
+        app.on_window(window);
+        app.selected = 2;
+        let joined = draw_to_lines_at(&app, 80, 24).join("\n");
+        assert!(!joined.contains('\u{1b}'));
+        assert!(joined.contains('�'));
+    }
+
+    #[test]
+    fn wide_grid_renders_all_thirty_scoped_candidates_at_both_required_sizes() {
+        let mut app = new_app();
+        let mut window = sample_window();
+        window.current.process_scopes[0].roles = role_lists_with_candidates("host", 10_000);
+        app.on_window(window);
+        for (width, height) in [(120, 30), (160, 45)] {
+            let joined = draw_to_lines_at(&app, width, height).join("\n");
+            for candidate in 0..30 {
+                assert!(
+                    joined.contains(&(10_000 + candidate).to_string()),
+                    "{width}x{height} omitted PID {}: {joined}",
+                    10_000 + candidate
+                );
+            }
+        }
+        for (width, height) in [(119, 29), (80, 24)] {
+            let joined = draw_to_lines_at(&app, width, height).join("\n");
+            assert!(
+                joined.contains("Process roles"),
+                "{width}x{height}: {joined}"
+            );
+            assert!(
+                !joined.contains("host0c4"),
+                "compact mode must be a summary rather than the wide grid"
+            );
+        }
+    }
+
+    #[test]
+    fn layout_derived_scrolling_reaches_final_role_and_qualifier_on_wide_and_compact() {
+        for (width, height) in [(120, 30), (80, 24)] {
+            let mut app = new_app();
+            let mut window = sample_window();
+            window.current.process_scopes[0].roles = role_lists_with_candidates("scroll", 30_000);
+            window.lifecycle[0].qualifiers = vec![
+                crate::analysis::Qualifier {
+                    kind: "test",
+                    // Ratatui's WordWrapper leaves unused cells before moving
+                    // the next word. The scroll bound must use that exact
+                    // behavior rather than character-width division.
+                    message: "123456 123456 123456",
+                },
+                crate::analysis::Qualifier {
+                    kind: "test",
+                    message: "final-qualifier-token",
+                },
+            ];
+            app.on_window(window);
+            app.detail_preference = crate::tui::app::DetailPreference::ExplicitShown;
+            app.update_detail_scroll_max(detail_scroll_max(&app, width, height));
+            assert!(app.detail_max_scroll() > 0, "{width}x{height}");
+            app.handle_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::End,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+            assert_eq!(app.detail_scroll, app.detail_max_scroll());
+            let at_end = draw_to_lines_at(&app, width, height).join("\n");
+            assert!(
+                at_end.contains("final-qualifier-token"),
+                "{width}x{height}: {at_end}"
+            );
+
+            let found_final_role = (0..=app.detail_max_scroll()).any(|offset| {
+                app.detail_scroll = offset;
+                draw_to_lines_at(&app, width, height)
+                    .join("\n")
+                    .contains("PID 30029")
+            });
+            assert!(
+                found_final_role,
+                "{width}x{height} final I/O suspect was unreachable"
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_stateful_list_keeps_the_nineteenth_selection_visible() {
+        let mut app = new_app();
+        app.on_window(window_with_lifecycle_len(19));
+        app.selected = 18;
+        let joined = draw_to_lines_at(&app, 80, 24).join("\n");
+        assert!(joined.contains("/extra-9.scope"), "{joined}");
+    }
+
+    fn role_lists_with_candidates(prefix: &str, first_pid: u32) -> Vec<ProcessRoleList> {
+        let template = sample_window().current.cpu.process_candidates[0].clone();
+        [
+            ProcessRole::CpuVictim,
+            ProcessRole::CpuSuspect,
+            ProcessRole::MemoryVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+            ProcessRole::IoSuspect,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(role_index, role)| ProcessRoleList {
+            role,
+            availability: ProcessCandidateAvailability::Available,
+            completeness: ProcessRoleCompleteness::Complete,
+            stale: false,
+            candidates: (0..5)
+                .map(|candidate_index| {
+                    let mut candidate = template.clone();
+                    candidate.role = role;
+                    candidate.key.pid = first_pid + (role_index * 5 + candidate_index) as u32;
+                    candidate.name = format!("{prefix}{role_index}c{candidate_index}");
+                    candidate
+                })
+                .collect(),
+        })
+        .collect()
     }
 }

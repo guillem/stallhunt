@@ -110,7 +110,7 @@ pub fn capabilities(
             cgroup_capability_explanation(cgroup),
         )),
         OutputFormat::Json => to_json(&CapabilitiesJson {
-            schema_version: 1,
+            schema_version: 2,
             tool_version: env!("CARGO_PKG_VERSION"),
             status: "observed",
             capabilities: CapabilitiesJsonValue {
@@ -154,6 +154,7 @@ pub(crate) struct HuntAnalyses {
     pub(crate) memory: Option<crate::analysis::MemoryAnalysisResult>,
     pub(crate) io: Option<crate::analysis::IoAnalysisResult>,
     pub(crate) cgroup: Option<crate::analysis::CgroupAnalysisResult>,
+    pub(crate) process_scopes: Vec<crate::analysis::ProcessScope>,
 }
 
 pub(crate) fn analyze_hunt(result: &HuntObservation) -> HuntAnalyses {
@@ -173,11 +174,53 @@ pub(crate) fn analyze_hunt(result: &HuntObservation) -> HuntAnalyses {
         .as_ref()
         .and_then(|cgroup| cgroup.observation.as_ref().ok())
         .map(|observation| analysis::analyze_cgroups(Some(observation)));
+    let cpu_pressure = cpu.findings.first().and_then(|finding| {
+        (finding.kind == AssessmentKind::CpuContention).then_some(finding.resource_confidence)
+    });
+    let memory_pressure = memory
+        .as_ref()
+        .and_then(|result| result.findings.first())
+        .and_then(|finding| {
+            matches!(
+                finding.kind,
+                crate::analysis::MemoryAssessmentKind::Pressure
+                    | crate::analysis::MemoryAssessmentKind::ReclaimPressure
+                    | crate::analysis::MemoryAssessmentKind::SwapPressure
+                    | crate::analysis::MemoryAssessmentKind::PossibleThrashing
+            )
+            .then_some(finding.resource_confidence)
+        });
+    let io_pressure = io
+        .as_ref()
+        .and_then(|result| result.findings.first())
+        .and_then(|finding| {
+            (finding.kind == IoAssessmentKind::Pressure).then_some(finding.resource_confidence)
+        });
+    let process_io = result
+        .io
+        .as_ref()
+        .and_then(|value| value.processes.as_ref().ok());
+    let mut process_scopes = vec![analysis::host_process_scope(
+        result.cpu.as_ref().ok(),
+        process_io,
+        cpu_pressure,
+        memory_pressure,
+        io_pressure,
+    )];
+    process_scopes.extend(analysis::cgroup_process_scopes(
+        result
+            .cgroup
+            .as_ref()
+            .and_then(|value| value.observation.as_ref().ok()),
+        result.cpu.as_ref().ok(),
+        process_io,
+    ));
     HuntAnalyses {
         cpu,
         memory,
         io,
         cgroup,
+        process_scopes,
     }
 }
 
@@ -239,7 +282,87 @@ fn hunt_text(options: &HuntOptions, result: HuntObservation) -> String {
         }
         text.push_str(&chain_text);
     }
+    // Legacy text continues to render the existing finding fields; schema-2
+    // JSON carries the canonical complete role collection.
+    text.push_str(&process_scope_hunt_text(&analyses.process_scopes));
     text
+}
+
+/// Legacy/piped hunt and replay output is intentionally less dense than JSON,
+/// but it still exposes every canonical role instead of silently dropping new
+/// attribution classes.
+fn process_scope_hunt_text(scopes: &[crate::analysis::ProcessScope]) -> String {
+    use crate::analysis::{ProcessCandidateAvailability, ProcessRole};
+    if scopes.is_empty() {
+        return "\nProcess roles\n  unavailable\n".into();
+    }
+    let mut output = String::new();
+    for scope in scopes {
+        let label = match &scope.scope {
+            crate::analysis::ProcessScopeKind::Host => "host scope".to_owned(),
+            crate::analysis::ProcessScopeKind::Cgroup { path } => {
+                format!("cgroup scope {}", terminal_scope_identifier(path, 80))
+            }
+        };
+        output.push_str(&format!("\nProcess roles ({label})\n"));
+        for role in [
+            ProcessRole::CpuVictim,
+            ProcessRole::CpuSuspect,
+            ProcessRole::MemoryVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+            ProcessRole::IoSuspect,
+        ] {
+            let list = scope.roles.iter().find(|list| list.role == role);
+            let title = match role {
+                ProcessRole::CpuVictim => "CPU victims",
+                ProcessRole::CpuSuspect => "CPU suspects",
+                ProcessRole::MemoryVictim => "Memory victims",
+                ProcessRole::MemorySuspect => "Memory suspects",
+                ProcessRole::IoVictim => "I/O victims",
+                ProcessRole::IoSuspect => "I/O suspects",
+            };
+            match list {
+                Some(list) if !list.candidates.is_empty() => {
+                    let candidates = list
+                        .candidates
+                        .iter()
+                        .map(|candidate| {
+                            format!(
+                                "{} [{}]: {} ({:?}; {:?})",
+                                crate::cpu::sanitized_process_name(&candidate.name),
+                                candidate.key.pid,
+                                candidate.label,
+                                candidate.confidence,
+                                candidate.evidence
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    output.push_str(&format!(
+                        "  {title}{}: {candidates}\n",
+                        if list.completeness == crate::analysis::ProcessRoleCompleteness::Partial {
+                            " (partial)"
+                        } else {
+                            ""
+                        }
+                    ));
+                }
+                Some(list) => {
+                    let state = match list.availability {
+                        ProcessCandidateAvailability::Available => "no positive candidates",
+                        ProcessCandidateAvailability::UnavailableOrIncomplete => {
+                            "unavailable or incomplete"
+                        }
+                        ProcessCandidateAvailability::NotAssessed => "not assessed",
+                    };
+                    output.push_str(&format!("  {title}: {state}\n"));
+                }
+                None => output.push_str(&format!("  {title}: unavailable\n")),
+            }
+        }
+    }
+    output
 }
 
 fn evidence_chain_hunt_text(analyses: &HuntAnalyses) -> Option<String> {
@@ -281,7 +404,7 @@ pub(crate) fn evidence_chains_from_analyses(
 pub(crate) fn chain_evidence_details(evidence: &crate::analysis::ChainEvidence) -> String {
     let mut parts = Vec::new();
     if let Some(path) = &evidence.path {
-        parts.push(format!("cgroup {path}"));
+        parts.push(format!("cgroup {}", terminal_scope_identifier(path, 80)));
     }
     parts.push(format!(
         "memory PSI some {:.2}%",
@@ -341,7 +464,7 @@ fn cgroup_hunt_text(analysis: Option<&crate::analysis::CgroupAnalysisResult>) ->
     for finding in pressured {
         output.push_str(&format!(
             "- {} · {} · severity {} · confidence {}",
-            finding.path,
+            terminal_scope_identifier(&finding.path, 80),
             finding.summary,
             severity_name(finding.severity),
             confidence_name(finding.resource_confidence)
@@ -625,7 +748,7 @@ fn memory_finding_text(
         optional_counter(vm_delta(VmstatCounter::SwapOut)),
         optional_counter(vm_delta(VmstatCounter::MajorPageFaults)),
     ));
-    output.push_str("Attribution: unavailable (host-wide evidence only)\n");
+    output.push_str("Attribution: see scoped process roles; host-wide resource evidence alone is not process attribution\n");
     if !finding.qualifiers.is_empty() {
         output.push_str("Context and limitations:\n");
         for qualifier in &finding.qualifiers {
@@ -798,7 +921,7 @@ fn io_finding_text(
                 ));
             }
         }
-        output.push_str("Affected workloads: unavailable (this telemetry does not identify I/O stall victims or map processes to devices)\n");
+        output.push_str("Affected workloads: see scoped delay roles; candidates do not map processes to devices or prove harm\n");
     } else {
         output.push_str(
             "Device and process activity candidates: not ranked without an I/O pressure finding\n",
@@ -1028,6 +1151,44 @@ pub(crate) fn terminal_name(name: &str) -> String {
     }
 }
 
+/// Safe bounded presentation for scope identifiers (especially cgroup paths).
+/// Bounds use terminal display cells rather than bytes, and controls cannot
+/// alter terminal state.
+pub(crate) fn terminal_scope_identifier(value: &str, width: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    let sanitized: String = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                '\u{fffd}'
+            } else {
+                character
+            }
+        })
+        .collect();
+    if sanitized.is_empty() {
+        "<unnamed-scope>".to_owned()
+    } else if width == 0 {
+        String::new()
+    } else if sanitized.width() <= width {
+        sanitized
+    } else {
+        let content_width = width.saturating_sub('…'.width().unwrap_or(1));
+        let mut output = String::new();
+        let mut used = 0;
+        for character in sanitized.chars() {
+            let cell_width = character.width().unwrap_or(0);
+            if used + cell_width > content_width {
+                break;
+            }
+            output.push(character);
+            used += cell_width;
+        }
+        output.push('…');
+        output
+    }
+}
+
 fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, serde_json::Error> {
     let cpu = cpu_json_parts(result.psi, result.cpu);
     let memory = memory_json_parts(result.memory.as_ref());
@@ -1044,6 +1205,41 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
         &cgroup.analysis.findings,
     );
     let findings = analysis::ranked_findings_with_io(cpu.analysis, memory.analysis, io.analysis);
+    let mut process_scopes = vec![analysis::host_process_scope(
+        cpu.cpu.as_ref(),
+        io.processes.as_ref(),
+        findings.iter().find_map(|finding| match finding {
+            crate::analysis::Finding::Cpu(value) if value.kind == AssessmentKind::CpuContention => {
+                Some(value.resource_confidence)
+            }
+            _ => None,
+        }),
+        findings.iter().find_map(|finding| match finding {
+            crate::analysis::Finding::Memory(value)
+                if matches!(
+                    value.kind,
+                    crate::analysis::MemoryAssessmentKind::Pressure
+                        | crate::analysis::MemoryAssessmentKind::ReclaimPressure
+                        | crate::analysis::MemoryAssessmentKind::SwapPressure
+                        | crate::analysis::MemoryAssessmentKind::PossibleThrashing
+                ) =>
+            {
+                Some(value.resource_confidence)
+            }
+            _ => None,
+        }),
+        findings.iter().find_map(|finding| match finding {
+            crate::analysis::Finding::Io(value) if value.kind == IoAssessmentKind::Pressure => {
+                Some(value.resource_confidence)
+            }
+            _ => None,
+        }),
+    )];
+    process_scopes.extend(analysis::cgroup_process_scopes(
+        cgroup.observation.as_ref(),
+        cpu.cpu.as_ref(),
+        io.processes.as_ref(),
+    ));
     let mut qualifiers = cpu.qualifiers;
     qualifiers.extend(memory.qualifiers);
     qualifiers.extend(io.qualifiers);
@@ -1070,7 +1266,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
         None
     };
     to_json(&HuntJson {
-        schema_version: 1,
+        schema_version: 2,
         tool_version: env!("CARGO_PKG_VERSION"),
         status,
         requested_observation: RequestedObservation {
@@ -1108,6 +1304,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
         findings,
         evidence_chains,
         cgroup_findings: cgroup.analysis.findings,
+        process_scopes,
         qualifiers,
     })
 }
@@ -1453,6 +1650,7 @@ struct HuntJson<'a> {
     findings: Vec<crate::analysis::Finding>,
     evidence_chains: Vec<crate::analysis::EvidenceChain>,
     cgroup_findings: Vec<crate::analysis::CgroupFinding>,
+    process_scopes: Vec<crate::analysis::ProcessScope>,
     qualifiers: Vec<QualifierJson<'a>>,
 }
 
@@ -1474,6 +1672,14 @@ struct ObservationJson {
     process_collection_issues: Option<crate::cpu::ProcessCollectionIssues>,
     scheduler_delay_candidates: Option<Vec<crate::cpu::ProcessSchedulerDelayInterval>>,
     schedstat_collection_issues: Option<crate::cpu::SchedstatCollectionIssues>,
+    process_resource_evidence: Option<Vec<crate::cpu::ProcessResourceInterval>>,
+    task_stat_collection_issues: Option<crate::cpu::TaskStatCollectionIssues>,
+    taskstats: Option<Vec<crate::taskstats::TaskstatsInterval>>,
+    taskstats_collection_issues: Option<crate::taskstats::TaskstatsCollectionIssues>,
+    taskstats_capability: Option<crate::taskstats::TaskstatsCapability>,
+    delay_accounting: Option<crate::taskstats::DelayAccountingState>,
+    process_resource_capability: Option<crate::cpu::ProcessResourceCapability>,
+    task_stat_capability: Option<crate::cpu::TaskStatCapability>,
     memory_psi_duration_us: Option<u128>,
     memory_psi: Option<MemoryPsiJson>,
     memory_context_duration_us: Option<u128>,
@@ -1597,31 +1803,43 @@ impl ObservationJson {
         let process_io_duration_us = process_io.as_ref().map(|value| value.elapsed.as_micros());
         let cgroup_duration_us = cgroup.as_ref().map(|value| value.elapsed.as_micros());
         match cpu {
-            Some(cpu) => Self {
-                psi_duration_us,
-                cpu_psi,
-                cpu_duration_us: Some(cpu.elapsed.as_micros()),
-                host_cpu: Some(cpu.host),
-                loadavg: cpu.load,
-                loadavg_availability: Some(cpu.load_availability),
-                clock_ticks_per_second: Some(cpu.clock_ticks_per_second),
-                processes: Some(cpu.processes),
-                process_collection_issues: Some(cpu.collection_issues),
-                scheduler_delay_candidates: Some(cpu.scheduler_delay_candidates),
-                schedstat_collection_issues: Some(cpu.schedstat_collection_issues),
-                memory_psi_duration_us,
-                memory_psi,
-                memory_context_duration_us,
-                memory_context,
-                io_psi_duration_us,
-                io_psi,
-                diskstats_duration_us,
-                diskstats,
-                process_io_duration_us,
-                process_io,
-                cgroup_duration_us,
-                cgroup,
-            },
+            Some(cpu) => {
+                let process_resource_capability = crate::cpu::process_resource_capability(&cpu);
+                let task_stat_capability = crate::cpu::task_stat_capability(&cpu);
+                Self {
+                    psi_duration_us,
+                    cpu_psi,
+                    cpu_duration_us: Some(cpu.elapsed.as_micros()),
+                    host_cpu: Some(cpu.host),
+                    loadavg: cpu.load,
+                    loadavg_availability: Some(cpu.load_availability),
+                    clock_ticks_per_second: Some(cpu.clock_ticks_per_second),
+                    processes: Some(cpu.processes),
+                    process_collection_issues: Some(cpu.collection_issues),
+                    scheduler_delay_candidates: Some(cpu.scheduler_delay_candidates),
+                    schedstat_collection_issues: Some(cpu.schedstat_collection_issues),
+                    process_resource_evidence: Some(cpu.process_resource_evidence),
+                    task_stat_collection_issues: Some(cpu.task_stat_collection_issues),
+                    taskstats: Some(cpu.taskstats),
+                    taskstats_collection_issues: Some(cpu.taskstats_collection_issues),
+                    taskstats_capability: Some(cpu.taskstats_capability),
+                    delay_accounting: Some(cpu.delay_accounting),
+                    process_resource_capability: Some(process_resource_capability),
+                    task_stat_capability: Some(task_stat_capability),
+                    memory_psi_duration_us,
+                    memory_psi,
+                    memory_context_duration_us,
+                    memory_context,
+                    io_psi_duration_us,
+                    io_psi,
+                    diskstats_duration_us,
+                    diskstats,
+                    process_io_duration_us,
+                    process_io,
+                    cgroup_duration_us,
+                    cgroup,
+                }
+            }
             None => Self {
                 psi_duration_us,
                 cpu_psi,
@@ -1634,6 +1852,14 @@ impl ObservationJson {
                 process_collection_issues: None,
                 scheduler_delay_candidates: None,
                 schedstat_collection_issues: None,
+                process_resource_evidence: None,
+                task_stat_collection_issues: None,
+                taskstats: None,
+                taskstats_collection_issues: None,
+                taskstats_capability: None,
+                delay_accounting: None,
+                process_resource_capability: None,
+                task_stat_capability: None,
                 memory_psi_duration_us,
                 memory_psi,
                 memory_context_duration_us,
@@ -1779,7 +2005,8 @@ pub(crate) mod tests {
     };
     use crate::cpu::{
         CpuProcessObservation, HostCpuInterval, LoadAverageAvailability, LoadAverageRaw,
-        ProcessCollectionIssues, ProcessCpuInterval, ProcessKey, ProcessSchedulerDelayInterval,
+        ProcessCollectionIssues, ProcessCpuInterval, ProcessKey, ProcessResourceInterval,
+        ProcessSchedulerDelayInterval,
     };
     use crate::io::{
         BlockDeviceKey, DiskstatsInterval, DiskstatsIntervalIssues, DiskstatsObservation,
@@ -1790,6 +2017,14 @@ pub(crate) mod tests {
         CpuPsiInterval, CpuPsiRaw, IoPsiInterval, IoPsiLine, IoPsiLineInterval, IoPsiRaw,
         MemoryPsiInterval, MemoryPsiLine, MemoryPsiLineInterval, MemoryPsiRaw,
     };
+
+    #[test]
+    fn scope_identifiers_replace_controls_and_truncate_by_display_width() {
+        let rendered = terminal_scope_identifier("/界\u{1b}[31m/control", 8);
+        assert!(!rendered.contains('\u{1b}'));
+        assert!(rendered.contains('�'));
+        assert!(unicode_width::UnicodeWidthStr::width(rendered.as_str()) <= 8);
+    }
 
     fn render_hunt<F>(options: &HuntOptions, observe: F) -> String
     where
@@ -1870,10 +2105,16 @@ pub(crate) mod tests {
                     cpu_ticks: 50,
                     cpu_fraction_of_one: 0.4,
                 }],
+                process_resource_evidence: Vec::new(),
                 collection_issues: ProcessCollectionIssues::default(),
                 scheduler_delay_candidates: Vec::new(),
                 schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+                task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
                 schedstat_capability: crate::cpu::SchedstatCapability::Unsupported,
+                taskstats: Vec::new(),
+                taskstats_collection_issues: Default::default(),
+                taskstats_capability: Default::default(),
+                delay_accounting: Default::default(),
             }),
             memory: None,
             io: None,
@@ -2121,6 +2362,12 @@ pub(crate) mod tests {
             "cpu_quota_throttle"
         );
         assert_eq!(json["cgroup_findings"][0]["mechanism_confidence"], "low");
+        assert_eq!(json["process_scopes"][1]["scope"]["scope"], "cgroup");
+        assert_eq!(
+            json["process_scopes"][1]["scope"]["path"],
+            "/workload.service"
+        );
+        assert_eq!(json["process_scopes"][1]["roles"][0]["role"], "cpu_victim");
     }
 
     #[test]
@@ -2141,7 +2388,7 @@ pub(crate) mod tests {
             text.contains("Device activity candidates (same window only; not mapped to workloads)")
         );
         assert!(text.contains("not proven causal or device-mapped"));
-        assert!(text.contains("Affected workloads: unavailable"));
+        assert!(text.contains("Affected workloads: see scoped delay roles"));
 
         let mut healthy = hunt_observation();
         healthy.io = Some(io_hunt_observation(0.005));
@@ -2157,6 +2404,54 @@ pub(crate) mod tests {
         assert!(text.contains("No meaningful block-I/O pressure observed"));
         assert!(text.contains("activity counters do not override that verdict"));
         assert!(text.contains("not ranked without an I/O pressure finding"));
+    }
+
+    #[test]
+    fn memory_and_io_renderers_do_not_deny_positive_scoped_roles() {
+        let mut observation = hunt_legacy_full_fixture_observation();
+        observation
+            .cpu
+            .as_mut()
+            .unwrap()
+            .process_resource_evidence
+            .push(ProcessResourceInterval {
+                key: ProcessKey {
+                    pid: 99,
+                    start_time_ticks: 7,
+                },
+                name: "delayed-worker".into(),
+                leader_rss_bytes: Some(8_192),
+                rss_growth_bytes: Some(4_096),
+                minor_faults: Some(3),
+                major_faults: Some(2),
+                stable_task_count: 1,
+                block_io_delay_ticks: Some(5),
+            });
+        let text = render_hunt(
+            &HuntOptions {
+                duration_ms: 10_000,
+                output: OutputFormat::Text,
+                verbose: false,
+                no_color: false,
+            },
+            |_| observation,
+        );
+
+        assert!(
+            text.contains("Memory victims (partial): delayed-worker [99]"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Memory suspects: delayed-worker [99]"),
+            "{text}"
+        );
+        assert!(
+            text.contains("I/O victims (partial): delayed-worker [99]"),
+            "{text}"
+        );
+        assert!(!text.contains("Attribution: unavailable"), "{text}");
+        assert!(!text.contains("Affected workloads: unavailable"), "{text}");
+        assert!(text.contains("do not map processes to devices or prove harm"));
     }
 
     #[test]
@@ -2315,7 +2610,7 @@ pub(crate) mod tests {
             text.starts_with("Memory pressure observed with correlated direct reclaim activity")
         );
         assert!(text.contains("Verdict: reclaim pressure · severity moderate"));
-        assert!(text.contains("Attribution: unavailable (host-wide evidence only)"));
+        assert!(text.contains("Attribution: see scoped process roles"));
         assert!(text.contains("occupancy is context and is not itself evidence"));
 
         let mut observation = hunt_observation();
@@ -3185,6 +3480,7 @@ pub(crate) mod tests {
                     cpu_fraction_of_one: 0.3,
                 },
             ],
+            process_resource_evidence: Vec::new(),
             collection_issues: ProcessCollectionIssues::default(),
             scheduler_delay_candidates: vec![ProcessSchedulerDelayInterval {
                 key: ProcessKey {
@@ -3199,7 +3495,12 @@ pub(crate) mod tests {
                 timeslices: 1,
             }],
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+            task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
+            taskstats: Vec::new(),
+            taskstats_collection_issues: Default::default(),
+            taskstats_capability: Default::default(),
+            delay_accounting: Default::default(),
         };
         let output = render_hunt(
             &HuntOptions {
@@ -3290,6 +3591,7 @@ pub(crate) mod tests {
                     cpu_fraction_of_one: 0.3,
                 },
             ],
+            process_resource_evidence: Vec::new(),
             collection_issues: ProcessCollectionIssues::default(),
             scheduler_delay_candidates: vec![ProcessSchedulerDelayInterval {
                 key: ProcessKey {
@@ -3304,7 +3606,12 @@ pub(crate) mod tests {
                 timeslices: 1,
             }],
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+            task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
+            taskstats: Vec::new(),
+            taskstats_collection_issues: Default::default(),
+            taskstats_capability: Default::default(),
+            delay_accounting: Default::default(),
         };
         HuntObservation {
             psi: Ok(observation),

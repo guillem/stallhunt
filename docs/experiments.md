@@ -378,8 +378,9 @@ tools/measure-overhead.sh --binary target/release/stallhunt --duration 1 --repet
 ```
 
 Helpers were owned and cleaned up. CPU PID (4,096), schedstat task (16,384),
-and process-I/O (1,024) caps were not reached. The cgroup collector's 256-PID
-selection cap was already active on the baseline host.
+and process-I/O (1,024) caps were not reached. This pre-v0.4 run used the
+then-current 256-PID cgroup selection cap, so it is historical context only;
+it does not validate the v0.4 512-PID/member or taskstats bounds.
 
 ### Expected behavior
 
@@ -425,6 +426,143 @@ Do not spawn thousands of helper PIDs with bash background `sleep`; the
 Python many_pids helper is the supported path. Measuring the 4,096-PID or
 16,384-task caps would require a dedicated, quota-aware setup and is not
 justified by this workstation result.
+
+## EXP-0010: v0.4 controlled taskstats and scoped-role validation
+
+Date: 2026-08-24. Commits: `872c4cd`, `b2e3e40`, and `5699fd4` plus this
+documentation update.
+
+Host/kernel: Fedora workstation, Linux 7.2.0-ogc4.1.fc44.x86_64, 8 logical
+CPUs, 16 GiB RAM, NVMe through dm-crypt. Relevant configuration:
+`kernel.task_delayacct=1` was enabled by the operator before all owned
+workloads. Stallhunt first ran as UID 1000 without file capabilities, then the
+operator granted the already-built acceptance binary `CAP_NET_ADMIN`; Stallhunt
+did not enable delay accounting or elevate itself.
+
+### Rootless degradation
+
+The enabled state is reported independently as `delay_accounting: enabled`,
+but TASKSTATS GET is permission-gated on this host. Two bounded endpoint
+attempts returned permission denial, after which Stallhunt reported
+`taskstats_capability: permission_denied`, queried no TGIDs, and retained its
+procfs baseline. A separate run with 512 newly started sleeper processes
+selected exactly the lowest 512 TGIDs, reported `tgid_limit_reached: true`,
+and again stopped on the two endpoint permission denials without exhausting
+the time or 1 MiB reply budgets. This passes the required rootless degradation
+behavior.
+
+The ignored CPU acceptance produced 46.51% exact host CPU PSI `some`, a severe
+finding, five victim candidates, and three suspects. The sleeping-thread case
+completed, but observed 1.02% host CPU PSI interference and therefore did not
+assert a no-contention verdict. The bounded I/O workload produced 12.69% exact
+host I/O PSI `some` and two procfs block-I/O delay victims; its existing
+acceptance assertion deliberately degraded because unrelated
+`/proc/<pid>/io` reads made process-I/O capability partial. Neither result
+contained taskstats evidence because GET remained denied in this phase.
+
+### Permitted positive evidence
+
+With the operator-provided capability, a healthy smoke queried 336 TGIDs at
+both endpoints and reported UAPI version 17 with every required delay field.
+No permission, timeout, malformed-protocol, churn, reply-budget, or time-budget
+failure occurred.
+
+Three bounded workloads then produced direct evidence in both host and exact
+cgroup scopes:
+
+- CPU: nine busy workers produced 16.66% host and 13.86% child-cgroup PSI
+  `some`. Five stable direct members ranked as victims in both scopes, with
+  taskstats CPU-delay corroboration up to 672 ms. The generated child was
+  removed after all workers were reaped.
+- Memory: the existing delegated 128/256 MiB harness produced 29.38% host and
+  35.58% child-cgroup PSI `some` plus a scoped swap-pressure finding. One
+  stable `stress-ng-vm` member ranked in both scopes from 955 ms reclaim,
+  245 ms swap-in, 9 ms thrashing, and a small write-protect-copy delay. The
+  harness passed and removed its child.
+- I/O: two direct/synchronous filesystem workers produced 11.70% host and
+  11.75% child-cgroup PSI `some`. Both stable workers ranked in both scopes
+  from 1.49–1.52 s taskstats block-I/O delay, corroborated by procfs delay
+  ticks. The generated cgroup and filesystem directory were removed.
+
+Ancestor scopes may repeat these processes by design and were not summed. The
+results establish scoped candidates and accounting transport, not process-to-
+device mapping or cross-scope causality.
+
+### Bounds and overhead
+
+Release-binary overhead with 64 extra processes and 512 extra threads was
+1.10–1.13 s wall time, 0.01–0.03 s user time, 0.08–0.10 s system time, and
+7,004–7,904 KiB maximum RSS for a requested one-second observation. A true
+512-extra-process profile was 1.14–1.17 s wall time, 0.02–0.03 s user time,
+0.11–0.14 s system time, and 8,476–11,040 KiB maximum RSS. It exposed 859 PIDs
+and kept the general process walk within its bounds. This was the rootless/
+procfs phase.
+
+After taskstats permission and equivalent-cgroup-mount handling were active, a
+stable 512-extra-process run selected exactly 512 TGIDs, completed 1,024 GETs,
+and retained 512 intervals. The cgroup membership walk also reached its
+documented 512-PID ceiling, retained 97 mapped groups, and used 4,626 reads and
+928,354 bytes. Neither collector exhausted its time, reply, read, or byte
+budget, and no identity churn or malformed data occurred.
+
+Three capable release-binary repetitions took 1.20–1.23 s wall time,
+0.04–0.05 s user time, 0.15–0.17 s system time, and 10,216–14,240 KiB maximum
+RSS for a requested one-second observation. This is accepted as the v0.4
+controlled-host 512-TGID/member-ceiling overhead result; timings remain
+host-specific evidence, not a portable CI threshold.
+
+### Compatibility fix and cleanup
+
+The host exposes the same cgroupfs device and hierarchy root at both
+`/sys/fs/cgroup` and `/run/bpftune/cgroupv2`. Commit `5699fd4` now collapses
+only equivalent device/root aliases and retains device identity across
+endpoints; different devices or roots remain ambiguous. Deterministic tests,
+locked Clippy, the full locked suite, and live collection of 97 groups passed.
+
+The temporary file capability was removed by cleaning and rebuilding only
+Cargo's release artifacts; `getcap target/release/stallhunt` is empty. All
+owned workload children and temporary directories were removed. The operator
+restored the original `kernel.task_delayacct=0` state after the workloads, and
+Stallhunt verified it. Normal PR/release authorization remains open.
+
+## EXP-0009: v0.4 taskstats and terminal-validation status
+
+Date: 2026-08-24.
+
+### Result
+
+Deterministic tests cover the bounded taskstats selection/query loop with 512
+lowest TGIDs, identity bracketing, PID reuse/churn, `ESRCH`, permission,
+unsupported, timeout, malformed, reply-budget, total-time, version, padding,
+nesting, and counter-regression outcomes. The local PTY command
+`tools/check-tui-pty.sh --binary target/debug/stallhunt` passed: one bounded
+TUI window emitted alternate-screen enter/leave sequences and restored the
+original `stty -g` state.
+
+### Controlled-host gap
+
+At the time of EXP-0009, this was not the v0.4 release acceptance experiment:
+no operator-approved host had enabled `kernel.task_delayacct` before owned
+workloads or recorded v0.4 512-TGID/member overhead. EXP-0010 subsequently
+closed the enabled-state, rootless degradation, positive CPU/block-I/O/memory
+host-and-cgroup evidence, capable 512-TGID query, and 512-PID cgroup-membership
+ceiling gates. The historical 256-member EXP-0007 measurement did not satisfy
+them; EXP-0010 is the controlling live evidence.
+
+### Dependency-audit status
+
+On 2026-08-24, `cargo audit` from cargo-audit 0.22.2 scanned the full current
+`Cargo.lock` and exited 0 with three allowed warnings: unmaintained `paste`
+(`RUSTSEC-2024-0436`) and unsound `lru` (`RUSTSEC-2026-0002` and
+`RUSTSEC-2026-0253`). The latter dependencies are transitive through ratatui
+0.29. This cargo-audit version does not accept the planned `--omit=dev` flag,
+so no dev-dependency-excluded claim is made. Ratatui 0.30.0 requires Rust 1.86,
+and 0.30.1 or newer requires Rust 1.88, so all conflict with the Rust 1.85
+MSRV. Technical review accepted the warnings for v0.4.0 without suppression:
+ratatui's production `lru` use is limited to `get_or_insert`, not either
+advisory-affected API, while `paste` is a compile-time maintenance warning.
+The lockfile remains unchanged and the project will revisit this disposition
+if the call path, advisories, MSRV, or dependency versions change.
 
 ## EXP-0008: Deterministic scoped possible-thrashing validation
 

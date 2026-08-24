@@ -11,6 +11,7 @@ mod record;
 mod render;
 mod report;
 mod style;
+mod taskstats;
 mod tui;
 mod watch;
 

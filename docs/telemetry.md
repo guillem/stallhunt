@@ -142,7 +142,14 @@ retain only the lowest 4,096 PIDs with bounded heap storage, and read only
 `stat`. Missing entries after enumeration, permission-denied or unreadable
 reads, directory iteration errors, malformed entries, and hitting the cap are
 retained as collection qualifiers. Only matching `(pid, starttime)` pairs
-produce process CPU deltas; appearing, exiting, or reused PIDs do not.
+produce interval process evidence; appearing, exiting, or reused PIDs do not.
+The same existing bounded walk retains leader RSS, minor/major-fault counters,
+and delay-accounting block-I/O ticks from `stat`. Normalization reports end RSS
+and RSS growth in bytes using the local page size with checked conversion. RSS
+is a gauge: a valid decrease reports zero growth, while negative RSS and absent
+trailing fields are explicitly unavailable. Fault counters and task delay
+counters are monotonic evidence, so regressions are omitted rather than
+clamped.
 
 ## `/proc/<pid>/schedstat`
 
@@ -164,11 +171,38 @@ between snapshots remain unobservable. Direct task reads are authoritative.
 This is raw scheduler evidence, not a severity, victim, suspect, or causal
 conclusion.
 
+The same identity-bracketed task `stat` reads retain delay-accounting
+block-I/O ticks independently of schedstat availability. Only matching
+`(tid,starttime)` pairs contribute checked deltas to a process aggregate;
+new, exited, reused, unreadable, or regressing task counters do not. This sum
+can exceed the wall-clock interval for a multi-threaded process. RSS is never
+summed across tasks because every task reports the thread-group's RSS.
+
 Expected concepts include:
 
 - time executing on CPU,
 - time waiting on run queue,
 - scheduler timeslice count.
+
+### Optional TASKSTATS delay accounting
+
+The v0.4 collector additionally makes bounded request-only generic-netlink
+`TASKSTATS` GET queries for at most the 512 lowest leaders already selected by
+the existing procfs walk. It performs no second PID scan, event subscription,
+background thread, privilege elevation, or sysctl change. Each GET is bracketed
+by `/proc/<pid>/stat` `ProcessKey` checks, so PID reuse and normal `ESRCH`
+churn cannot create identity-bound evidence.
+
+The local codec parses UAPI bytes with checked lengths, nesting, sequence,
+sender, TGID, and version gates; it does not cast wire bytes to a C layout.
+Send/receive timeouts are 20 ms, total endpoint work is 100 ms, and replies
+are capped at 1 MiB. Permission, timeout, malformed-protocol, and budget
+outcomes are explicit capability/collection states. CPU, block-I/O, swap-in,
+reclaim/freepages, thrashing, compaction, and write-protect-copy counters are
+kept separately and counter regression is unavailable evidence, never zero.
+The transport capability is deliberately distinct from delay-accounting state:
+a successful GET and zero counters do not prove delay accounting was enabled
+or that no delay occurred.
 
 Kernel/configuration behavior varies; capability discovery and fixture coverage are required.
 
@@ -286,7 +320,11 @@ Device-level saturation can be high confidence while process attribution remains
 M4 implements ADR-0006 with cgroup v2 only: it locates the mount from
 `/proc/self/mountinfo`, uses the unified `0::` record from
 `/proc/<pid>/cgroup`, and validates membership as `stat` → cgroup → `stat`.
-It selects at most 256 PIDs and retains at most 512 mapped cgroups including
+Multiple mount points are accepted only when mountinfo identifies the same
+device and hierarchy root; Stallhunt then prefers `/sys/fs/cgroup` when present
+and otherwise chooses the shallowest deterministic alias. Different devices or
+roots remain ambiguous and make cgroup collection unavailable.
+It selects at most 512 PIDs and retains at most 512 mapped cgroups including
 ancestors; it never recursively scans an arbitrary tree. Path/depth, file,
 snapshot-byte, and read-attempt limits are explicit. Caps, namespace
 visibility, permissions, controller absence, movement, and parse errors are
@@ -361,7 +399,7 @@ Possible staged collection:
 
 1. enumerate process identity and CPU counters cheaply,
 2. rank relevant processes,
-3. read richer scheduler/I/O data for a bounded candidate set.
+3. read richer scheduler/I/O/taskstats data for a bounded candidate set.
 
 However, do not optimize prematurely if simple full sampling is already cheap enough on realistic hosts.
 

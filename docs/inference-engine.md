@@ -225,8 +225,12 @@ interval. Its mechanism confidence is capped at medium. The threshold is
 provisional and the conclusion remains explicitly heuristic. Memory `full` is
 a non-additive subset of `some`, so it never increases the PSI fraction or
 independently establishes pressure. Meminfo/vmstat are classification/context
-only. This is host-wide evidence: M2 emits no victims, suspects, or causal
-process claims.
+only. Memory PSI remains host-wide resource evidence and does not itself
+establish process causality. Under v0.4, only a matching pressured scope can
+expose role lists: taskstats memory-delay components are direct victim evidence,
+major faults are an explicitly low-confidence fallback, and strictly positive
+RSS growth is a low-confidence suspect signal. Static RSS alone never
+qualifies.
 
 ### Implemented M3 I/O rule
 
@@ -247,6 +251,25 @@ candidate confidence or removes candidates without discarding valid PSI
 pressure evidence.
 
 ## Confidence model
+
+## Implemented v0.4 scoped process roles
+
+Schema-2 analysis owns independently bounded role lists for the host and for
+each cgroup path with matching scoped PSI pressure. A cgroup uses stable direct
+or descendant members matched by `ProcessKey`, with path-component boundaries;
+host rankings remain unfiltered and independent. Lists are assessed only when
+the matching scope's PSI finding is pressure. Scheduler delay is the CPU-victim primary evidence; TASKSTATS CPU
+delay is corroboration or a per-process fallback. Memory-delay components are
+kept separate and ranked by their largest component, while major faults are a
+low-confidence per-process fallback. Positive RSS growth is the only memory
+suspect signal. TASKSTATS block-I/O delay precedes positive procfs task-delay
+ticks, and positive process I/O accounting remains an I/O-suspect signal.
+Candidates are capped at five, direct evidence sorts before fallback, and a
+candidate never appears twice for one role. Collection gaps make only their
+affected list partial or unavailable; they do not weaken independent roles.
+Capped, moved, reused, or otherwise incomplete cgroup membership makes only
+that scope's assessed lists partial. Ancestor and descendant scopes may repeat
+a candidate; those observations are overlapping context, never additive loss.
 
 Confidence reflects evidence quality.
 

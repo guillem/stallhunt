@@ -56,3 +56,5 @@ What credible options were rejected and why?
 - [`0012-stallhunt-identity.md`](0012-stallhunt-identity.md)
 - [`0013-watch-tui-and-styled-hunt-report.md`](0013-watch-tui-and-styled-hunt-report.md)
 - [`0014-implicit-hunt-and-watch-attribution.md`](0014-implicit-hunt-and-watch-attribution.md)
+- [`0015-procfs-taskstats-process-evidence.md`](0015-procfs-taskstats-process-evidence.md)
+- [`0016-scoped-process-roles-schema-tui.md`](0016-scoped-process-roles-schema-tui.md)

@@ -8,11 +8,15 @@
 //! When stdout is not a terminal, `main.rs` calls the legacy renderer
 //! instead of this one; this module never probes the terminal itself.
 
-use crate::analysis::{AssessmentKind, CgroupAssessmentKind, IoAssessmentKind, Qualifier};
+use crate::analysis::{
+    AssessmentKind, CgroupAssessmentKind, IoAssessmentKind, ProcessCandidateAvailability,
+    ProcessRole, ProcessRoleCompleteness, Qualifier,
+};
 use crate::cli::HuntOptions;
 use crate::observe::HuntObservation;
 use crate::render::{self, HuntAnalyses};
 use crate::style::{self, ReportLayout, SeverityTone};
+use unicode_width::UnicodeWidthStr;
 
 const CGROUP_ROW_CAP: usize = 3;
 const MAX_TAGS_SHOWN: usize = 4;
@@ -38,6 +42,8 @@ pub fn hunt_report(
     if let Some(cgroup) = &analyses.cgroup {
         out.push_str(&cgroup_rows(cgroup, layout));
     }
+    out.push('\n');
+    out.push_str(&process_scope_summary(&analyses.process_scopes, layout));
 
     let chains = render::evidence_chains_from_analyses(analyses);
     if !chains.is_empty() {
@@ -57,7 +63,65 @@ pub fn hunt_report(
     out
 }
 
+fn process_scope_summary(scopes: &[crate::analysis::ProcessScope], layout: ReportLayout) -> String {
+    if scopes.is_empty() {
+        return " Process roles: unavailable\n".to_owned();
+    }
+    let mut out = String::new();
+    for scope in scopes {
+        let label_width = layout.width.saturating_sub(18);
+        let label = match &scope.scope {
+            crate::analysis::ProcessScopeKind::Host => "host".to_owned(),
+            crate::analysis::ProcessScopeKind::Cgroup { path } => {
+                let path_width = label_width.saturating_sub("cgroup ".len());
+                format!(
+                    "cgroup {}",
+                    render::terminal_scope_identifier(path, path_width)
+                )
+            }
+        };
+        out.push_str(&format!(" Process roles ({label})\n"));
+        for role in [
+            ProcessRole::CpuVictim,
+            ProcessRole::CpuSuspect,
+            ProcessRole::MemoryVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+            ProcessRole::IoSuspect,
+        ] {
+            let name = match role {
+                ProcessRole::CpuVictim => "CPU victims",
+                ProcessRole::CpuSuspect => "CPU suspects",
+                ProcessRole::MemoryVictim => "Memory victims",
+                ProcessRole::MemorySuspect => "Memory suspects",
+                ProcessRole::IoVictim => "I/O victims",
+                ProcessRole::IoSuspect => "I/O suspects",
+            };
+            let value = match scope.roles.iter().find(|list| list.role == role) {
+                Some(list) if !list.candidates.is_empty() => format!(
+                    "{} · {}",
+                    list.candidates.len(),
+                    render::terminal_name(&list.candidates[0].name)
+                ),
+                Some(list) => match (list.availability, list.completeness) {
+                    (_, ProcessRoleCompleteness::Unavailable)
+                    | (ProcessCandidateAvailability::UnavailableOrIncomplete, _) => {
+                        "unavailable/incomplete".to_owned()
+                    }
+                    (ProcessCandidateAvailability::NotAssessed, _) => "not assessed".to_owned(),
+                    (_, ProcessRoleCompleteness::Partial) => "none (partial)".to_owned(),
+                    _ => "none".to_owned(),
+                },
+                None => "unavailable".to_owned(),
+            };
+            out.push_str(&format!("   {name:<15} {value}\n"));
+        }
+    }
+    out
+}
+
 fn header_line(options: &HuntOptions, analyses: &HuntAnalyses, layout: ReportLayout) -> String {
+    let observed = render::human_duration(options.duration_ms);
     let mut best: Option<(u8, u8, String, SeverityTone, &'static str)> = None;
     let mut consider =
         |rank: (u8, u8), summary: String, tone: SeverityTone, confidence: &'static str| {
@@ -100,28 +164,74 @@ fn header_line(options: &HuntOptions, analyses: &HuntAnalyses, layout: ReportLay
             .iter()
             .filter(|finding| finding.kind == CgroupAssessmentKind::Pressure)
         {
+            let severity = style::severity_name(finding.severity);
+            let confidence = style::confidence_name(finding.resource_confidence);
+            let summary_width = header_summary_width(layout.width, &observed, severity, confidence);
+            let separator_width = " · ".width();
+            let content_width = summary_width.saturating_sub(separator_width);
+            let path_width = content_width / 2;
+            let finding_width = content_width.saturating_sub(path_width);
+            let path = render::terminal_scope_identifier(&finding.path, path_width);
+            let finding_summary =
+                render::terminal_scope_identifier(&finding.summary, finding_width);
+            let summary = match (path.is_empty(), finding_summary.is_empty()) {
+                (false, false) => format!("{path} · {finding_summary}"),
+                (false, true) => path,
+                (true, false) => finding_summary,
+                (true, true) => String::new(),
+            };
             consider(
                 render::text_finding_rank(finding.severity, finding.resource_confidence),
-                format!("{} · {}", finding.path, finding.summary),
+                summary,
                 style::severity_tone(finding.severity),
-                style::confidence_name(finding.resource_confidence),
+                confidence,
             );
         }
     }
 
-    let observed = render::human_duration(options.duration_ms);
     match best {
         Some((severity_rank, _, summary, tone, confidence)) if severity_rank > 0 => {
             let severity_word = style::severity_name(severity_from_rank(severity_rank));
             let painted = style::paint(severity_word, tone, layout.color);
-            format!(
-                "STALLHUNT · observed {observed} · verdict: {summary} [{painted}] · confidence {confidence}"
-            )
+            let summary = render::terminal_scope_identifier(
+                &summary,
+                header_summary_width(layout.width, &observed, severity_word, confidence),
+            );
+            if header_uses_compact_suffix(layout.width, &observed, severity_word, confidence) {
+                format!(
+                    "STALLHUNT · observed {observed} · verdict: {summary} [{painted}/{confidence}]"
+                )
+            } else {
+                format!(
+                    "STALLHUNT · observed {observed} · verdict: {summary} [{painted}] · confidence {confidence}"
+                )
+            }
         }
         _ => {
             format!("STALLHUNT · observed {observed} · verdict: no significant contention observed")
         }
     }
+}
+
+fn header_summary_width(width: usize, observed: &str, severity: &str, confidence: &str) -> usize {
+    let prefix = format!("STALLHUNT · observed {observed} · verdict: ");
+    let suffix = if header_uses_compact_suffix(width, observed, severity, confidence) {
+        format!(" [{severity}/{confidence}]")
+    } else {
+        format!(" [{severity}] · confidence {confidence}")
+    };
+    width.saturating_sub(prefix.width() + suffix.width())
+}
+
+fn header_uses_compact_suffix(
+    width: usize,
+    observed: &str,
+    severity: &str,
+    confidence: &str,
+) -> bool {
+    let prefix = format!("STALLHUNT · observed {observed} · verdict: ");
+    let suffix = format!(" [{severity}] · confidence {confidence}");
+    prefix.width() + suffix.width() >= width
 }
 
 fn severity_from_rank(rank: u8) -> crate::analysis::Severity {
@@ -303,7 +413,7 @@ fn cgroup_rows(cgroup: &crate::analysis::CgroupAnalysisResult, layout: ReportLay
         }
         out.push_str(&format!(
             "{} ({resource}) · scoped pressure\n",
-            style::truncate_ellipsis(&finding.path, layout.width.saturating_sub(30))
+            render::terminal_scope_identifier(&finding.path, layout.width.saturating_sub(30))
         ));
     }
     if pressured.len() > CGROUP_ROW_CAP {
@@ -658,6 +768,7 @@ mod tests {
                 cpu_ticks: 80,
                 cpu_fraction_of_one: 0.8,
             }],
+            process_resource_evidence: Vec::new(),
             collection_issues: ProcessCollectionIssues::default(),
             scheduler_delay_candidates: vec![ProcessSchedulerDelayInterval {
                 key: ProcessKey {
@@ -672,7 +783,12 @@ mod tests {
                 timeslices: 1,
             }],
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
+            task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
+            taskstats: Vec::new(),
+            taskstats_collection_issues: Default::default(),
+            taskstats_capability: Default::default(),
+            delay_accounting: Default::default(),
         };
         HuntObservation {
             psi: Ok(psi),
@@ -733,6 +849,84 @@ mod tests {
             output.len(),
             legacy.len()
         );
+    }
+
+    #[test]
+    fn compact_report_shows_positive_memory_and_io_scoped_roles() {
+        let mut observation = render::tests::hunt_legacy_full_fixture_observation();
+        observation
+            .cpu
+            .as_mut()
+            .unwrap()
+            .process_resource_evidence
+            .push(crate::cpu::ProcessResourceInterval {
+                key: crate::cpu::ProcessKey {
+                    pid: 99,
+                    start_time_ticks: 7,
+                },
+                name: "delayed-worker".into(),
+                leader_rss_bytes: Some(8_192),
+                rss_growth_bytes: Some(4_096),
+                minor_faults: Some(3),
+                major_faults: Some(2),
+                stable_task_count: 1,
+                block_io_delay_ticks: Some(5),
+            });
+        let output = render(
+            observation,
+            ReportLayout {
+                width: 100,
+                color: ColorMode::Never,
+                verbose: true,
+            },
+        );
+        assert!(
+            output.contains("Memory victims  1 · delayed-worker"),
+            "{output}"
+        );
+        assert!(
+            output.contains("Memory suspects 1 · delayed-worker"),
+            "{output}"
+        );
+        assert!(
+            output.contains("I/O victims     1 · delayed-worker"),
+            "{output}"
+        );
+        assert!(!output.contains("this slice does not identify affected or contributing"));
+        assert!(!output.contains("This host-wide I/O slice does not identify"));
+    }
+
+    #[test]
+    fn compact_cgroup_verdict_sanitizes_and_budgets_the_entire_header() {
+        let observation = render::tests::hunt_legacy_full_fixture_observation();
+        let mut analyses = render::analyze_hunt(&observation);
+        let finding = analyses
+            .cgroup
+            .as_mut()
+            .and_then(|analysis| analysis.findings.first_mut())
+            .expect("fixture has a cgroup finding");
+        finding.path = "\u{1b}界/a-very-long-cgroup-path-that-must-not-overflow".into();
+        finding.severity = crate::analysis::Severity::Severe;
+        finding.resource_confidence = crate::analysis::Confidence::High;
+
+        for width in [60, 80] {
+            let line = header_line(
+                &hunt_options(),
+                &analyses,
+                ReportLayout {
+                    width,
+                    color: ColorMode::Never,
+                    verbose: false,
+                },
+            );
+            assert!(!line.contains('\u{1b}'), "{line:?}");
+            assert!(line.contains('�'), "{width}: {line}");
+            assert!(
+                line.width() <= width,
+                "{width}: {} cells: {line}",
+                line.width()
+            );
+        }
     }
 
     #[test]

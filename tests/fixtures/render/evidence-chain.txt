@@ -4,3 +4,11 @@ Confidence: low
 Independent evidence: memory PSI some 8.00%; I/O PSI some 8.00%; 100 direct-reclaim scan pages; 80 stolen pages.
   Independent same-window PSI and VM-counter evidence can support a related path; it does not prove that memory reclaim or swap caused the I/O stalls.
   The chain does not map processes to devices or identify which I/O was reclaim or swap traffic.
+
+Process roles (host scope)
+  CPU victims: not assessed
+  CPU suspects: not assessed
+  Memory victims: unavailable or incomplete
+  Memory suspects: unavailable or incomplete
+  I/O victims: unavailable or incomplete
+  I/O suspects: writer [42]: same_window_process_io_activity_suspect (Medium; IoActivity { read_bytes: Some(1024), write_bytes: Some(8192), cancelled_write_bytes: Some(0), known_accounted_bytes: 9216 })
