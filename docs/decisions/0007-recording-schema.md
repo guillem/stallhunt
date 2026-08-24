@@ -1,6 +1,6 @@
 # ADR-0007: Record normalized observations without a compatibility promise
 
-- Status: Accepted
+- Status: Accepted; schema compatibility superseded in part by ADR-0016
 - Date: 2026-08-17
 
 ## Context

@@ -4,7 +4,7 @@ Last updated: 2026-08-24
 
 ## Current milestone
 
-**Post-Milestone 8 — UX and watch-attribution release v0.3.0**
+**v0.4.0 planning — scoped process attribution and widescreen TUI**
 
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
@@ -16,7 +16,12 @@ candidates as last observed. Memory/cgroup process roles and I/O victims remain
 unsupported. ADR-0014 records both contracts. No analyzer rule, telemetry
 source, pressure finding kind, remaining M8 chain, or M7 probe was added, and
 the repository remains parked otherwise.
-Do not start M7 merely because eBPF is interesting; add a probe only for
+ADR-0015 and ADR-0016 define the next proposed vertical slice: bounded procfs
+evidence plus optional taskstats delay evidence will support six independently
+ranked host/cgroup process roles, schema version 2, and a responsive wide TUI.
+They are design decisions only at this point; v0.4.0 telemetry, inference,
+schema migration, presentation, validation, and release gates are not yet
+implemented. Do not start M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
 that test still requires a caller-owned delegated subtree that already contains
@@ -351,8 +356,11 @@ the test process and does not mutate the hierarchy.
 
 ## Pending work
 
-The repository is intentionally parked after the scoped possible-thrashing
-slice. No additional M8 chain or M7 probe is approved.
+The approved v0.4.0 vertical slice is not yet implemented. It adds bounded
+process resource evidence, optional taskstats delay evidence, six analyzer-owned
+host/cgroup roles, schema-2 outputs and recording migration, and the responsive
+wide TUI specified by ADR-0015 and ADR-0016. No additional M8 chain or M7 probe
+is part of this slice.
 
 Diagnostic and attribution gaps:
 
@@ -382,6 +390,9 @@ Operational and delivery gaps:
 
 - cgroup collection reaches its 256-PID selection cap on the measured
   workstation, so scoped context is partial and can omit higher-PID groups;
+- the v0.4.0 release is blocked until deterministic codec, attribution,
+  migration, renderer, TUI, and overhead gates pass and a separately approved
+  controlled Linux host supplies the required positive taskstats evidence;
 - unlimited watch drains gracefully: the first SIGINT installs a flag so the
   in-flight window completes and is written before exit;
 - `MANIFEST.txt` (tracked-file byte sizes) predates several source files,
@@ -406,12 +417,11 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Write down one concrete diagnostic question and the independent evidence needed
-to answer it before selecting another feature. No such question is currently
-selected. Do not start Milestone 7 unless the question cannot be answered with
-current `/proc`, PSI, and cgroup collectors. Do not add another M8 chain unless
-independent linking evidence already exists; do not treat coincident PSI as a
-path, and do not link host findings to cgroup findings.
+Extend the existing bounded procfs process walk with leader RSS, fault counters,
+and stable-task block-I/O delay, including deterministic normalization tests.
+Then implement the optional bounded taskstats collector before adding role
+inference. Do not start Milestone 7 or add another M8 chain as part of v0.4.0;
+coincident PSI still does not establish a causal path.
 
 ## Current design risks
 

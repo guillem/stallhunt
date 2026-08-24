@@ -1,6 +1,6 @@
 # ADR-0014: Implicit hunt options and watch process attribution
 
-- Status: Accepted
+- Status: Accepted; watch attribution and schema compatibility superseded in part by ADR-0016
 - Date: 2026-08-24
 
 ## Context

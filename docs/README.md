@@ -56,6 +56,8 @@ Accepted initial decisions:
 - ADR-0012: Stallhunt product identity, clap CLI, MSRV, Linux baseline, and JSON kinds
 - ADR-0013: watch finding-lifecycle TUI and styled hunt/replay terminal report
 - ADR-0014: implicit hunt options and additive watch process attribution
+- ADR-0015: bounded procfs/taskstats process evidence with no privilege elevation
+- ADR-0016: scoped six-role process attribution, schema-2 compatibility, and responsive TUI behavior
 
 ## Documentation rules
 
