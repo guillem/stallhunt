@@ -171,6 +171,10 @@ Sanitize control characters before terminal rendering.
 
 Be cautious when traversing procfs/sysfs/cgroupfs.
 
+Cgroup mount discovery collapses multiple mount points only when mountinfo
+reports the same cgroupfs device and hierarchy root. Different devices or
+roots are rejected as ambiguous rather than guessed.
+
 Prefer file-descriptor-relative operations where complexity is justified.
 
 ### Numeric overflow

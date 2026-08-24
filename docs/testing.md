@@ -199,7 +199,8 @@ checkout-local temporary path, with direct/sync/fsync behavior and an
 eight-second coordinator bound. The test asserts a PSI-backed I/O-pressure
 finding while preserving the lack of victim, process-device, and causal claims.
 
-M4 has deterministic cgroup-v2 coverage for mountinfo and `0::` membership
+M4 has deterministic cgroup-v2 coverage for mountinfo (including equivalent
+duplicate aliases versus different-device/root ambiguity) and `0::` membership
 parsing, normalized-path validation, ancestor selection, controller/missing-file
 degradation, process movement and PID reuse across interval membership, scoped
 PSI rules, path-derived systemd candidates, capability completeness, endpoint

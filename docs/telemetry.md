@@ -320,6 +320,10 @@ Device-level saturation can be high confidence while process attribution remains
 M4 implements ADR-0006 with cgroup v2 only: it locates the mount from
 `/proc/self/mountinfo`, uses the unified `0::` record from
 `/proc/<pid>/cgroup`, and validates membership as `stat` → cgroup → `stat`.
+Multiple mount points are accepted only when mountinfo identifies the same
+device and hierarchy root; Stallhunt then prefers `/sys/fs/cgroup` when present
+and otherwise chooses the shallowest deterministic alias. Different devices or
+roots remain ambiguous and make cgroup collection unavailable.
 It selects at most 512 PIDs and retains at most 512 mapped cgroups including
 ancestors; it never recursively scans an arbitrary tree. Path/depth, file,
 snapshot-byte, and read-attempt limits are explicit. Caps, namespace

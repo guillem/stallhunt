@@ -273,7 +273,10 @@ finding and candidates, not those unsupported attribution claims.
 M4 implements ADR-0006's cgroup-v2-only, membership-first collector: it
 discovers the actual cgroup2 mount from mountinfo, reads the unified `0::`
 membership form, and maps a bounded selected PID set by `stat` → cgroup →
-`stat` identity checks. It collects only mapped cgroups and ancestors under
+`stat` identity checks. Duplicate mount-point
+aliases are collapsed only when both the cgroupfs device and exposed hierarchy
+root match; distinct hierarchies remain an unavailable ambiguity. It collects
+only mapped cgroups and ancestors under
 explicit PID, group, depth, path, and file-byte budgets. Per-cgroup exact PSI
 is an explicitly scoped verdict; CPU, memory, and I/O controller deltas remain
 qualified context. Selected `memory.stat` page deltas may label an already
