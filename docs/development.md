@@ -6,9 +6,9 @@ The repository contains completed Milestone 1 CPU, M2 host-memory, M3
 block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, the v0.4
 scoped-attribution/TUI implementation, and the first two Milestone 8
 evidence-chain slices. The source package is prepared as 0.4.0, but the
-published release remains v0.3.0 until the controlled-host taskstats and
-512-TGID/member overhead gates recorded in `status.md` and `experiments.md`
-pass and the dependency-audit warnings receive a reviewed disposition.
+published release remains v0.3.0 until the operator restores the controlled-
+host delay-accounting sysctl. EXP-0010 records the passed taskstats and
+512-TGID/member-ceiling gates and the reviewed dependency-warning disposition.
 
 Build and run it from the repository root:
 
@@ -96,7 +96,10 @@ On 2026-08-24, cargo-audit 0.22.2 did not support the planned literal
 ratatui 0.29. Ratatui 0.30.0 requires Rust 1.86, and 0.30.1 or newer requires
 Rust 1.88; every 0.30 release therefore conflicts with the Rust 1.85 MSRV. Do
 not suppress or change that dependency without an
-explicit reviewed decision; this remains a release risk.
+explicit reviewed decision. The v0.4.0 review accepted the locked exposure
+because ratatui uses neither advised `lru` API and `paste` is a maintenance-only
+warning; do not suppress it, and revisit on any call-path, advisory, dependency,
+or MSRV change.
 
 The executable integration tests are in `tests/cli.rs`; opt-in Linux acceptance
 tests are `tests/cpu_acceptance.rs`, `tests/io_acceptance.rs`,
@@ -137,9 +140,9 @@ The harness is opt-in and scenario-specific. It may use an already-installed
 not a CI gate. `all` does not spawn hundreds of PIDs. The PTY check requires
 util-linux `script`; it captures the bounded one-window TUI stream, checks
 alternate screen enter/leave sequences, and compares terminal settings.
-EXP-0007 records workstation-scale PID/task cost.
-It predates the v0.4 512-TGID/member taskstats configuration and is not a
-substitute for its required controlled-host overhead measurement.
+EXP-0007 records workstation-scale PID/task cost. It predates the v0.4
+512-TGID/member taskstats configuration; EXP-0010 records the required capable
+controlled-host follow-up.
 
 ## Repository hygiene
 

@@ -253,8 +253,8 @@ tools/check-tui-pty.sh --binary target/debug/stallhunt
 ```
 
 It is deliberately opt-in because a PTY utility is not guaranteed in ordinary
-CI images. A passing local PTY check does not replace the separately approved
-controlled-host taskstats evidence gate.
+CI images. A passing local PTY check does not replace controlled-host taskstats
+evidence; EXP-0010 records that separate passed gate.
 
 M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus

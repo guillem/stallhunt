@@ -8,8 +8,7 @@ Last updated: 2026-08-24
 
 The package and manual are prepared as 0.4.0; this is not a published release.
 The currently published release remains v0.3.0. Do not tag, merge, or publish
-v0.4.0 until the controlled-host taskstats and 512-TGID/member overhead gates
-below have passed and the dependency audit risk has a reviewed disposition.
+v0.4.0 until the operator restores the delay-accounting sysctl.
 
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
@@ -27,11 +26,11 @@ legacy/compact text, lifecycle detail, and the responsive watch TUI. At 120×30
 or larger, watch keeps Lifecycle, Current, History, and a layout-derived,
 Unicode-aware scrollable Detail on the left while rendering all six selected
 host/cgroup roles on the right; compact terminals show six role summaries and
-can explicitly expand Detail. Controlled-host validation and
-release gates remain partially pending. EXP-0010 records enabled-delayacct
-rootless degradation and permission-denied/procfs 512-TGID overhead, but
-taskstats permission and unambiguous cgroup collection remain unavailable on
-that host. Do not start
+can explicitly expand Detail. EXP-0010 records successful controlled-host
+rootless degradation, permitted CPU/block-I/O/memory taskstats evidence in host
+and cgroup scopes, and capable 512-TGID/member-ceiling overhead. The temporary
+binary capability was removed; operator sysctl restoration remains pending.
+Do not start
 M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -51,13 +50,13 @@ the test process and does not mutate the hierarchy.
   high-severity `memory_swap_pressure` from exact host PSI `some`. Reclaim-only
   and possible-thrashing labels remain fixture-validated. The original M2
   finding has no finding-local process fields; v0.4 adds separate PSI-gated
-  scoped memory roles, whose taskstats path still awaits controlled-host
-  validation.
+  scoped memory roles, whose taskstats path passed controlled host-and-cgroup
+  validation in EXP-0010.
 - **M3 complete within its deliberately limited exit condition:** PSI-backed
   block-I/O pressure and same-window activity candidates were validated by the
   recorded controlled run. v0.4 adds scoped delay-based I/O victim roles, but
   process-device mapping and causality remain explicitly unsupported and the
-  taskstats path still awaits controlled-host validation.
+  taskstats path passed controlled host-and-cgroup validation in EXP-0010.
 - **M4 implemented:** bounded cgroup-v2 collection, scoped analysis,
   completeness semantics, controller context, and deterministic coverage are
   complete. Live delegated-scope validation is available opt-in and cannot be
@@ -318,8 +317,8 @@ the test process and does not mutate the hierarchy.
   caps were not reached.
 - The new procfs resource evidence is raw normalized context only. Delayacct
   block-I/O ticks can be absent or disabled, and zero or unavailable values do
-  not establish that a process suffered no I/O delay. Optional TASKSTATS has
-  no controlled-host acceptance yet; host roles consume positive counters
+  not establish that a process suffered no I/O delay. EXP-0010 supplies
+  controlled-host TASKSTATS acceptance; roles still consume positive counters
   conservatively and expose collection gaps explicitly.
 - GitHub Actions runs locked tests on Rust 1.85 and formatting, Clippy, and
   locked tests on stable Rust. The five environment-dependent Linux acceptance
@@ -390,9 +389,9 @@ the test process and does not mutate the hierarchy.
 
 The approved v0.4.0 vertical slice now has bounded procfs/taskstats evidence,
 host and cgroup six-role attribution, and schema-2 outputs/recording migration.
-Release metadata is prepared. Remaining work is controlled-host validation and
-a reviewed dependency-risk disposition as specified by ADR-0016 and the release
-gates below. No additional M8 chain or M7 probe is part of this slice.
+Release metadata is prepared. Controlled-host validation passed in EXP-0010.
+Remaining work is operator delay-accounting restoration and normal PR/release
+authorization. No additional M8 chain or M7 probe is part of this slice.
 
 Diagnostic and attribution gaps:
 
@@ -407,9 +406,9 @@ Diagnostic and attribution gaps:
 
 Validation gaps:
 
-- scoped reclaim, swap, possible-thrashing, and quota-throttle labels are
-  deterministic-test validated but do not have a controlled live scoped-
-  pressure acceptance result;
+- scoped swap now has a controlled live result; scoped reclaim-only,
+  possible-thrashing, and quota-throttle labels remain deterministic-test
+  validated without a controlled live scoped-pressure result;
 - the cgroup acceptance test is opt-in observational coverage and requires a
   caller-owned delegated subtree;
 - host reclaim-only and possible-thrashing remain fixture-validated, while the
@@ -419,16 +418,13 @@ Validation gaps:
 
 Operational and delivery gaps:
 
-- historical cgroup collection reached its pre-v0.4 PID selection cap on the
-  measured workstation; EXP-0010 measured a current 512-TGID host workload,
-  but the 512-member cgroup configuration still needs controlled-host
-  overhead/completeness measurement because this namespace has two ambiguous
-  cgroup-v2 mounts;
+- historical cgroup collection reached its pre-v0.4 PID selection cap;
+  EXP-0010 now records capable 512-TGID and 512-PID cgroup-membership-ceiling
+  overhead after safely disambiguating equivalent cgroupfs aliases;
 - deterministic codec, attribution, migration, renderer, TUI, stable/MSRV,
   package, and local PTY gates pass;
-- the v0.4.0 release remains blocked until a separately approved controlled
-  Linux host supplies positive taskstats and 512-TGID/member overhead evidence,
-  and the dependency warnings receive a reviewed disposition;
+- the v0.4.0 release remains blocked until the operator restores the original
+  delay-accounting state;
 - unlimited watch drains gracefully: the first SIGINT installs a flag so the
   in-flight window completes and is written before exit;
 - `MANIFEST.txt` (tracked-file byte sizes) predates several source files,
@@ -453,11 +449,9 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Provide a taskstats-capable execution context and an unambiguous, delegated
-cgroup-v2 namespace, then finish the positive v0.4 taskstats acceptance and
-512-member observer-overhead measurements. Then obtain a
-reviewed disposition for the cargo-audit warnings before publishing the already
-prepared v0.4.0 metadata. Do not start Milestone 7 or add another M8 chain;
+Have the operator restore `kernel.task_delayacct=0`, then complete the normal
+PR authorization, merge, and release workflow for the already prepared v0.4.0
+metadata. Do not start Milestone 7 or add another M8 chain;
 coincident PSI still does not establish a causal path.
 
 ## Current design risks
@@ -544,8 +538,12 @@ is not an automatic fix.
 Mitigation:
 
 - do not claim a clean audit or use an unsupported `--omit=dev` flag;
-- require an explicit reviewed dependency/MSRV decision before release;
-- keep the full-lockfile audit result and advisories in EXP-0009.
+- retain the lockfile and do not suppress the warnings;
+- ratatui's production `lru` call path uses `get_or_insert`, not the advised
+  `IterMut` or `pop` APIs, while `paste` is a build-time maintenance warning;
+- accept this narrow exposure for v0.4.0 after technical review, and revisit it
+  if the call path, advisories, MSRV, or dependency versions change;
+- keep the full-lockfile audit result and disposition in EXP-0009.
 
 ## Known open decisions
 
@@ -580,6 +578,22 @@ concrete, not all at once.
 
 ## Last meaningful validation
 
+On 2026-08-24, operator-provided `CAP_NET_ADMIN` enabled bounded TASKSTATS GET
+without Stallhunt performing elevation. Controlled CPU, memory, and I/O
+workloads produced PSI-backed taskstats victims in both host and exact child-
+cgroup scopes: CPU reached 16.66%/13.86% host/child PSI with five candidates;
+memory reached 29.38%/35.58% with a direct reclaim-dominant victim; and I/O
+reached 11.70%/11.75% with two 1.49–1.52 s block-delay victims. A stable
+512-extra-process run completed 1,024 GETs and 512 intervals while the cgroup
+walk reached its 512-PID ceiling, retained 97 groups, and stayed within all
+budgets. Three release runs took 1.20–1.23 s wall, 0.04–0.05 s user,
+0.15–0.17 s system, and 10,216–14,240 KiB RSS. Equivalent duplicate cgroupfs
+mounts were safely disambiguated by commit `5699fd4`; different device/root
+views remain rejected. All owned workloads and generated cgroups/directories
+were cleaned, and rebuilding the release binary removed its temporary file
+capability. The operator still must restore `kernel.task_delayacct=0`. See
+EXP-0010.
+
 On 2026-08-24, the operator enabled `kernel.task_delayacct` before owned
 workloads on Linux 7.2.0-ogc4.1.fc44.x86_64. Rootless Stallhunt correctly
 reported delay accounting enabled but taskstats permission denied. A
@@ -590,10 +604,7 @@ victims, and three suspects. Bounded I/O produced 12.69% exact PSI `some` and
 procfs I/O victims, while correctly retaining partial process-I/O capability.
 Release-binary one-second overhead remained 1.14–1.17 s wall, 0.02–0.03 s
 user, 0.11–0.14 s system, and 8,476–11,040 KiB RSS with 512 extra processes.
-The host has two cgroup-v2 mounts and the collector conservatively rejected the
-ambiguity, so positive taskstats, cgroup scope, and 512-member gates remain
-open. Delay accounting remains enabled while controlled testing continues;
-restoring the original disabled state remains required. See EXP-0010.
+That first phase preceded the capable and scoped continuation recorded above.
 
 Release preparation on 2026-08-24 changed the package, binary, manual, and
 recording example version to 0.4.0 without publishing it. The current local
@@ -610,7 +621,10 @@ tag or GitHub Release was made.
 warnings: RUSTSEC-2024-0436 for `paste`, and RUSTSEC-2026-0002 plus
 RUSTSEC-2026-0253 for `lru`, transitively via ratatui 0.29. Its help has no
 `--omit=dev` option; the planned literal command is not valid for this version.
-This is an unresolved release risk, not a passing audit gate.
+Technical review accepted this narrow exposure for v0.4.0 because the advised
+`lru` APIs are not used by ratatui's production path and `paste` is a
+maintenance-only warning. The audit is not clean; warnings remain visible and
+must be revisited when the call path, advisories, dependencies, or MSRV change.
 
 On 2026-08-24, the v0.4 procfs/taskstats collector slices passed deterministic
 parser, protocol, scripted collection, and interval tests for leader RSS,
@@ -630,10 +644,9 @@ cargo test --locked --offline --workspace --all-features
 The bounded local PTY check observed alternate-screen enter/leave and restored
 the original terminal state after one TUI window. At this release-preparation
 point the optional Linux acceptance tests remained skipped and no controlled-
-host taskstats validation had run. EXP-0010 subsequently recorded CPU and I/O
-acceptance plus permission-denied/procfs 512-TGID overhead. Permitted positive
-CPU, block-I/O, and memory taskstats evidence in both host and cgroup scopes,
-capable-query overhead, and a v0.4 512-member cgroup measurement remain absent.
+host taskstats validation had run. EXP-0010 subsequently recorded rootless and
+permitted CPU, block-I/O, and memory acceptance in host/cgroup scopes plus
+capable 512-TGID and 512-PID membership-ceiling overhead.
 
 On 2026-08-24, the v0.3.0 release preparation validated implicit root-hunt
 option parity and conflicts, typed watch process attribution across lifecycle,

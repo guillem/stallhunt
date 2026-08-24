@@ -244,9 +244,10 @@ Deliver:
 
 ## v0.4 cross-cutting slice — scoped attribution and responsive watch
 
-Status: implementation and deterministic/local validation complete; release
-blocked on the controlled-host taskstats, 512-TGID/member overhead, and
-dependency-review gates recorded in `status.md` and `experiments.md`.
+Status: implementation, deterministic/local validation, and EXP-0010
+controlled-host taskstats/512-TGID/member-ceiling validation complete; release
+blocked on operator sysctl restoration. The dependency-warning disposition is
+reviewed and recorded in `status.md` and `experiments.md`.
 
 This vertical slice adds bounded procfs/taskstats process evidence, six
 analyzer-owned roles for matching host and cgroup PSI scopes, schema-2
