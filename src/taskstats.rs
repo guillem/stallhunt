@@ -350,11 +350,13 @@ fn merge_capability(
     any_values: bool,
     regressed: bool,
 ) -> TaskstatsCapability {
-    if any_values {
-        return if left == TaskstatsCapability::Available
-            && right == TaskstatsCapability::Available
-            && !regressed
-        {
+    if left == TaskstatsCapability::Available && right == TaskstatsCapability::Available {
+        // Both endpoint queries succeeded, but an empty interval (no
+        // overlapping process identities, normal churn between window
+        // endpoints) collected no evidence. Reporting `Available` here would
+        // be vacuously true downstream: a window with zero taskstats
+        // evidence must not read as a complete, confirmed clean negative.
+        return if any_values && !regressed {
             TaskstatsCapability::Available
         } else {
             TaskstatsCapability::Partial
@@ -1122,6 +1124,54 @@ mod tests {
             ),
             TaskstatsCapability::Partial
         );
+        // Both endpoint queries succeeded but no process identities
+        // overlapped (normal churn), so the interval collected zero
+        // evidence. This must not read as `Available`.
+        assert_eq!(
+            merge_capability(
+                TaskstatsCapability::Available,
+                TaskstatsCapability::Available,
+                false,
+                false
+            ),
+            TaskstatsCapability::Partial
+        );
+    }
+    #[test]
+    fn empty_overlap_does_not_report_available_capability() {
+        let key = ProcessKey {
+            pid: 1,
+            start_time_ticks: 2,
+        };
+        let other_key = ProcessKey {
+            pid: 2,
+            start_time_ticks: 3,
+        };
+        let raw = TaskstatsRaw {
+            version: 1,
+            cpu_delay_ns: Some(4),
+            block_io_delay_ns: None,
+            swapin_delay_ns: None,
+            reclaim_delay_ns: None,
+            thrashing_delay_ns: None,
+            compaction_delay_ns: None,
+            write_protect_copy_delay_ns: None,
+        };
+        let left = TaskstatsEndpoint {
+            capability: TaskstatsCapability::Available,
+            delay_accounting: DelayAccountingState::Unknown,
+            values: BTreeMap::from([(key, raw.clone())]),
+            issues: TaskstatsCollectionIssues::default(),
+        };
+        let right = TaskstatsEndpoint {
+            capability: TaskstatsCapability::Available,
+            delay_accounting: DelayAccountingState::Unknown,
+            values: BTreeMap::from([(other_key, raw)]),
+            issues: TaskstatsCollectionIssues::default(),
+        };
+        let (values, _, capability, _) = intervals(&left, &right);
+        assert!(values.is_empty());
+        assert_eq!(capability, TaskstatsCapability::Partial);
     }
     #[test]
     fn netlink_framing_rejects_wrong_sequence_multi_and_trailing_messages() {

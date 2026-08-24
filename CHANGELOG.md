@@ -6,6 +6,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-25
+
+### Fixed
+
+- A taskstats interval with no overlapping process identities between the
+  start and end snapshots (normal churn) reported `Available` capability
+  whenever both endpoint queries individually succeeded, instead of
+  `Partial`. Downstream, this made a window with zero collected taskstats
+  evidence read as a complete, confirmed clean negative for CPU, memory, and
+  I/O completeness, undermining the completeness signal ADR-0015 is built
+  around.
+- The taskstats-only CPU-delay victim candidate (no schedstat corroboration)
+  was scored at full resource confidence instead of the discounted fallback
+  tier ADR-0015 specifies for CPU, unlike the analogous I/O taskstats/procfs
+  fallback, which already discounted correctly.
+- `watch`'s piped-text output rendered a full six-role "unavailable" block for
+  every stale lifecycle finding, even ones that never had process candidates.
+- CPU thread-churn counting (appeared/exited/identity-changed) missed churn on
+  a thread whose kernel stat record omitted `delayacct_blkio_ticks`, letting
+  `task_stat_capability` claim full completeness despite real churn.
+- `terminal_scope_identifier` could return the 16-character
+  `<unnamed-scope>` fallback even under a zero-width budget, breaking the
+  width invariant on very narrow terminals.
+
 ## [0.4.0] - 2026-08-24
 
 ### Added

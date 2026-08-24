@@ -694,11 +694,9 @@ fn watch_text(window: &WatchWindow) -> String {
     output.push_str(
         "  Qualification: CPU and I/O suspects are same-window correlation; this does not prove causality. CPU victims are runnable-delay candidates, not confirmed harm.\n",
     );
-    for finding in window
-        .lifecycle
-        .iter()
-        .filter(|finding| finding.process_candidates_stale)
-    {
+    for finding in window.lifecycle.iter().filter(|finding| {
+        finding.process_candidates_stale && !finding.process_candidates.is_empty()
+    }) {
         output.push_str(&format!(
             "  Last observed for {} ({}):\n",
             id_label(&finding.id),
@@ -2242,6 +2240,26 @@ mod tests {
         ));
         assert!(resolved.lifecycle[0].process_candidates_stale);
         assert_eq!(resolved.lifecycle[0].process_candidates[0].key.pid, 43);
+    }
+
+    #[test]
+    fn stale_finding_with_no_process_candidates_renders_no_last_observed_block() {
+        let mut tracker = WatchTracker::new();
+        tracker.ingest_signals(host_signals(
+            pressure("cpu_scheduling_contention", Severity::High, 0.2),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        let unconfirmed = tracker.ingest_signals(host_signals(
+            unconfirmed(),
+            healthy("memory_no_harmful_pressure"),
+            healthy("io_no_meaningful_contention"),
+        ));
+        assert_eq!(unconfirmed.lifecycle.len(), 1);
+        assert!(unconfirmed.lifecycle[0].process_candidates_stale);
+        assert!(unconfirmed.lifecycle[0].process_candidates.is_empty());
+        let text = watch_text(&unconfirmed);
+        assert!(!text.contains("Last observed for"));
     }
 
     #[test]

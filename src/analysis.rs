@@ -2112,9 +2112,12 @@ fn cpu_victims(
                             role: ProcessRole::CpuVictim,
                             key: item.key,
                             name: name_for_key(cpu, item.key),
+                            // ADR-0015: CPU runnable delay is schedstat
+                            // evidence; taskstats CPU delay without schedstat
+                            // corroboration is fallback, not direct evidence.
                             confidence: candidate_confidence(
                                 pressure.unwrap_or(Confidence::Low),
-                                true,
+                                false,
                                 false,
                             ),
                             label: "observed_taskstats_cpu_delay_victim_candidate",
@@ -2146,6 +2149,7 @@ fn taskstats_complete_for_cpu(cpu: &CpuProcessObservation) -> bool {
     matches!(cpu.taskstats_capability, TaskstatsCapability::Available)
         && matches!(cpu.delay_accounting, DelayAccountingState::Enabled)
         && process_window_complete(cpu)
+        && !cpu.taskstats.is_empty()
         && cpu
             .taskstats
             .iter()
@@ -2309,6 +2313,7 @@ fn taskstats_complete_for_memory(cpu: &CpuProcessObservation) -> bool {
     matches!(cpu.taskstats_capability, TaskstatsCapability::Available)
         && matches!(cpu.delay_accounting, DelayAccountingState::Enabled)
         && process_window_complete(cpu)
+        && !cpu.taskstats.is_empty()
         && cpu.taskstats.iter().all(|item| {
             item.field_support.swapin_delay
                 && item.field_support.reclaim_delay
@@ -2465,6 +2470,7 @@ fn taskstats_complete_for_io(cpu: &CpuProcessObservation) -> bool {
     matches!(cpu.taskstats_capability, TaskstatsCapability::Available)
         && matches!(cpu.delay_accounting, DelayAccountingState::Enabled)
         && process_window_complete(cpu)
+        && !cpu.taskstats.is_empty()
         && cpu
             .taskstats
             .iter()
