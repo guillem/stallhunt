@@ -28,7 +28,10 @@ or larger, watch keeps Lifecycle, Current, History, and a layout-derived,
 Unicode-aware scrollable Detail on the left while rendering all six selected
 host/cgroup roles on the right; compact terminals show six role summaries and
 can explicitly expand Detail. Controlled-host validation and
-release gates remain pending. Do not start
+release gates remain partially pending. EXP-0010 records enabled-delayacct
+rootless degradation and permission-denied/procfs 512-TGID overhead, but
+taskstats permission and unambiguous cgroup collection remain unavailable on
+that host. Do not start
 M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -336,9 +339,11 @@ the test process and does not mutate the hierarchy.
   `STALLHUNT_MEMORY_ACCEPTANCE_PATH` and skips when that delegated parent is
   absent.
 - M3's controlled PSI/resource and same-window-candidate exit is validated,
-  but it has not validated I/O victims, process-device mapping, or causality.
-  EXP-0007 measured process-I/O collection at 129--194 intervals on that
-  workstation, still below the 1,024-PID cap.
+  but the original run did not validate I/O victims, process-device mapping,
+  or causality. EXP-0010 later observed two procfs block-I/O-delay victims;
+  taskstats victims remain unvalidated and the existing acceptance degraded on
+  partial process-I/O. EXP-0007 measured process-I/O collection at 129--194
+  intervals on that workstation, still below the 1,024-PID cap.
 - The ignored cgroup acceptance test requires a caller-provided, uniquely owned
   delegated subtree. It safely skips when that prerequisite is absent, so an
   arbitrary host does not yet provide controlled per-cgroup pressure evidence.
@@ -415,8 +420,10 @@ Validation gaps:
 Operational and delivery gaps:
 
 - historical cgroup collection reached its pre-v0.4 PID selection cap on the
-  measured workstation; the current 512-member configuration still needs the
-  controlled-host overhead/completeness measurement;
+  measured workstation; EXP-0010 measured a current 512-TGID host workload,
+  but the 512-member cgroup configuration still needs controlled-host
+  overhead/completeness measurement because this namespace has two ambiguous
+  cgroup-v2 mounts;
 - deterministic codec, attribution, migration, renderer, TUI, stable/MSRV,
   package, and local PTY gates pass;
 - the v0.4.0 release remains blocked until a separately approved controlled
@@ -446,8 +453,9 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Obtain a separately approved controlled Linux host and run the v0.4 taskstats
-acceptance and 512-TGID/member observer-overhead measurements. Then obtain a
+Provide a taskstats-capable execution context and an unambiguous, delegated
+cgroup-v2 namespace, then finish the positive v0.4 taskstats acceptance and
+512-member observer-overhead measurements. Then obtain a
 reviewed disposition for the cargo-audit warnings before publishing the already
 prepared v0.4.0 metadata. Do not start Milestone 7 or add another M8 chain;
 coincident PSI still does not establish a causal path.
@@ -572,6 +580,21 @@ concrete, not all at once.
 
 ## Last meaningful validation
 
+On 2026-08-24, the operator enabled `kernel.task_delayacct` before owned
+workloads on Linux 7.2.0-ogc4.1.fc44.x86_64. Rootless Stallhunt correctly
+reported delay accounting enabled but taskstats permission denied. A
+512-extra-process run selected exactly 512 TGIDs, set the limit flag, made zero
+successful queries after two endpoint permission denials, and exhausted no
+protocol budgets. CPU acceptance passed with 46.51% exact PSI `some`, five
+victims, and three suspects. Bounded I/O produced 12.69% exact PSI `some` and
+procfs I/O victims, while correctly retaining partial process-I/O capability.
+Release-binary one-second overhead remained 1.14–1.17 s wall, 0.02–0.03 s
+user, 0.11–0.14 s system, and 8,476–11,040 KiB RSS with 512 extra processes.
+The host has two cgroup-v2 mounts and the collector conservatively rejected the
+ambiguity, so positive taskstats, cgroup scope, and 512-member gates remain
+open. Delay accounting remains enabled while controlled testing continues;
+restoring the original disabled state remains required. See EXP-0010.
+
 Release preparation on 2026-08-24 changed the package, binary, manual, and
 recording example version to 0.4.0 without publishing it. The current local
 tree passed formatting, locked offline Clippy, and locked offline tests (262
@@ -605,11 +628,12 @@ cargo test --locked --offline --workspace --all-features
 ```
 
 The bounded local PTY check observed alternate-screen enter/leave and restored
-the original terminal state after one TUI window. The optional Linux acceptance tests remain skipped; this slice has no
-required controlled-host taskstats validation yet. In particular, no approved
-host has supplied permitted positive CPU, block-I/O, and memory taskstats
-evidence in both host and cgroup scopes, nor a v0.4 512-TGID/member overhead
-measurement. See EXP-0009.
+the original terminal state after one TUI window. At this release-preparation
+point the optional Linux acceptance tests remained skipped and no controlled-
+host taskstats validation had run. EXP-0010 subsequently recorded CPU and I/O
+acceptance plus permission-denied/procfs 512-TGID overhead. Permitted positive
+CPU, block-I/O, and memory taskstats evidence in both host and cgroup scopes,
+capable-query overhead, and a v0.4 512-member cgroup measurement remain absent.
 
 On 2026-08-24, the v0.3.0 release preparation validated implicit root-hunt
 option parity and conflicts, typed watch process attribution across lifecycle,

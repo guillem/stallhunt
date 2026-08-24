@@ -427,6 +427,59 @@ Python many_pids helper is the supported path. Measuring the 4,096-PID or
 16,384-task caps would require a dedicated, quota-aware setup and is not
 justified by this workstation result.
 
+## EXP-0010: v0.4 enabled-delayacct rootless and 512-TGID validation
+
+Date: 2026-08-24. Commit: `872c4cd` plus this documentation update.
+
+Host/kernel: Fedora workstation, Linux 7.2.0-ogc4.1.fc44.x86_64, 8 logical
+CPUs, 16 GiB RAM, NVMe through dm-crypt. Relevant configuration:
+`kernel.task_delayacct=1` was enabled by the operator before all owned
+workloads; Stallhunt ran as UID 1000 without elevation or file capabilities.
+
+### Result
+
+The enabled state is reported independently as `delay_accounting: enabled`,
+but TASKSTATS GET is permission-gated on this host. Two bounded endpoint
+attempts returned permission denial, after which Stallhunt reported
+`taskstats_capability: permission_denied`, queried no TGIDs, and retained its
+procfs baseline. A separate run with 512 newly started sleeper processes
+selected exactly the lowest 512 TGIDs, reported `tgid_limit_reached: true`,
+and again stopped on the two endpoint permission denials without exhausting
+the time or 1 MiB reply budgets. This passes the required rootless degradation
+behavior, not the positive-taskstats gate.
+
+The ignored CPU acceptance produced 46.51% exact host CPU PSI `some`, a severe
+finding, five victim candidates, and three suspects. The sleeping-thread case
+completed, but observed 1.02% host CPU PSI interference and therefore did not
+assert a no-contention verdict. The bounded I/O workload produced 12.69% exact
+host I/O PSI `some` and two procfs block-I/O delay victims; its existing
+acceptance assertion deliberately degraded because unrelated
+`/proc/<pid>/io` reads made process-I/O capability partial. Neither result
+contained taskstats evidence because GET remained denied.
+
+Release-binary overhead with 64 extra processes and 512 extra threads was
+1.10–1.13 s wall time, 0.01–0.03 s user time, 0.08–0.10 s system time, and
+7,004–7,904 KiB maximum RSS for a requested one-second observation. A true
+512-extra-process profile was 1.14–1.17 s wall time, 0.02–0.03 s user time,
+0.11–0.14 s system time, and 8,476–11,040 KiB maximum RSS. It exposed 859 PIDs
+and kept the general process walk within its bounds.
+
+### Remaining gap
+
+This login session cannot complete the release experiment. The executable has
+no effective `CAP_NET_ADMIN`, so positive taskstats CPU, block-I/O, and memory
+delays remain unavailable. Cgroup discovery also fails conservatively because
+the mount namespace exposes two cgroup-v2 mounts (`/sys/fs/cgroup` and
+`/run/bpftune/cgroupv2`); the collector rejects ambiguous mounts. Consequently
+no cgroup-scoped positive evidence or 512-member completeness measurement was
+claimed. Completing the gate requires an operator-provided taskstats-capable
+execution context and a controlled namespace with one unambiguous cgroup-v2
+mount (or a separately reviewed mount-selection change).
+
+Delay accounting remains enabled while this controlled validation is in
+progress. Restoring the operator's original `kernel.task_delayacct=0` state is
+still required when the experiment ends.
+
 ## EXP-0009: v0.4 taskstats and terminal-validation status
 
 Date: 2026-08-24.
@@ -443,13 +496,15 @@ original `stty -g` state.
 
 ### Controlled-host gap
 
-This is not the v0.4 release acceptance experiment. No operator-approved host
-has yet enabled `kernel.task_delayacct` before owned workloads, provided
-taskstats GET permission without elevation, or produced positive CPU,
-block-I/O, and memory taskstats evidence for both host and cgroup scopes. The
-v0.4 512-TGID/member observer-overhead measurement is also not recorded. Do
-not treat the historical 256-member EXP-0007 measurement, a rootless denial,
-or a skipped capable-host run as satisfying those gates.
+At the time of EXP-0009, this was not the v0.4 release acceptance experiment:
+no operator-approved host had enabled `kernel.task_delayacct` before owned
+workloads or recorded v0.4 512-TGID/member overhead. EXP-0010 subsequently
+closed only the enabled-state, rootless degradation, and host-side 512-TGID
+procfs-overhead portions. Permitted positive CPU, block-I/O, and memory
+taskstats evidence for host and cgroup scopes, capable-query overhead, and the
+512-member cgroup measurement remain open. Do not treat the historical
+256-member EXP-0007 measurement or a skipped capable-host run as satisfying
+those gates.
 
 ### Dependency-audit status
 
