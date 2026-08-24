@@ -208,12 +208,12 @@ pub fn recording_from_observation(
 pub fn observation_from_recording(recording: &Recording) -> Result<HuntObservation, RecordError> {
     validate_header(recording)?;
     let mut cpu = result_from_collected(&recording.observation.cpu);
-    if recording.schema_version == 1
-        && let Ok(value) = &mut cpu
-    {
-        // Future fields injected into a schema-1 document have no schema-1
-        // meaning and must not leak into replay.
-        strip_schema1_cpu(value);
+    if recording.schema_version == 1 {
+        if let Ok(value) = &mut cpu {
+            // Future fields injected into a schema-1 document have no schema-1
+            // meaning and must not leak into replay.
+            strip_schema1_cpu(value);
+        }
     }
     Ok(HuntObservation {
         psi: result_from_collected(&recording.observation.cpu_psi),

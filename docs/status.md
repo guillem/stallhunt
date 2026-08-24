@@ -546,10 +546,11 @@ concrete, not all at once.
 ## Last meaningful validation
 
 On 2026-08-24, the v0.4 procfs/taskstats collector slices passed deterministic
-parser, protocol, and interval tests for leader RSS, missing/negative fields,
-fault and block-I/O counter regression, overflow, task churn, PID/TID reuse,
-TASKSTATS UAPI version prefixes/offsets, malformed netlink replies, response
-budgets, and capability degradation. Recording
+parser, protocol, scripted collection, and interval tests for leader RSS,
+missing/negative fields, fault and block-I/O counter regression, overflow,
+task churn, PID/TID reuse, lowest-512 TGID selection, identity bracketing,
+`ESRCH`, TASKSTATS UAPI version prefixes/offsets, malformed nested replies,
+response/time budgets, and capability degradation. Recording
 redaction and schema-1 replay compatibility were also exercised. The complete
 local formatting, locked offline Clippy, and locked offline test gates passed:
 
@@ -559,8 +560,12 @@ cargo clippy --locked --offline --workspace --all-targets --all-features -- -D w
 cargo test --locked --offline --workspace --all-features
 ```
 
-The optional Linux acceptance tests remain skipped; this slice has no required
-controlled-host taskstats validation yet.
+The bounded local PTY check observed alternate-screen enter/leave and restored
+the original terminal state after one TUI window. The optional Linux acceptance tests remain skipped; this slice has no
+required controlled-host taskstats validation yet. In particular, no approved
+host has supplied permitted positive CPU, block-I/O, and memory taskstats
+evidence in both host and cgroup scopes, nor a v0.4 512-TGID/member overhead
+measurement. See EXP-0009.
 
 On 2026-08-24, the v0.3.0 release preparation validated implicit root-hunt
 option parity and conflicts, typed watch process attribution across lifecycle,

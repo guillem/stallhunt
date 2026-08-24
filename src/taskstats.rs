@@ -163,20 +163,8 @@ pub fn collect_at(
     proc_root: &Path,
     keys: impl IntoIterator<Item = ProcessKey>,
 ) -> TaskstatsEndpoint {
-    let mut selected: Vec<_> = keys.into_iter().collect();
-    selected.sort_unstable();
-    selected.dedup();
-    let mut endpoint = TaskstatsEndpoint::unavailable(TaskstatsCapability::Failed);
-    endpoint.issues.selected_tgids =
-        u32::try_from(selected.len().min(MAX_TGIDS)).unwrap_or(u32::MAX);
-    endpoint.issues.tgid_limit_reached = selected.len() > MAX_TGIDS;
-    selected.truncate(MAX_TGIDS);
     let started = Instant::now();
-    let configured_delay_accounting = delay_accounting_state(proc_root);
-    // This sysctl is an independent, point-in-time capability observation. It
-    // remains useful when TASKSTATS transport is denied or unsupported, while
-    // never proving the setting held for a process's whole lifetime.
-    endpoint.delay_accounting = configured_delay_accounting;
+    let (selected, mut endpoint) = selected_endpoint(keys, delay_accounting_state(proc_root));
     let mut transport = match NetlinkTransport::open() {
         Ok(value) => value,
         Err(error) => {
@@ -191,20 +179,63 @@ pub fn collect_at(
             return endpoint;
         }
     };
+    collect_queries(
+        endpoint,
+        selected,
+        |key| identity_matches(proc_root, key),
+        |tgid| transport.get(family, tgid, started),
+        || started.elapsed(),
+    )
+}
+
+fn selected_endpoint(
+    keys: impl IntoIterator<Item = ProcessKey>,
+    delay_accounting: DelayAccountingState,
+) -> (Vec<ProcessKey>, TaskstatsEndpoint) {
+    let mut selected: Vec<_> = keys.into_iter().collect();
+    selected.sort_unstable();
+    selected.dedup();
+    let mut endpoint = TaskstatsEndpoint::unavailable(TaskstatsCapability::Failed);
+    endpoint.issues.selected_tgids =
+        u32::try_from(selected.len().min(MAX_TGIDS)).unwrap_or(u32::MAX);
+    endpoint.issues.tgid_limit_reached = selected.len() > MAX_TGIDS;
+    selected.truncate(MAX_TGIDS);
+    // This sysctl is an independent, point-in-time capability observation. It
+    // remains useful when TASKSTATS transport is denied or unsupported, while
+    // never proving the setting held for a process's whole lifetime.
+    endpoint.delay_accounting = delay_accounting;
+    (selected, endpoint)
+}
+
+/// The query loop is deliberately independent of the socket implementation so
+/// tests can script identity changes and transport outcomes without opening a
+/// netlink socket. Production still uses the bounded request-only transport.
+fn collect_queries<I, Q, E>(
+    mut endpoint: TaskstatsEndpoint,
+    selected: Vec<ProcessKey>,
+    mut identity_matches: I,
+    mut query: Q,
+    mut elapsed: E,
+) -> TaskstatsEndpoint
+where
+    I: FnMut(ProcessKey) -> bool,
+    Q: FnMut(u32) -> Result<TaskstatsRaw, TransportError>,
+    E: FnMut() -> Duration,
+{
     endpoint.capability = TaskstatsCapability::Available;
     for key in selected {
-        if started.elapsed() >= TOTAL_TIMEOUT {
+        if elapsed() >= TOTAL_TIMEOUT {
             endpoint.issues.time_budget_exhausted = true;
             break;
         }
         // Bracket each GET with leader identity reads. Any mismatch is normal
         // process churn, never an attribution to a recycled PID.
-        if !identity_matches(proc_root, key) {
+        if !identity_matches(key) {
             endpoint.issues.churned += 1;
             continue;
         }
-        match transport.get(family, key.pid, started) {
-            Ok(raw) if identity_matches(proc_root, key) => {
+        match query(key.pid) {
+            Ok(raw) if identity_matches(key) => {
                 endpoint.issues.queried_tgids += 1;
                 endpoint.values.insert(key, raw);
             }
@@ -212,7 +243,7 @@ pub fn collect_at(
             Err(TransportError::Kernel(-3)) => endpoint.issues.churned += 1, // ESRCH
             Err(error) => {
                 endpoint.capability = map_error(&error, &mut endpoint.issues);
-                if started.elapsed() >= TOTAL_TIMEOUT {
+                if elapsed() >= TOTAL_TIMEOUT {
                     endpoint.issues.time_budget_exhausted = true;
                 }
                 if matches!(error, TransportError::Budget | TransportError::Timeout)
@@ -538,13 +569,7 @@ impl NetlinkTransport {
                 i32::try_from(RecvFlags::TRUNC.bits()).unwrap_or(0),
             )
             .map_err(TransportError::Io)?;
-        if sender.port_number() != 0 {
-            return Err(TransportError::Malformed);
-        }
-        if !reply_fits_budget(self.reply_bytes, length) {
-            return Err(TransportError::Budget);
-        }
-        self.reply_bytes += length;
+        account_reply(&mut self.reply_bytes, length, &sender)?;
         if started.elapsed() >= TOTAL_TIMEOUT {
             return Err(TransportError::Timeout);
         }
@@ -571,6 +596,34 @@ impl NetlinkTransport {
 
 fn reply_fits_budget(consumed: usize, received: usize) -> bool {
     received <= MAX_REPLY_BYTES.saturating_sub(consumed)
+}
+
+fn consume_reply_bytes(consumed: &mut usize, received: usize) -> Result<(), TransportError> {
+    if !reply_fits_budget(*consumed, received) {
+        return Err(TransportError::Budget);
+    }
+    *consumed += received;
+    Ok(())
+}
+
+fn account_reply(
+    consumed: &mut usize,
+    received: usize,
+    sender: &SocketAddr,
+) -> Result<(), TransportError> {
+    // Every received datagram consumes the endpoint budget, including one
+    // rejected as unsolicited or spoofed. Otherwise a stream of wrong-sender
+    // traffic could bypass the hard cumulative byte bound.
+    consume_reply_bytes(consumed, received)?;
+    if is_kernel_sender(sender) {
+        Ok(())
+    } else {
+        Err(TransportError::Malformed)
+    }
+}
+
+fn is_kernel_sender(sender: &SocketAddr) -> bool {
+    sender.port_number() == 0
 }
 
 fn message(typ: u16, sequence: u32, cmd: u8, attributes: &[u8]) -> Vec<u8> {
@@ -724,6 +777,171 @@ fn put_u32(out: &mut Vec<u8>, x: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key(pid: u32) -> ProcessKey {
+        ProcessKey {
+            pid,
+            start_time_ticks: 1,
+        }
+    }
+
+    fn raw() -> TaskstatsRaw {
+        TaskstatsRaw {
+            version: 13,
+            cpu_delay_ns: Some(1),
+            block_io_delay_ns: Some(2),
+            swapin_delay_ns: Some(3),
+            reclaim_delay_ns: Some(4),
+            thrashing_delay_ns: Some(5),
+            compaction_delay_ns: Some(6),
+            write_protect_copy_delay_ns: Some(7),
+        }
+    }
+
+    #[test]
+    fn scripted_collection_selects_lowest_512_unique_tgids() {
+        let keys = (0..600).rev().map(key).chain([key(2), key(3)]);
+        let (selected, endpoint) = selected_endpoint(keys, DelayAccountingState::Disabled);
+        assert_eq!(selected.len(), MAX_TGIDS);
+        assert_eq!(selected.first(), Some(&key(0)));
+        assert_eq!(selected.last(), Some(&key(511)));
+        assert_eq!(endpoint.issues.selected_tgids, MAX_TGIDS as u32);
+        assert!(endpoint.issues.tgid_limit_reached);
+
+        let queried = std::cell::RefCell::new(Vec::new());
+        let result = collect_queries(
+            endpoint,
+            selected,
+            |_| true,
+            |pid| {
+                queried.borrow_mut().push(pid);
+                Ok(raw())
+            },
+            || Duration::ZERO,
+        );
+        assert_eq!(*queried.borrow(), (0..512).collect::<Vec<_>>());
+        assert_eq!(result.values.len(), MAX_TGIDS);
+        assert_eq!(result.capability, TaskstatsCapability::Partial);
+    }
+
+    #[test]
+    fn taskstats_request_policy_keeps_the_documented_time_and_reply_bounds() {
+        assert_eq!(REQUEST_TIMEOUT, Duration::from_millis(20));
+        assert_eq!(TOTAL_TIMEOUT, Duration::from_millis(100));
+        assert_eq!(MAX_REPLY_BYTES, 1024 * 1024);
+    }
+
+    #[test]
+    fn scripted_collection_brackets_identity_and_treats_esrch_as_churn() {
+        let (selected, endpoint) =
+            selected_endpoint([key(1), key(2), key(3)], DelayAccountingState::Enabled);
+        let identity_calls = std::cell::RefCell::new(BTreeMap::new());
+        let queried = std::cell::RefCell::new(Vec::new());
+        let result = collect_queries(
+            endpoint,
+            selected,
+            |candidate| {
+                let mut calls = identity_calls.borrow_mut();
+                let call = calls.entry(candidate.pid).or_insert(0_u8);
+                *call += 1;
+                // PID 1 disappears before the request. PID 2 is reused after
+                // the reply. PID 3 survives the first identity check but the
+                // kernel reports ESRCH before replying.
+                !matches!((candidate.pid, *call), (1, _) | (2, 2))
+            },
+            |pid| {
+                queried.borrow_mut().push(pid);
+                if pid == 3 {
+                    Err(TransportError::Kernel(-3))
+                } else {
+                    Ok(raw())
+                }
+            },
+            || Duration::ZERO,
+        );
+        assert_eq!(*queried.borrow(), vec![2, 3]);
+        assert!(result.values.is_empty());
+        assert_eq!(result.issues.churned, 3);
+        assert_eq!(result.capability, TaskstatsCapability::Partial);
+    }
+
+    #[test]
+    fn scripted_collection_maps_terminal_transport_outcomes_and_budgets() {
+        let scenarios = [
+            (
+                TransportError::Kernel(-13),
+                TaskstatsCapability::PermissionDenied,
+            ),
+            (
+                TransportError::Kernel(-95),
+                TaskstatsCapability::Unsupported,
+            ),
+            (TransportError::Timeout, TaskstatsCapability::TimedOut),
+            (TransportError::Budget, TaskstatsCapability::Partial),
+        ];
+        for (error, capability) in scenarios {
+            let (selected, endpoint) =
+                selected_endpoint([key(1), key(2)], DelayAccountingState::Unknown);
+            let calls = std::cell::Cell::new(0_u8);
+            let result = collect_queries(
+                endpoint,
+                selected,
+                |_| true,
+                |_| {
+                    calls.set(calls.get() + 1);
+                    Err(match &error {
+                        TransportError::Kernel(value) => TransportError::Kernel(*value),
+                        TransportError::Timeout => TransportError::Timeout,
+                        TransportError::Budget => TransportError::Budget,
+                        _ => unreachable!(),
+                    })
+                },
+                || Duration::ZERO,
+            );
+            assert_eq!(result.capability, capability);
+            assert_eq!(calls.get(), 1, "{capability:?} must stop the endpoint");
+            match capability {
+                TaskstatsCapability::PermissionDenied => {
+                    assert_eq!(result.issues.permission_denied, 1);
+                }
+                TaskstatsCapability::TimedOut => {
+                    assert_eq!(result.issues.timed_out, 1);
+                    assert!(result.issues.time_budget_exhausted);
+                }
+                TaskstatsCapability::Partial => {
+                    assert!(result.issues.reply_budget_exhausted);
+                }
+                TaskstatsCapability::Unsupported => {
+                    assert_eq!(result.issues.permission_denied, 0);
+                    assert_eq!(result.issues.timed_out, 0);
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        let (selected, endpoint) = selected_endpoint([key(1)], DelayAccountingState::Unknown);
+        let result = collect_queries(
+            endpoint,
+            selected,
+            |_| true,
+            |_| Ok(raw()),
+            || TOTAL_TIMEOUT,
+        );
+        assert!(result.issues.time_budget_exhausted);
+        assert!(result.values.is_empty());
+        assert_eq!(result.capability, TaskstatsCapability::Partial);
+
+        let (selected, endpoint) = selected_endpoint([key(1)], DelayAccountingState::Unknown);
+        let result = collect_queries(
+            endpoint,
+            selected,
+            |_| true,
+            |_| Err(TransportError::Malformed),
+            || Duration::ZERO,
+        );
+        assert_eq!(result.capability, TaskstatsCapability::Partial);
+        assert_eq!(result.issues.malformed, 1);
+    }
     #[test]
     fn taskstats_offsets_and_version_prefixes_follow_the_uapi() {
         let cases = [
@@ -805,6 +1023,27 @@ mod tests {
     fn attributes_reject_truncation_and_bad_padding() {
         assert!(attrs(&[4, 0, 1, 0, 1]).is_err());
         assert!(attrs(&[5, 0, 1, 0, 0]).is_err());
+    }
+    #[test]
+    fn taskstats_rejects_version_zero_and_nested_reply_mismatches() {
+        let mut version_zero = vec![0; 64];
+        version_zero[0..2].copy_from_slice(&0_u16.to_ne_bytes());
+        assert!(matches!(
+            parse_taskstats(&version_zero),
+            Err(TransportError::Malformed)
+        ));
+
+        let family = 42;
+        let sequence = 7;
+        let malformed_nested = attr(
+            TASKSTATS_TYPE_AGGR_TGID,
+            &attr(TASKSTATS_TYPE_TGID, &[1, 2, 3]),
+        );
+        let reply = message(family, sequence, TASKSTATS_CMD_GET, &malformed_nested);
+        assert!(matches!(
+            parse_taskstats_reply(&reply, family, sequence, 1),
+            Err(TransportError::Malformed)
+        ));
     }
     #[test]
     fn regression_is_unavailable_not_zero() {
@@ -955,5 +1194,28 @@ mod tests {
         assert!(reply_fits_budget(MAX_REPLY_BYTES - 1, 1));
         assert!(!reply_fits_budget(MAX_REPLY_BYTES - 1, 2));
         assert!(!reply_fits_budget(MAX_REPLY_BYTES, 1));
+        let mut consumed = MAX_REPLY_BYTES - 2;
+        consume_reply_bytes(&mut consumed, 1).unwrap();
+        assert_eq!(consumed, MAX_REPLY_BYTES - 1);
+        assert!(matches!(
+            consume_reply_bytes(&mut consumed, 2),
+            Err(TransportError::Budget)
+        ));
+    }
+    #[test]
+    fn kernel_sender_validation_rejects_userspace_ports() {
+        assert!(is_kernel_sender(&SocketAddr::new(0, 0)));
+        assert!(!is_kernel_sender(&SocketAddr::new(123, 0)));
+
+        let mut consumed = MAX_REPLY_BYTES - 1;
+        assert!(matches!(
+            account_reply(&mut consumed, 1, &SocketAddr::new(123, 0)),
+            Err(TransportError::Malformed)
+        ));
+        assert_eq!(consumed, MAX_REPLY_BYTES);
+        assert!(matches!(
+            account_reply(&mut consumed, 1, &SocketAddr::new(0, 0)),
+            Err(TransportError::Budget)
+        ));
     }
 }

@@ -378,8 +378,9 @@ tools/measure-overhead.sh --binary target/release/stallhunt --duration 1 --repet
 ```
 
 Helpers were owned and cleaned up. CPU PID (4,096), schedstat task (16,384),
-and process-I/O (1,024) caps were not reached. The cgroup collector's 256-PID
-selection cap was already active on the baseline host.
+and process-I/O (1,024) caps were not reached. This pre-v0.4 run used the
+then-current 256-PID cgroup selection cap, so it is historical context only;
+it does not validate the v0.4 512-PID/member or taskstats bounds.
 
 ### Expected behavior
 
@@ -425,6 +426,30 @@ Do not spawn thousands of helper PIDs with bash background `sleep`; the
 Python many_pids helper is the supported path. Measuring the 4,096-PID or
 16,384-task caps would require a dedicated, quota-aware setup and is not
 justified by this workstation result.
+
+## EXP-0009: v0.4 taskstats and terminal-validation status
+
+Date: 2026-08-24.
+
+### Result
+
+Deterministic tests cover the bounded taskstats selection/query loop with 512
+lowest TGIDs, identity bracketing, PID reuse/churn, `ESRCH`, permission,
+unsupported, timeout, malformed, reply-budget, total-time, version, padding,
+nesting, and counter-regression outcomes. The local PTY command
+`tools/check-tui-pty.sh --binary target/debug/stallhunt` passed: one bounded
+TUI window emitted alternate-screen enter/leave sequences and restored the
+original `stty -g` state.
+
+### Controlled-host gap
+
+This is not the v0.4 release acceptance experiment. No operator-approved host
+has yet enabled `kernel.task_delayacct` before owned workloads, provided
+taskstats GET permission without elevation, or produced positive CPU,
+block-I/O, and memory taskstats evidence for both host and cgroup scopes. The
+v0.4 512-TGID/member observer-overhead measurement is also not recorded. Do
+not treat the historical 256-member EXP-0007 measurement, a rootless denial,
+or a skipped capable-host run as satisfying those gates.
 
 ## EXP-0008: Deterministic scoped possible-thrashing validation
 

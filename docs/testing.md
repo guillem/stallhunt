@@ -242,9 +242,18 @@ Presentation tests cover host/cgroup role rendering, exact scoped lifecycle
 matching, responsive 120×30 and 160×45 grids, compact 119×29/80×24 fallback,
 detail preference across resize, layout-derived Unicode-aware scrolling, and
 terminal-safe identifiers. Unit tests exercise the one-shot terminal
-restoration guard on explicit cleanup and panic unwinding. A real PTY
-raw-mode/alternate-screen restoration check remains a controlled-host release
-gate because it is not deterministic in the ordinary test runner.
+restoration guard on explicit cleanup and panic unwinding. On Linux systems
+with util-linux `script`, run the reproducible real-PTY check against a built
+binary; it captures a bounded one-window TUI stream, checks alternate-screen
+enter/leave sequences, and compares `stty -g` before and after:
+
+```bash
+tools/check-tui-pty.sh --binary target/debug/stallhunt
+```
+
+It is deliberately opt-in because a PTY utility is not guaranteed in ordinary
+CI images. A passing local PTY check does not replace the separately approved
+controlled-host taskstats evidence gate.
 
 M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus

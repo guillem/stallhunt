@@ -116,12 +116,15 @@ binary rather than Cargo or a debug build:
 cargo build --release --locked --offline
 tools/measure-overhead.sh --binary target/release/stallhunt --duration 1 --repetitions 3
 tools/measure-overhead.sh --binary target/release/stallhunt --duration 1 --repetitions 3 --scenario high --sleepers 64 --tasks 512
+tools/check-tui-pty.sh --binary target/debug/stallhunt
 ```
 
 The harness is opt-in and scenario-specific. It may use an already-installed
 `stress-ng` for CPU stress but never installs it; timings are evidence ranges,
-not a CI gate. `all` does not spawn hundreds of PIDs. EXP-0007 records
-workstation-scale PID/task cost.
+not a CI gate. `all` does not spawn hundreds of PIDs. The PTY check requires
+util-linux `script`; it captures the bounded one-window TUI stream, checks
+alternate screen enter/leave sequences, and compares terminal settings.
+EXP-0007 records workstation-scale PID/task cost.
 
 ## Repository hygiene
 

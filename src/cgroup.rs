@@ -1717,6 +1717,20 @@ mod tests {
         assert!(leaves.iter().all(|leaf| result.contains(leaf)));
     }
     #[test]
+    fn pid_selection_keeps_exactly_the_lowest_512_members() {
+        let root = TempTree::new();
+        for pid in (1..=MAX_CGROUP_PROCESSES as u32 + 1).rev() {
+            fs::create_dir(root.0.join(pid.to_string())).unwrap();
+        }
+        fs::create_dir(root.0.join("not-a-pid")).unwrap();
+        let mut issues = CgroupCollectionIssues::default();
+        let selected = select_pids(&root.0, &mut issues);
+        assert_eq!(selected.len(), MAX_CGROUP_PROCESSES);
+        assert_eq!(selected.first(), Some(&1));
+        assert_eq!(selected.last(), Some(&(MAX_CGROUP_PROCESSES as u32)));
+        assert!(issues.process_limit_reached);
+    }
+    #[test]
     fn systemd_candidates_are_conservative() {
         assert_eq!(
             systemd_unit_candidate("/a/foo.service"),

@@ -193,8 +193,8 @@ fn validate_command(program: &str, arguments: &[String], example: &Example) -> O
             .arg("--help")
             .output()
             .expect("run documented command through CLI parser"),
-        "tools/measure-overhead.sh" => Command::new("bash")
-            .arg("tools/measure-overhead.sh")
+        "tools/measure-overhead.sh" | "tools/check-tui-pty.sh" => Command::new("bash")
+            .arg(program)
             .args(arguments)
             .arg("--help")
             .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -441,7 +441,7 @@ fn is_executable_command(
                         )
                     }))
         }
-        "tools/measure-overhead.sh" => true,
+        "tools/measure-overhead.sh" | "tools/check-tui-pty.sh" => true,
         _ => false,
     }
 }
