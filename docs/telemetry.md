@@ -184,6 +184,26 @@ Expected concepts include:
 - time waiting on run queue,
 - scheduler timeslice count.
 
+### Optional TASKSTATS delay accounting
+
+The v0.4 collector additionally makes bounded request-only generic-netlink
+`TASKSTATS` GET queries for at most the 512 lowest leaders already selected by
+the existing procfs walk. It performs no second PID scan, event subscription,
+background thread, privilege elevation, or sysctl change. Each GET is bracketed
+by `/proc/<pid>/stat` `ProcessKey` checks, so PID reuse and normal `ESRCH`
+churn cannot create identity-bound evidence.
+
+The local codec parses UAPI bytes with checked lengths, nesting, sequence,
+sender, TGID, and version gates; it does not cast wire bytes to a C layout.
+Send/receive timeouts are 20 ms, total endpoint work is 100 ms, and replies
+are capped at 1 MiB. Permission, timeout, malformed-protocol, and budget
+outcomes are explicit capability/collection states. CPU, block-I/O, swap-in,
+reclaim/freepages, thrashing, compaction, and write-protect-copy counters are
+kept separately and counter regression is unavailable evidence, never zero.
+The transport capability is deliberately distinct from delay-accounting state:
+a successful GET and zero counters do not prove delay accounting was enabled
+or that no delay occurred.
+
 Kernel/configuration behavior varies; capability discovery and fixture coverage are required.
 
 A CPU diagnosis can be useful without this source, but victim attribution confidence should be lower.
@@ -300,7 +320,7 @@ Device-level saturation can be high confidence while process attribution remains
 M4 implements ADR-0006 with cgroup v2 only: it locates the mount from
 `/proc/self/mountinfo`, uses the unified `0::` record from
 `/proc/<pid>/cgroup`, and validates membership as `stat` → cgroup → `stat`.
-It selects at most 256 PIDs and retains at most 512 mapped cgroups including
+It selects at most 512 PIDs and retains at most 512 mapped cgroups including
 ancestors; it never recursively scans an arbitrary tree. Path/depth, file,
 snapshot-byte, and read-attempt limits are explicit. Caps, namespace
 visibility, permissions, controller absence, movement, and parse errors are

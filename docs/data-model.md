@@ -66,6 +66,14 @@ pending schema 2.
 
 This distinction is essential for replay and testing.
 
+The next internal-only normalized extension is a stable-leader TASKSTATS
+interval. It preserves individual optional cumulative-delay deltas for CPU,
+block I/O, swap-in, reclaim, thrashing, compaction, and write-protect-copy,
+plus typed collection completeness and a distinct delay-accounting state.
+These counters are not summed because their categories can overlap. They are
+currently omitted from JSON and schema-1 recordings; schema 2 will make their
+persistence contract explicit.
+
 ## Identity
 
 ### Process

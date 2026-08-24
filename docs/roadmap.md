@@ -184,7 +184,7 @@ Deliver:
 
 - cgroup-v2 mount discovery using mountinfo and `0::` unified membership only;
 - stat-cgroup-stat stable mapping under ADR-0006's 1,024-PID ceiling; the
-  implementation currently selects at most 256 PIDs;
+  implementation currently selects at most 512 PIDs;
 - mapped cgroups plus ancestors only under ADR-0006's 2,048-group ceiling; the
   implementation currently retains at most 512 groups with depth/path/
   file-byte, snapshot-byte, and read-attempt budgets;

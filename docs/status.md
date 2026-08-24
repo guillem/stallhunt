@@ -21,8 +21,11 @@ evidence plus optional taskstats delay evidence will support six independently
 ranked host/cgroup process roles, schema version 2, and a responsive wide TUI.
 The first procfs-normalization slice is implemented: the existing bounded walk
 now retains leader RSS/RSS growth in bytes, fault deltas, and stable-task
-block-I/O delay ticks. Taskstats, roles, schema migration, presentation,
-controlled-host validation, and release gates are still pending. Do not start
+block-I/O delay ticks. The bounded optional TASKSTATS GET collector now also
+normalizes version-gated delay counters behind typed transport and
+delay-accounting states; its evidence remains internal and is stripped from
+schema-1 recordings. Roles, schema migration, presentation, controlled-host
+validation, and release gates are still pending. Do not start
 M7 merely because eBPF is interesting; add a probe only for
 a concrete diagnostic gap. M5 recording and replay remain available for offline
 re-analysis. M4 remains implemented with opt-in live observational validation;
@@ -212,7 +215,7 @@ the test process and does not mutate the hierarchy.
   13.6029889%, three device candidates, and two process-I/O candidates.
 - M4 discovers a cgroup2 mount from `/proc/self/mountinfo`, parses unified
   `0::` membership, and uses stat-cgroup-stat identity validation. It selects
-  the lowest 256 visible PIDs per endpoint and reads only mapped cgroups plus
+  the lowest 512 visible PIDs per endpoint and reads only mapped cgroups plus
   ancestors, capped at 512 groups, depth 64, 4,096 path bytes, 64 KiB per file,
   8 MiB per snapshot, and 4,096 attempted reads. These implementation limits
   are more conservative than the 1,024-PID/2,048-group ADR ceilings.
@@ -307,8 +310,9 @@ the test process and does not mutate the hierarchy.
   caps were not reached.
 - The new procfs resource evidence is raw normalized context only. Delayacct
   block-I/O ticks can be absent or disabled, and zero or unavailable values do
-  not establish that a process suffered no I/O delay. Taskstats remains needed
-  for the planned direct CPU, memory, and I/O delay categories.
+  not establish that a process suffered no I/O delay. Optional TASKSTATS has
+  no controlled-host acceptance yet; its counters remain internal until the
+  schema-2 role slice consumes them.
 - GitHub Actions runs locked tests on Rust 1.85 and formatting, Clippy, and
   locked tests on stable Rust. The five environment-dependent Linux acceptance
   tests remain opt-in rather than CI workloads.
@@ -335,7 +339,8 @@ the test process and does not mutate the hierarchy.
   arbitrary host does not yet provide controlled per-cgroup pressure evidence.
 - The cgroup collector adds a second independent procfs PID walk rather than
   reusing the existing CPU or process-I/O selection. EXP-0007 found that walk
-  already at its 256-PID cap on a 370-PID host (94 groups, partial completeness).
+  already at its pre-v0.4 PID cap on a 370-PID host (94 groups, partial completeness);
+  the current collector cap is 512.
   Extra high-numbered helper PIDs did not increase the selected cgroup set.
 - M5 recordings are pre-1.0 and may become unreadable after a schema change.
   Identifier redaction is not cryptographic anonymization: PIDs, start times,
@@ -373,9 +378,9 @@ the test process and does not mutate the hierarchy.
 
 ## Pending work
 
-The approved v0.4.0 vertical slice has its bounded procfs normalization
-foundation. Remaining work adds optional taskstats delay evidence, six
-analyzer-owned host/cgroup roles, schema-2 outputs and recording migration, and
+The approved v0.4.0 vertical slice now has bounded procfs normalization and
+optional taskstats delay evidence. Remaining work adds six analyzer-owned
+host/cgroup roles, schema-2 outputs and recording migration, and
 the responsive wide TUI specified by ADR-0015 and ADR-0016. No additional M8
 chain or M7 probe is part of this slice.
 
@@ -405,7 +410,7 @@ Validation gaps:
 
 Operational and delivery gaps:
 
-- cgroup collection reaches its 256-PID selection cap on the measured
+- cgroup collection reached its pre-v0.4 PID selection cap on the measured
   workstation, so scoped context is partial and can omit higher-PID groups;
 - the v0.4.0 release is blocked until deterministic codec, attribution,
   migration, renderer, TUI, and overhead gates pass and a separately approved
@@ -434,9 +439,9 @@ the finding persistent and unconfirmed; see
 [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## Current recommended next task
-Implement the optional bounded taskstats collector, reusing the normalized
-procfs evidence as the ordinary-user baseline, before adding role
-inference. Do not start Milestone 7 or add another M8 chain as part of v0.4.0;
+Implement host process-role inference and schema-2 recording/output migration,
+reusing normalized procfs and optional taskstats evidence as the
+ordinary-user baseline. Do not start Milestone 7 or add another M8 chain as part of v0.4.0;
 coincident PSI still does not establish a causal path.
 
 ## Current design risks
@@ -496,7 +501,7 @@ Mitigation:
 
 ### R7: Cgroup bounded-selection blind spots
 
-The deterministic lowest-256-PID cgroup selection is already capped on the
+The deterministic lowest-512-PID cgroup selection can be capped on the
 measured workstation. Relevant higher-PID cgroups can be omitted even though
 the retained scoped findings are valid.
 
@@ -544,9 +549,11 @@ concrete, not all at once.
 
 ## Last meaningful validation
 
-On 2026-08-24, the v0.4 procfs-normalization slice passed deterministic parser
-and interval tests for leader RSS, missing/negative fields, fault and block-I/O
-counter regression, overflow, task churn, and PID/TID reuse. Recording
+On 2026-08-24, the v0.4 procfs/taskstats collector slices passed deterministic
+parser, protocol, and interval tests for leader RSS, missing/negative fields,
+fault and block-I/O counter regression, overflow, task churn, PID/TID reuse,
+TASKSTATS UAPI version prefixes/offsets, malformed netlink replies, response
+budgets, and capability degradation. Recording
 redaction and schema-1 replay compatibility were also exercised. The complete
 local formatting, locked offline Clippy, and locked offline test gates passed:
 
@@ -713,7 +720,7 @@ checked-in related-evidence text fixture and structural hunt JSON.
 Earlier the same day, EXP-0007 measured a current release binary on Linux
 7.1.5 with about 370 visible PIDs and ~1,587 stable tasks. Three one-second
 hunts used about 6 MiB RSS and 110--210 ms PSI-window skew; cgroup collection
-was already at its 256-PID cap. Adding 64 sleepers or 512 sleeping threads
+was already at its pre-v0.4 PID cap. The current collector cap is 512. Adding 64 sleepers or 512 sleeping threads
 stayed under the CPU and process-I/O caps. `many_pids` now uses a Python helper
 so failed forks cannot retry into a sleeper leak.
 

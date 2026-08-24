@@ -675,6 +675,10 @@ mod tests {
             schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
             task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
             schedstat_capability: crate::cpu::SchedstatCapability::Available,
+            taskstats: Vec::new(),
+            taskstats_collection_issues: Default::default(),
+            taskstats_capability: Default::default(),
+            delay_accounting: Default::default(),
         };
         HuntObservation {
             psi: Ok(psi),

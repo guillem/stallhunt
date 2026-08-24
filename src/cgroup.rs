@@ -12,7 +12,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::cpu::{ProcessKey, ProcessRaw, parse_process_stat, sanitized_process_name};
 
-pub const MAX_CGROUP_PROCESSES: usize = 256;
+pub const MAX_CGROUP_PROCESSES: usize = 512;
 pub const MAX_CGROUPS: usize = 512;
 pub const MAX_CGROUP_DEPTH: usize = 64;
 pub const MAX_CGROUP_PATH_BYTES: usize = 4_096;

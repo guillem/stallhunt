@@ -248,6 +248,10 @@ fn strip_schema1_cpu(value: &mut CpuProcessObservation) {
     value.collection_issues.task_block_io_counter_regressed = 0;
     value.collection_issues.task_block_io_aggregate_overflow = 0;
     value.collection_issues.resource_value_overflow = 0;
+    value.taskstats.clear();
+    value.taskstats_collection_issues = Default::default();
+    value.taskstats_capability = Default::default();
+    value.delay_accounting = Default::default();
 }
 
 pub fn encode_recording(recording: &Recording) -> Result<String, RecordError> {
@@ -680,6 +684,10 @@ mod tests {
                 schedstat_collection_issues: crate::cpu::SchedstatCollectionIssues::default(),
                 task_stat_collection_issues: crate::cpu::TaskStatCollectionIssues::default(),
                 schedstat_capability: SchedstatCapability::Unsupported,
+                taskstats: Vec::new(),
+                taskstats_collection_issues: Default::default(),
+                taskstats_capability: Default::default(),
+                delay_accounting: Default::default(),
             }),
             memory: Some(MemoryHuntObservation {
                 psi: Ok(MemoryPsiObservation {

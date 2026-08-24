@@ -41,10 +41,15 @@ M4 reads only from the caller-visible cgroup2 mount and procfs membership files;
 it does not create, move, configure, or delete cgroups. Mount namespaces and
 delegation may intentionally hide ancestors or controller files. Such absence is
 reported as partial capability/context rather than worked around with privilege
-escalation. The implementation bounds membership-first reads to 256 PIDs and
+escalation. The implementation bounds membership-first reads to 512 PIDs and
 512 groups, plus depth, path, file-byte, snapshot-byte, and read-attempt limits.
 These are more conservative than ADR-0006's 1,024-PID/2,048-group ceilings and
 protect against a large or adversarial hierarchy.
+
+Optional TASKSTATS GET collection is also observational and bounded: it never
+enables `kernel.task_delayacct`, changes a sysctl, elevates privileges, or
+subscribes to task-exit events. Kernel permission denial or disabled accounting
+reduces only that evidence source; procfs-based diagnosis remains available.
 
 Cgroup paths and inferred unit names can disclose service, user, or container
 structure. They are sensitive collection output alongside process names and

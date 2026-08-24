@@ -6,6 +6,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::taskstats::{
+    self, DelayAccountingState, TaskstatsCapability, TaskstatsCollectionIssues, TaskstatsEndpoint,
+    TaskstatsInterval,
+};
+
 const MAX_PROCESSES: usize = 4_096;
 // Schedstat is thread-scoped. This global cap bounds selected task samples
 // while retaining deterministic lowest-PID/lowest-TID selection. A successful
@@ -152,6 +157,7 @@ pub struct CpuSnapshot {
     pub issues: ProcessCollectionIssues,
     pub schedstat_issues: SchedstatCollectionIssues,
     pub task_stat_issues: TaskStatCollectionIssues,
+    pub taskstats: TaskstatsEndpoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -217,6 +223,16 @@ pub struct CpuProcessObservation {
     #[serde(default, skip_serializing)]
     pub task_stat_collection_issues: TaskStatCollectionIssues,
     pub schedstat_capability: SchedstatCapability,
+    /// Optional generic-netlink delay-accounting evidence. Schema-1 recording
+    /// deliberately strips this field until schema 2 owns replay semantics.
+    #[serde(default, skip_serializing)]
+    pub taskstats: Vec<TaskstatsInterval>,
+    #[serde(default, skip_serializing)]
+    pub taskstats_collection_issues: TaskstatsCollectionIssues,
+    #[serde(default, skip_serializing)]
+    pub taskstats_capability: TaskstatsCapability,
+    #[serde(default, skip_serializing)]
+    pub delay_accounting: DelayAccountingState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -399,6 +415,7 @@ pub(crate) fn read_snapshot(proc_root: &Path) -> Result<CpuSnapshot, CpuError> {
         Err(_) => (None, LoadAverageAvailability::Unreadable),
     };
     let (processes, issues, schedstat_issues, task_stat_issues) = collect_processes(proc_root);
+    let taskstats = taskstats::collect_at(proc_root, processes.keys().copied());
     Ok(CpuSnapshot {
         host,
         load,
@@ -407,6 +424,7 @@ pub(crate) fn read_snapshot(proc_root: &Path) -> Result<CpuSnapshot, CpuError> {
         issues,
         schedstat_issues,
         task_stat_issues,
+        taskstats,
     })
 }
 
@@ -1116,6 +1134,8 @@ pub fn interval_from_snapshots(
     {
         schedstat_capability = SchedstatCapability::Partial;
     }
+    let (taskstats, taskstats_collection_issues, taskstats_capability, delay_accounting) =
+        taskstats::intervals(&start.taskstats, &end.taskstats);
     Ok(CpuProcessObservation {
         elapsed,
         clock_ticks_per_second,
@@ -1135,6 +1155,10 @@ pub fn interval_from_snapshots(
         schedstat_collection_issues,
         task_stat_collection_issues,
         schedstat_capability,
+        taskstats,
+        taskstats_collection_issues,
+        taskstats_capability,
+        delay_accounting,
     })
 }
 
@@ -1453,6 +1477,7 @@ mod tests {
             issues: ProcessCollectionIssues::default(),
             schedstat_issues: SchedstatCollectionIssues::default(),
             task_stat_issues: TaskStatCollectionIssues::default(),
+            taskstats: TaskstatsEndpoint::unavailable(TaskstatsCapability::Failed),
         }
     }
     fn process(pid: u32, start: u64, ticks: u64) -> ProcessRaw {
