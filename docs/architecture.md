@@ -152,9 +152,12 @@ mapping from severity to visual weight, expressed as two backends
 severity looks like.
 
 Watch carries process attribution forward as typed analyzer output rather than
-reconstructing it in a renderer. Supported current signals contain bounded CPU
-runnable-delay victims, CPU-consumption suspects, or I/O-activity suspects;
-memory, cgroup, and I/O-victim process roles remain absent by design. The
+reconstructing it in a renderer. Host and scoped-cgroup signals carry the two
+resource-matching lists from canonical six-role scopes. Cgroup ranking filters
+the full stable direct-or-descendant membership set by `ProcessKey`, while host
+ranking remains independent; no renderer uses the five displayed cgroup
+members as inference input. Schema-2 and lifecycle transport are implemented;
+the human cgroup-role panels remain a presentation-slice responsibility. The
 tracker refreshes candidates on confirmed pressure windows and marks retained
 last-observed candidates stale on unconfirmed or resolved lifecycle findings.
 Text, JSON, and TUI therefore expose the same candidate evidence and cannot

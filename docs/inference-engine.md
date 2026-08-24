@@ -248,11 +248,13 @@ pressure evidence.
 
 ## Confidence model
 
-## Implemented v0.4 host process roles
+## Implemented v0.4 scoped process roles
 
-Schema-2 analysis owns one host `process_scopes` entry with six independently
-bounded role lists. Lists are assessed only when the matching host PSI finding
-is pressure. Scheduler delay is the CPU-victim primary evidence; TASKSTATS CPU
+Schema-2 analysis owns independently bounded role lists for the host and for
+each cgroup path with matching scoped PSI pressure. A cgroup uses stable direct
+or descendant members matched by `ProcessKey`, with path-component boundaries;
+host rankings remain unfiltered and independent. Lists are assessed only when
+the matching scope's PSI finding is pressure. Scheduler delay is the CPU-victim primary evidence; TASKSTATS CPU
 delay is corroboration or a per-process fallback. Memory-delay components are
 kept separate and ranked by their largest component, while major faults are a
 low-confidence per-process fallback. Positive RSS growth is the only memory
@@ -261,6 +263,9 @@ ticks, and positive process I/O accounting remains an I/O-suspect signal.
 Candidates are capped at five, direct evidence sorts before fallback, and a
 candidate never appears twice for one role. Collection gaps make only their
 affected list partial or unavailable; they do not weaken independent roles.
+Capped, moved, reused, or otherwise incomplete cgroup membership makes only
+that scope's assessed lists partial. Ancestor and descendant scopes may repeat
+a candidate; those observations are overlapping context, never additive loss.
 
 Confidence reflects evidence quality.
 

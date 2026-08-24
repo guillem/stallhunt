@@ -211,9 +211,10 @@ identity remains path plus resource, so a mechanism change stays `persistent`. U
 `hunt --json` or `record` when the full evidence payload is required. Invalid
 `--count` still exits 2.
 
-Schema-2 hunt/replay JSON and watch JSON include canonical host
-`process_scopes` with all six process roles. Legacy hunt/replay text and watch
-text show each role or an explicit unavailable/not-assessed state. Candidate
+Schema-2 hunt/replay JSON and watch JSON include canonical host and
+PSI-pressured cgroup `process_scopes` with all six process roles. Current
+legacy hunt/replay text and watch text render host roles; cgroup role panels
+are deferred to the responsive presentation slice. Candidate
 lists are bounded and may be marked partial; retained lifecycle lists are
 explicitly stale rather than presented as current evidence.
 
@@ -232,12 +233,14 @@ window summary but do not create tracked identities. A mechanism change updates
 the lifecycle row's `kind` while preserving host-resource identity or cgroup
 path-plus-resource identity.
 
-Every watch surface includes analyzer-owned CPU, memory, and I/O victim and
-suspect lists for the host scope. Each candidate carries a stable process key,
+Every watch surface transports analyzer-owned CPU, memory, and I/O victim and
+suspect lists for the host scope, while schema-2 and lifecycle records also
+carry cgroup-resource pairs. Each candidate carries a stable process key,
 terminal-safe name, confidence, typed evidence, and its analyzer label. Direct
 delay evidence and heuristic fallbacks remain distinguishable, and candidates
-are correlation-qualified rather than proof of harm or causality. Cgroup role
-lists are the next v0.4.0 slice.
+are correlation-qualified rather than proof of harm or causality. Cgroup
+lifecycle findings carry their matching victim/suspect pair; stale retention is
+matched by cgroup path plus resource identity.
 
 Lifecycle findings repeat their last observed process candidates. A confirmed
 persistent finding refreshes those candidates from the current window; an

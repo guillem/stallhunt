@@ -200,18 +200,27 @@ pub(crate) fn analyze_hunt(result: &HuntObservation) -> HuntAnalyses {
         .io
         .as_ref()
         .and_then(|value| value.processes.as_ref().ok());
+    let mut process_scopes = vec![analysis::host_process_scope(
+        result.cpu.as_ref().ok(),
+        process_io,
+        cpu_pressure,
+        memory_pressure,
+        io_pressure,
+    )];
+    process_scopes.extend(analysis::cgroup_process_scopes(
+        result
+            .cgroup
+            .as_ref()
+            .and_then(|value| value.observation.as_ref().ok()),
+        result.cpu.as_ref().ok(),
+        process_io,
+    ));
     HuntAnalyses {
         cpu,
         memory,
         io,
         cgroup,
-        process_scopes: vec![analysis::host_process_scope(
-            result.cpu.as_ref().ok(),
-            process_io,
-            cpu_pressure,
-            memory_pressure,
-            io_pressure,
-        )],
+        process_scopes,
     }
 }
 
@@ -1149,7 +1158,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
         &cgroup.analysis.findings,
     );
     let findings = analysis::ranked_findings_with_io(cpu.analysis, memory.analysis, io.analysis);
-    let process_scopes = vec![analysis::host_process_scope(
+    let mut process_scopes = vec![analysis::host_process_scope(
         cpu.cpu.as_ref(),
         io.processes.as_ref(),
         findings.iter().find_map(|finding| match finding {
@@ -1179,6 +1188,11 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
             _ => None,
         }),
     )];
+    process_scopes.extend(analysis::cgroup_process_scopes(
+        cgroup.observation.as_ref(),
+        cpu.cpu.as_ref(),
+        io.processes.as_ref(),
+    ));
     let mut qualifiers = cpu.qualifiers;
     qualifiers.extend(memory.qualifiers);
     qualifiers.extend(io.qualifiers);
@@ -2292,6 +2306,12 @@ pub(crate) mod tests {
             "cpu_quota_throttle"
         );
         assert_eq!(json["cgroup_findings"][0]["mechanism_confidence"], "low");
+        assert_eq!(json["process_scopes"][1]["scope"]["scope"], "cgroup");
+        assert_eq!(
+            json["process_scopes"][1]["scope"]["path"],
+            "/workload.service"
+        );
+        assert_eq!(json["process_scopes"][1]["roles"][0]["role"], "cpu_victim");
     }
 
     #[test]

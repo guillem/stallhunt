@@ -233,6 +233,13 @@ including empty states and terminal-safe truncation. Executable CLI tests cover 
 and JSON on a 100 ms window, plus prompt second-SIGINT termination during an
 unlimited five-minute window. Live watch does not assert host contention.
 
+The v0.4 scoped-role matrix also covers direct and descendant membership,
+component-boundary rejection, independent host/cgroup ranking, five-candidate
+limits and stable keys, and membership-cap partial completeness. Cgroup watch
+signals obtain their exact two matching role lists from the selected
+path-plus-resource scope so stale lifecycle retention cannot cross resources.
+Human cgroup-role rendering is covered by the following presentation slice.
+
 M8 evidence-chain tests cover a host memory mechanism plus I/O pressure
 positive path (reclaim, swap, possible thrashing), a same-cgroup memory plus
 I/O pressure path gated by `memory.events` high/max or `memory.stat`

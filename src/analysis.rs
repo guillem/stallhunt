@@ -20,7 +20,7 @@ use crate::psi::{
     MemoryPsiObservation,
 };
 use crate::taskstats::{DelayAccountingState, TaskstatsCapability};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const MIN_DIAGNOSIS_WINDOW: Duration = Duration::from_secs(1);
 pub const CPU_SEVERITY_THRESHOLDS: [f64; 4] = [0.01, 0.05, 0.15, 0.30];
@@ -1873,17 +1873,132 @@ pub fn host_process_scope(
     io_pressure: Option<Confidence>,
 ) -> ProcessScope {
     let roles = vec![
-        cpu_victims(cpu, cpu_pressure),
-        cpu_suspects_role(cpu, cpu_pressure),
-        memory_victims(cpu, memory_pressure),
-        memory_suspects(cpu, memory_pressure),
-        io_victims(cpu, io_pressure),
-        io_suspects_role(process_io, io_pressure),
+        cpu_victims(cpu, cpu_pressure, None),
+        cpu_suspects_role(cpu, cpu_pressure, None),
+        memory_victims(cpu, memory_pressure, None),
+        memory_suspects(cpu, memory_pressure, None),
+        io_victims(cpu, io_pressure, None),
+        io_suspects_role(process_io, io_pressure, None),
     ];
     ProcessScope {
         scope: ProcessScopeKind::Host,
         roles,
     }
+}
+
+/// Build one scope for each cgroup with PSI-backed pressure. Candidate
+/// selection is performed against the complete stable membership set, rather
+/// than the presentation-only five-member summary on `CgroupFinding`.
+pub fn cgroup_process_scopes(
+    observation: Option<&CgroupObservation>,
+    cpu: Option<&CpuProcessObservation>,
+    process_io: Option<&ProcessIoObservation>,
+) -> Vec<ProcessScope> {
+    let Some(observation) = observation else {
+        return Vec::new();
+    };
+    let membership_complete = cgroup_membership_complete(observation);
+    observation
+        .groups
+        .iter()
+        .filter_map(|group| {
+            let findings = [
+                cgroup_finding(
+                    group,
+                    CgroupResourceKind::Cpu,
+                    &group.cpu_pressure,
+                    observation,
+                ),
+                cgroup_finding(
+                    group,
+                    CgroupResourceKind::Memory,
+                    &group.memory_pressure,
+                    observation,
+                ),
+                cgroup_finding(
+                    group,
+                    CgroupResourceKind::Io,
+                    &group.io_pressure,
+                    observation,
+                ),
+            ];
+            let pressure = |resource| {
+                findings
+                    .iter()
+                    .find(|finding| finding.resource == resource)
+                    .and_then(|finding| {
+                        (finding.kind == CgroupAssessmentKind::Pressure)
+                            .then_some(finding.resource_confidence)
+                    })
+            };
+            let keys = observation
+                .members
+                .iter()
+                .filter(|member| cgroup_contains_path(&group.path, &member.cgroup_path))
+                .map(|member| member.key)
+                .collect::<BTreeSet<_>>();
+            if pressure(CgroupResourceKind::Cpu).is_none()
+                && pressure(CgroupResourceKind::Memory).is_none()
+                && pressure(CgroupResourceKind::Io).is_none()
+            {
+                return None;
+            }
+            let mut roles = vec![
+                cpu_victims(cpu, pressure(CgroupResourceKind::Cpu), Some(&keys)),
+                cpu_suspects_role(cpu, pressure(CgroupResourceKind::Cpu), Some(&keys)),
+                memory_victims(cpu, pressure(CgroupResourceKind::Memory), Some(&keys)),
+                memory_suspects(cpu, pressure(CgroupResourceKind::Memory), Some(&keys)),
+                io_victims(cpu, pressure(CgroupResourceKind::Io), Some(&keys)),
+                io_suspects_role(process_io, pressure(CgroupResourceKind::Io), Some(&keys)),
+            ];
+            if !membership_complete {
+                mark_roles_partial(&mut roles);
+            }
+            Some(ProcessScope {
+                scope: ProcessScopeKind::Cgroup {
+                    path: group.path.clone(),
+                },
+                roles,
+            })
+        })
+        .collect()
+}
+
+fn cgroup_contains_path(scope: &str, member: &str) -> bool {
+    scope == "/"
+        || member == scope
+        || member
+            .strip_prefix(scope)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+fn cgroup_membership_complete(observation: &CgroupObservation) -> bool {
+    let issues = &observation.issues;
+    !issues.process_enumeration_failed
+        && issues.process_enumeration_errors == 0
+        && issues.process_disappeared == 0
+        && issues.process_identity_changed == 0
+        && issues.process_permission_denied == 0
+        && issues.process_malformed == 0
+        && !issues.process_limit_reached
+        && !issues.budget_exhausted
+        && issues.members_appeared == 0
+        && issues.members_exited == 0
+        && issues.members_reused == 0
+        && issues.members_moved == 0
+}
+
+fn mark_roles_partial(roles: &mut [ProcessRoleList]) {
+    for role in roles {
+        if role.completeness == ProcessRoleCompleteness::Complete {
+            role.availability = ProcessCandidateAvailability::UnavailableOrIncomplete;
+            role.completeness = ProcessRoleCompleteness::Partial;
+        }
+    }
+}
+
+fn in_scope(key: ProcessKey, allowed: Option<&BTreeSet<ProcessKey>>) -> bool {
+    allowed.is_none_or(|keys| keys.contains(&key))
 }
 
 fn unassessed(role: ProcessRole) -> ProcessRoleList {
@@ -1945,6 +2060,7 @@ fn candidate_confidence(resource: Confidence, direct: bool, fallback: bool) -> C
 fn cpu_victims(
     cpu: Option<&CpuProcessObservation>,
     pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
 ) -> ProcessRoleList {
     let Some(cpu) = cpu else {
         return pressure.map_or_else(
@@ -1957,6 +2073,7 @@ fn cpu_victims(
     let mut candidates: Vec<_> = cpu
         .scheduler_delay_candidates
         .iter()
+        .filter(|item| in_scope(item.key, allowed))
         .filter(|item| item.runnable_wait_ns > 0)
         .map(|item| {
             let corroboration = taskstats
@@ -1983,25 +2100,30 @@ fn cpu_victims(
         cpu.taskstats_capability,
         TaskstatsCapability::Available | TaskstatsCapability::Partial
     ) {
-        candidates.extend(cpu.taskstats.iter().filter_map(|item| {
-            (!direct_keys.contains(&item.key)).then_some(())?;
-            item.cpu_delay_ns
-                .filter(|delay| *delay > 0)
-                .map(|delay| ProcessCandidate {
-                    role: ProcessRole::CpuVictim,
-                    key: item.key,
-                    name: name_for_key(cpu, item.key),
-                    confidence: candidate_confidence(
-                        pressure.unwrap_or(Confidence::Low),
-                        true,
-                        false,
-                    ),
-                    label: "observed_taskstats_cpu_delay_victim_candidate",
-                    evidence: ProcessCandidateEvidence::TaskstatsCpuDelay {
-                        cpu_delay_ns: delay,
-                    },
-                })
-        }));
+        candidates.extend(
+            cpu.taskstats
+                .iter()
+                .filter(|item| in_scope(item.key, allowed))
+                .filter_map(|item| {
+                    (!direct_keys.contains(&item.key)).then_some(())?;
+                    item.cpu_delay_ns
+                        .filter(|delay| *delay > 0)
+                        .map(|delay| ProcessCandidate {
+                            role: ProcessRole::CpuVictim,
+                            key: item.key,
+                            name: name_for_key(cpu, item.key),
+                            confidence: candidate_confidence(
+                                pressure.unwrap_or(Confidence::Low),
+                                true,
+                                false,
+                            ),
+                            label: "observed_taskstats_cpu_delay_victim_candidate",
+                            evidence: ProcessCandidateEvidence::TaskstatsCpuDelay {
+                                cpu_delay_ns: delay,
+                            },
+                        })
+                }),
+        );
     }
     candidates.sort_by(|a, b| {
         cpu_schedstat_direct(&b.evidence)
@@ -2043,6 +2165,7 @@ fn score_cpu_victim(evidence: &ProcessCandidateEvidence) -> u64 {
 fn cpu_suspects_role(
     cpu: Option<&CpuProcessObservation>,
     pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
 ) -> ProcessRoleList {
     let Some(cpu) = cpu else {
         return pressure.map_or_else(
@@ -2054,6 +2177,7 @@ fn cpu_suspects_role(
     let mut candidates: Vec<_> = cpu
         .processes
         .iter()
+        .filter(|item| in_scope(item.key, allowed))
         .filter(|item| item.cpu_fraction_of_one >= SUSPECT_MIN_FRACTION)
         .map(|item| ProcessCandidate {
             role: ProcessRole::CpuSuspect,
@@ -2087,6 +2211,7 @@ fn cpu_suspects_role(
 fn memory_victims(
     cpu: Option<&CpuProcessObservation>,
     pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
 ) -> ProcessRoleList {
     let Some(cpu) = cpu else {
         return pressure.map_or_else(
@@ -2108,7 +2233,11 @@ fn memory_victims(
     // evidence regardless of the state.
     let direct_complete = taskstats_complete_for_memory(cpu);
     let mut candidates = Vec::new();
-    for item in &cpu.taskstats {
+    for item in cpu
+        .taskstats
+        .iter()
+        .filter(|item| in_scope(item.key, allowed))
+    {
         let components = [
             ("swapin", item.swapin_delay_ns),
             ("reclaim", item.reclaim_delay_ns),
@@ -2142,19 +2271,23 @@ fn memory_victims(
     }
     let direct_keys: std::collections::BTreeSet<_> =
         candidates.iter().map(|candidate| candidate.key).collect();
-    candidates.extend(resource_evidence(cpu).filter_map(|item| {
-        (!direct_keys.contains(&item.key)).then_some(())?;
-        item.major_faults
-            .filter(|value| *value > 0)
-            .map(|major_faults| ProcessCandidate {
-                role: ProcessRole::MemoryVictim,
-                key: item.key,
-                name: item.name.clone(),
-                confidence: Confidence::Low,
-                label: "major_fault_memory_victim_candidate",
-                evidence: ProcessCandidateEvidence::MajorFaults { major_faults },
-            })
-    }));
+    candidates.extend(
+        resource_evidence(cpu)
+            .filter(|item| in_scope(item.key, allowed))
+            .filter_map(|item| {
+                (!direct_keys.contains(&item.key)).then_some(())?;
+                item.major_faults
+                    .filter(|value| *value > 0)
+                    .map(|major_faults| ProcessCandidate {
+                        role: ProcessRole::MemoryVictim,
+                        key: item.key,
+                        name: item.name.clone(),
+                        confidence: Confidence::Low,
+                        label: "major_fault_memory_victim_candidate",
+                        evidence: ProcessCandidateEvidence::MajorFaults { major_faults },
+                    })
+            }),
+    );
     candidates.sort_by(|a, b| {
         memory_direct(&b.evidence)
             .cmp(&memory_direct(&a.evidence))
@@ -2197,6 +2330,7 @@ fn score_memory(e: &ProcessCandidateEvidence) -> u64 {
 fn memory_suspects(
     cpu: Option<&CpuProcessObservation>,
     pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
 ) -> ProcessRoleList {
     let Some(cpu) = cpu else {
         return pressure.map_or_else(
@@ -2216,6 +2350,7 @@ fn memory_suspects(
     let complete = resource_field_complete(cpu, |item| item.rss_growth_bytes.is_some())
         && cpu.collection_issues.resource_value_overflow == 0;
     let mut candidates: Vec<_> = resource_evidence(cpu)
+        .filter(|item| in_scope(item.key, allowed))
         .filter_map(|item| {
             item.rss_growth_bytes
                 .filter(|value| *value > 0)
@@ -2247,6 +2382,7 @@ fn score_rss(e: &ProcessCandidateEvidence) -> u64 {
 fn io_victims(
     cpu: Option<&CpuProcessObservation>,
     pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
 ) -> ProcessRoleList {
     let Some(cpu) = cpu else {
         return pressure.map_or_else(
@@ -2268,9 +2404,15 @@ fn io_victims(
     let mut keys: std::collections::BTreeSet<_> = cpu
         .process_resource_evidence
         .iter()
+        .filter(|item| in_scope(item.key, allowed))
         .map(|item| item.key)
         .collect();
-    keys.extend(taskstats.keys().copied());
+    keys.extend(
+        taskstats
+            .keys()
+            .copied()
+            .filter(|key| in_scope(*key, allowed)),
+    );
     for key in keys {
         let direct = taskstats
             .get(&key)
@@ -2354,6 +2496,7 @@ fn score_io_victim(e: &ProcessCandidateEvidence) -> u64 {
 fn io_suspects_role(
     process_io: Option<&ProcessIoObservation>,
     pressure: Option<Confidence>,
+    allowed: Option<&BTreeSet<ProcessKey>>,
 ) -> ProcessRoleList {
     let Some(process_io) = process_io else {
         return pressure.map_or_else(
@@ -2365,6 +2508,7 @@ fn io_suspects_role(
     let mut candidates: Vec<_> = process_io
         .processes
         .iter()
+        .filter(|item| in_scope(item.key, allowed))
         .filter_map(|item| {
             let known = u128::from(item.read_bytes.unwrap_or(0))
                 + u128::from(item.write_bytes.unwrap_or(0));
@@ -3349,6 +3493,179 @@ mod tests {
             block_io_delay_ticks: block,
         }
     }
+
+    #[test]
+    fn cgroup_roles_use_full_stable_descendant_membership_and_keep_host_rankings_independent() {
+        let mut cgroup = cgroup_observation(
+            Some(200_000),
+            Duration::from_secs(1),
+            CgroupPsiIntervalState::Available,
+        );
+        cgroup.groups[0].path = "/workload".into();
+        cgroup.members = vec![
+            crate::cgroup::CgroupProcessMember {
+                key: key(1),
+                name: "outside".into(),
+                cgroup_path: "/other".into(),
+            },
+            crate::cgroup::CgroupProcessMember {
+                key: key(2),
+                name: "direct".into(),
+                cgroup_path: "/workload".into(),
+            },
+            crate::cgroup::CgroupProcessMember {
+                key: key(3),
+                name: "child".into(),
+                cgroup_path: "/workload/child".into(),
+            },
+            crate::cgroup::CgroupProcessMember {
+                key: key(4),
+                name: "prefix".into(),
+                cgroup_path: "/workload-other".into(),
+            },
+            crate::cgroup::CgroupProcessMember {
+                key: key(6),
+                name: "outside-host-top-five".into(),
+                cgroup_path: "/workload".into(),
+            },
+        ];
+        let cpu = cpu(
+            vec![
+                ProcessCpuInterval {
+                    key: key(1),
+                    name: "outside".into(),
+                    state: 'R',
+                    cpu_ticks: 90,
+                    cpu_fraction_of_one: 0.9,
+                },
+                ProcessCpuInterval {
+                    key: key(2),
+                    name: "direct".into(),
+                    state: 'R',
+                    cpu_ticks: 30,
+                    cpu_fraction_of_one: 0.3,
+                },
+                ProcessCpuInterval {
+                    key: key(3),
+                    name: "child".into(),
+                    state: 'R',
+                    cpu_ticks: 40,
+                    cpu_fraction_of_one: 0.4,
+                },
+                ProcessCpuInterval {
+                    key: key(4),
+                    name: "prefix".into(),
+                    state: 'R',
+                    cpu_ticks: 80,
+                    cpu_fraction_of_one: 0.8,
+                },
+                ProcessCpuInterval {
+                    key: key(5),
+                    name: "host-five".into(),
+                    state: 'R',
+                    cpu_ticks: 70,
+                    cpu_fraction_of_one: 0.7,
+                },
+                ProcessCpuInterval {
+                    key: key(6),
+                    name: "outside-host-top-five".into(),
+                    state: 'R',
+                    cpu_ticks: 30,
+                    cpu_fraction_of_one: 0.3,
+                },
+            ],
+            vec![],
+        );
+        let host = host_process_scope(Some(&cpu), None, Some(Confidence::Medium), None, None);
+        let scopes = cgroup_process_scopes(Some(&cgroup), Some(&cpu), None);
+        assert_eq!(scopes.len(), 1);
+        let ProcessScopeKind::Cgroup { path } = &scopes[0].scope else {
+            panic!("expected cgroup scope")
+        };
+        assert_eq!(path, "/workload");
+        let suspects = scopes[0]
+            .roles
+            .iter()
+            .find(|role| role.role == ProcessRole::CpuSuspect)
+            .unwrap();
+        assert_eq!(
+            suspects
+                .candidates
+                .iter()
+                .map(|candidate| candidate.key.pid)
+                .collect::<Vec<_>>(),
+            vec![3, 2, 6]
+        );
+        assert!(
+            host.roles
+                .iter()
+                .find(|role| role.role == ProcessRole::CpuSuspect)
+                .unwrap()
+                .candidates
+                .iter()
+                .any(|candidate| candidate.key == key(1))
+        );
+        assert!(
+            host.roles
+                .iter()
+                .find(|role| role.role == ProcessRole::CpuSuspect)
+                .unwrap()
+                .candidates
+                .iter()
+                .all(|candidate| candidate.key != key(6))
+        );
+        assert!(
+            scopes[0]
+                .roles
+                .iter()
+                .filter(|role| role.role != ProcessRole::CpuVictim
+                    && role.role != ProcessRole::CpuSuspect)
+                .all(|role| role.availability == ProcessCandidateAvailability::NotAssessed)
+        );
+
+        cgroup.issues.process_limit_reached = true;
+        let partial = cgroup_process_scopes(Some(&cgroup), Some(&cpu), None);
+        assert_eq!(
+            partial[0]
+                .roles
+                .iter()
+                .find(|role| role.role == ProcessRole::CpuSuspect)
+                .unwrap()
+                .completeness,
+            ProcessRoleCompleteness::Partial
+        );
+        let unavailable = cgroup_process_scopes(Some(&cgroup), None, None);
+        let victim = unavailable[0]
+            .roles
+            .iter()
+            .find(|role| role.role == ProcessRole::CpuVictim)
+            .unwrap();
+        assert_eq!(victim.completeness, ProcessRoleCompleteness::Unavailable);
+        assert_eq!(
+            victim.availability,
+            ProcessCandidateAvailability::UnavailableOrIncomplete
+        );
+
+        cgroup.issues = CgroupCollectionIssues::default();
+        let child = cgroup.groups[0].clone();
+        cgroup.groups[0].path = "/".into();
+        cgroup.groups.push(child);
+        let overlapping = cgroup_process_scopes(Some(&cgroup), Some(&cpu), None);
+        assert_eq!(overlapping.len(), 2);
+        for scope in &overlapping {
+            let suspects = scope
+                .roles
+                .iter()
+                .find(|role| role.role == ProcessRole::CpuSuspect)
+                .unwrap();
+            assert!(
+                suspects
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.key == key(2))
+            );
+        }
+    }
     fn memory_suspect_completeness(
         mut observation: CpuProcessObservation,
     ) -> ProcessRoleCompleteness {
@@ -3359,6 +3676,112 @@ mod tests {
             .find(|role| role.role == ProcessRole::MemorySuspect)
             .unwrap()
             .completeness
+    }
+
+    #[test]
+    fn cgroup_scope_builds_all_six_roles_with_shared_cap_and_tie_rules() {
+        let elapsed = Duration::from_secs(10);
+        let mut cgroup =
+            cgroup_observation(Some(2_000_000), elapsed, CgroupPsiIntervalState::Available);
+        cgroup.groups[0].memory_pressure =
+            cgroup_psi(Some(2_000_000), elapsed, CgroupPsiIntervalState::Available);
+        cgroup.groups[0].io_pressure =
+            cgroup_psi(Some(2_000_000), elapsed, CgroupPsiIntervalState::Available);
+        cgroup.members = (1..=6)
+            .map(|pid| crate::cgroup::CgroupProcessMember {
+                key: key(pid),
+                name: format!("p{pid}"),
+                cgroup_path: "/demo.service".into(),
+            })
+            .collect();
+        let mut cpu = cpu(
+            (1..=6)
+                .map(|pid| ProcessCpuInterval {
+                    key: key(pid),
+                    name: format!("p{pid}"),
+                    state: 'R',
+                    cpu_ticks: 25,
+                    cpu_fraction_of_one: 0.25,
+                })
+                .collect(),
+            vec![ProcessSchedulerDelayInterval {
+                key: key(1),
+                name: "p1".into(),
+                task_count: 1,
+                running_ns: 0,
+                runnable_wait_ns: 10,
+                timeslices: 1,
+                runnable_delay_fraction: 0.0,
+            }],
+        );
+        cpu.process_resource_evidence = (1..=6)
+            .map(|pid| resource(key(pid), Some(1), Some(1), Some(1)))
+            .collect();
+        cpu.taskstats_capability = TaskstatsCapability::Available;
+        cpu.delay_accounting = DelayAccountingState::Enabled;
+        cpu.taskstats = vec![crate::taskstats::TaskstatsInterval {
+            key: key(1),
+            min_uapi_version: 13,
+            field_support: crate::taskstats::TaskstatsFieldSupport {
+                cpu_delay: true,
+                block_io_delay: true,
+                swapin_delay: true,
+                reclaim_delay: true,
+                thrashing_delay: true,
+                compaction_delay: true,
+                write_protect_copy_delay: true,
+            },
+            cpu_delay_ns: Some(1),
+            block_io_delay_ns: Some(1),
+            swapin_delay_ns: Some(1),
+            reclaim_delay_ns: None,
+            thrashing_delay_ns: None,
+            compaction_delay_ns: None,
+            write_protect_copy_delay_ns: None,
+        }];
+        let process_io = ProcessIoObservation {
+            elapsed,
+            capability: IoCapability::Available,
+            processes: vec![ProcessIoInterval {
+                key: key(1),
+                name: "p1".into(),
+                read_bytes: Some(1),
+                write_bytes: None,
+                cancelled_write_bytes: None,
+                rchar: None,
+                wchar: None,
+            }],
+            issues: ProcessIoCollectionIssues::default(),
+            regressed: vec![],
+        };
+        let scope = cgroup_process_scopes(Some(&cgroup), Some(&cpu), Some(&process_io))
+            .pop()
+            .unwrap();
+        for role in [
+            ProcessRole::CpuVictim,
+            ProcessRole::CpuSuspect,
+            ProcessRole::MemoryVictim,
+            ProcessRole::MemorySuspect,
+            ProcessRole::IoVictim,
+            ProcessRole::IoSuspect,
+        ] {
+            let list = scope.roles.iter().find(|list| list.role == role).unwrap();
+            assert!(!list.candidates.is_empty(), "{role:?}");
+        }
+        let suspects = scope
+            .roles
+            .iter()
+            .find(|list| list.role == ProcessRole::MemorySuspect)
+            .unwrap();
+        assert_eq!(suspects.candidates.len(), 5);
+        assert_eq!(
+            suspects
+                .candidates
+                .iter()
+                .map(|candidate| candidate.key.pid)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
     }
     macro_rules! partial_window_case {
         ($name:ident, $mutate:expr) => {

@@ -976,7 +976,7 @@ pub fn signals_from_observation(observation: &HuntObservation) -> WindowSignals 
     let mut cpu = cpu_signal(observation);
     let mut memory = memory_signal(observation);
     let mut io = io_signal(observation);
-    let process_scopes = vec![analysis::host_process_scope(
+    let mut process_scopes = vec![analysis::host_process_scope(
         observation.cpu.as_ref().ok(),
         observation
             .io
@@ -986,6 +986,17 @@ pub fn signals_from_observation(observation: &HuntObservation) -> WindowSignals 
         (memory.status == ObservationStatus::Pressure).then_some(memory.confidence),
         (io.status == ObservationStatus::Pressure).then_some(io.confidence),
     )];
+    process_scopes.extend(analysis::cgroup_process_scopes(
+        observation
+            .cgroup
+            .as_ref()
+            .and_then(|value| value.observation.as_ref().ok()),
+        observation.cpu.as_ref().ok(),
+        observation
+            .io
+            .as_ref()
+            .and_then(|value| value.processes.as_ref().ok()),
+    ));
     let roles = &process_scopes[0].roles;
     cpu.process_role_lists =
         roles_for_resource(roles, ProcessRole::CpuVictim, ProcessRole::CpuSuspect);
@@ -996,7 +1007,7 @@ pub fn signals_from_observation(observation: &HuntObservation) -> WindowSignals 
     populate_role_candidates(&mut cpu);
     populate_role_candidates(&mut memory);
     populate_role_candidates(&mut io);
-    let cgroup_signals = cgroup_signals(observation);
+    let cgroup_signals = cgroup_signals(observation, &process_scopes);
     WindowSignals {
         cpu,
         memory,
@@ -1257,7 +1268,10 @@ struct CgroupSignalBundle {
     capped: bool,
 }
 
-fn cgroup_signals(observation: &HuntObservation) -> CgroupSignalBundle {
+fn cgroup_signals(
+    observation: &HuntObservation,
+    process_scopes: &[ProcessScope],
+) -> CgroupSignalBundle {
     let Some(cgroup) = observation.cgroup.as_ref() else {
         return CgroupSignalBundle {
             pressured: Vec::new(),
@@ -1283,7 +1297,7 @@ fn cgroup_signals(observation: &HuntObservation) -> CgroupSignalBundle {
     let mut pressured = analysis
         .findings
         .into_iter()
-        .filter_map(cgroup_pressure_signal)
+        .filter_map(|finding| cgroup_pressure_signal(finding, process_scopes))
         .collect::<Vec<_>>();
     pressured.sort_by(|left, right| {
         severity_rank(right.1.severity)
@@ -1305,10 +1319,33 @@ fn cgroup_signals(observation: &HuntObservation) -> CgroupSignalBundle {
     }
 }
 
-fn cgroup_pressure_signal(finding: CgroupFinding) -> Option<(FindingId, ResourceSignal)> {
+fn cgroup_pressure_signal(
+    finding: CgroupFinding,
+    process_scopes: &[ProcessScope],
+) -> Option<(FindingId, ResourceSignal)> {
     if finding.kind != CgroupAssessmentKind::Pressure {
         return None;
     }
+    let roles = process_scopes
+        .iter()
+        .find(|scope| matches!(&scope.scope, crate::analysis::ProcessScopeKind::Cgroup { path } if path == &finding.path))
+        .map(|scope| match finding.resource {
+            CgroupResourceKind::Cpu => roles_for_resource(&scope.roles, ProcessRole::CpuVictim, ProcessRole::CpuSuspect),
+            CgroupResourceKind::Memory => roles_for_resource(&scope.roles, ProcessRole::MemoryVictim, ProcessRole::MemorySuspect),
+            CgroupResourceKind::Io => roles_for_resource(&scope.roles, ProcessRole::IoVictim, ProcessRole::IoSuspect),
+        })
+        .unwrap_or_default();
+    let process_candidates = roles
+        .iter()
+        .flat_map(|list| list.candidates.iter().cloned())
+        .collect();
+    let process_candidate_availability = roles
+        .iter()
+        .map(|list| ProcessRoleAvailability {
+            role: list.role,
+            availability: list.availability,
+        })
+        .collect();
     Some((
         FindingId::Cgroup {
             path: finding.path,
@@ -1321,9 +1358,9 @@ fn cgroup_pressure_signal(finding: CgroupFinding) -> Option<(FindingId, Resource
             kind: cgroup_watch_kind(finding.resource, finding.mechanism),
             summary: finding.summary,
             psi_some_fraction: finding.evidence.psi_some_fraction,
-            process_candidates: Vec::new(),
-            process_candidate_availability: Vec::new(),
-            process_role_lists: Vec::new(),
+            process_candidates,
+            process_candidate_availability,
+            process_role_lists: roles,
             qualifiers: finding.qualifiers,
         },
     ))
@@ -2256,10 +2293,10 @@ mod tests {
 
     #[test]
     fn cgroup_watch_kind_names_mechanism_without_splitting_identity() {
-        let (reclaim_id, reclaim) = cgroup_pressure_signal(sample_cgroup_finding(
-            CgroupResourceKind::Memory,
-            Some(CgroupMechanism::Reclaim),
-        ))
+        let (reclaim_id, reclaim) = cgroup_pressure_signal(
+            sample_cgroup_finding(CgroupResourceKind::Memory, Some(CgroupMechanism::Reclaim)),
+            &[],
+        )
         .expect("reclaim pressure");
         assert_eq!(
             reclaim_id,
@@ -2270,39 +2307,45 @@ mod tests {
         );
         assert_eq!(reclaim.kind, "cgroup_memory_reclaim_pressure");
 
-        let (_, swap) = cgroup_pressure_signal(sample_cgroup_finding(
-            CgroupResourceKind::Memory,
-            Some(CgroupMechanism::Swap),
-        ))
+        let (_, swap) = cgroup_pressure_signal(
+            sample_cgroup_finding(CgroupResourceKind::Memory, Some(CgroupMechanism::Swap)),
+            &[],
+        )
         .expect("swap pressure");
         assert_eq!(swap.kind, "cgroup_memory_swap_pressure");
 
-        let (_, thrash) = cgroup_pressure_signal(sample_cgroup_finding(
-            CgroupResourceKind::Memory,
-            Some(CgroupMechanism::PossibleThrashing),
-        ))
+        let (_, thrash) = cgroup_pressure_signal(
+            sample_cgroup_finding(
+                CgroupResourceKind::Memory,
+                Some(CgroupMechanism::PossibleThrashing),
+            ),
+            &[],
+        )
         .expect("possible thrashing");
         assert_eq!(thrash.kind, "cgroup_memory_possible_thrashing");
 
-        let (_, throttle) = cgroup_pressure_signal(sample_cgroup_finding(
-            CgroupResourceKind::Cpu,
-            Some(CgroupMechanism::CpuQuotaThrottle),
-        ))
+        let (_, throttle) = cgroup_pressure_signal(
+            sample_cgroup_finding(
+                CgroupResourceKind::Cpu,
+                Some(CgroupMechanism::CpuQuotaThrottle),
+            ),
+            &[],
+        )
         .expect("throttle pressure");
         assert_eq!(throttle.kind, "cgroup_cpu_quota_throttle_pressure");
 
         let (_, unlabeled_cpu) =
-            cgroup_pressure_signal(sample_cgroup_finding(CgroupResourceKind::Cpu, None))
+            cgroup_pressure_signal(sample_cgroup_finding(CgroupResourceKind::Cpu, None), &[])
                 .expect("cpu pressure");
         assert_eq!(unlabeled_cpu.kind, "cgroup_cpu_pressure");
 
         let (_, unlabeled_memory) =
-            cgroup_pressure_signal(sample_cgroup_finding(CgroupResourceKind::Memory, None))
+            cgroup_pressure_signal(sample_cgroup_finding(CgroupResourceKind::Memory, None), &[])
                 .expect("memory pressure");
         assert_eq!(unlabeled_memory.kind, "cgroup_memory_pressure");
 
         let (_, unlabeled_io) =
-            cgroup_pressure_signal(sample_cgroup_finding(CgroupResourceKind::Io, None))
+            cgroup_pressure_signal(sample_cgroup_finding(CgroupResourceKind::Io, None), &[])
                 .expect("io pressure");
         assert_eq!(unlabeled_io.kind, "cgroup_io_pressure");
 
@@ -2343,5 +2386,74 @@ mod tests {
         assert_eq!(persistent.lifecycle[0].id, id);
         assert_eq!(persistent.lifecycle[0].state, LifecycleState::Persistent);
         assert_eq!(persistent.lifecycle[0].kind, "cgroup_memory_swap_pressure");
+    }
+
+    #[test]
+    fn cgroup_role_transport_and_lifecycle_stale_state_match_path_and_resource() {
+        let roles = vec![
+            ProcessRoleList {
+                role: ProcessRole::CpuVictim,
+                availability: ProcessCandidateAvailability::Available,
+                completeness: crate::analysis::ProcessRoleCompleteness::Complete,
+                stale: false,
+                candidates: vec![],
+            },
+            ProcessRoleList {
+                role: ProcessRole::CpuSuspect,
+                availability: ProcessCandidateAvailability::Available,
+                completeness: crate::analysis::ProcessRoleCompleteness::Complete,
+                stale: false,
+                candidates: vec![],
+            },
+        ];
+        let scope = ProcessScope {
+            scope: crate::analysis::ProcessScopeKind::Cgroup {
+                path: "/workload.service".into(),
+            },
+            roles: roles.clone(),
+        };
+        let (id, signal) = cgroup_pressure_signal(
+            sample_cgroup_finding(CgroupResourceKind::Cpu, None),
+            std::slice::from_ref(&scope),
+        )
+        .unwrap();
+        assert_eq!(signal.process_role_lists, roles);
+        let mut signals = host_signals(unconfirmed(), unconfirmed(), unconfirmed());
+        signals.cgroups.push((id.clone(), signal));
+        signals
+            .observed_cgroup_paths
+            .insert("/workload.service".into());
+        signals.process_scopes.push(scope);
+        let mut tracker = WatchTracker::new();
+        let current = tracker.ingest_signals(signals);
+        assert_eq!(current.lifecycle[0].id, id);
+        assert!(
+            current.lifecycle[0]
+                .process_role_lists
+                .iter()
+                .all(|list| !list.stale)
+        );
+
+        let stale =
+            tracker.ingest_signals(host_signals(unconfirmed(), unconfirmed(), unconfirmed()));
+        assert!(!stale.lifecycle[0].confirmed);
+        assert!(
+            stale.lifecycle[0]
+                .process_role_lists
+                .iter()
+                .all(|list| list.stale)
+        );
+        let mut resolved_signals = host_signals(unconfirmed(), unconfirmed(), unconfirmed());
+        resolved_signals
+            .observed_cgroup_paths
+            .insert("/workload.service".into());
+        let resolved = tracker.ingest_signals(resolved_signals);
+        assert_eq!(resolved.lifecycle[0].state, LifecycleState::Resolved);
+        assert!(
+            resolved.lifecycle[0]
+                .process_role_lists
+                .iter()
+                .all(|list| list.stale)
+        );
     }
 }

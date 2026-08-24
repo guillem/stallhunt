@@ -72,13 +72,20 @@ plus typed collection completeness and a distinct delay-accounting state.
 These counters are not summed because their categories can overlap. They are
 emitted in schema-2 JSON and recordings. Schema-1 recordings omit them.
 
-Schema-2 analyzer output also contains canonical host `process_scopes`: CPU,
-memory, and I/O victim/suspect lists. Each list is capped and carries separate
+Schema-2 analyzer output contains canonical `process_scopes` for the host and
+for every cgroup path with its own PSI-backed pressure: CPU, memory, and I/O
+victim/suspect lists. Cgroup lists use the complete stable direct-or-descendant
+`ProcessKey` membership set, not the five-member finding summary; overlapping
+ancestor and child scopes may repeat a process and are never summed. Each list is capped and carries separate
 availability, completeness, and lifecycle-stale state. TASKSTATS intervals
 retain the minimum UAPI version and per-field support; a zero is a complete
 negative only when that field was supported, delay accounting was enabled, and
 the bounded process window was complete. Positive counters remain evidence
 when transport or coverage is partial.
+
+This slice transports cgroup scopes through schema-2 hunt/watch output and the
+watch lifecycle model. Dedicated human cgroup-role rendering is deferred to the
+responsive presentation slice.
 
 ## Identity
 
@@ -416,7 +423,7 @@ memory identity. The complete pressure-kind catalog is in `cli-ux.md`.
 
 Watch JSON `kind` is `stallhunt.watch_window`. It is not replayable as a
 recording and does not carry full finding evidence. Schema 2 carries canonical
-host `process_scopes` with all six bounded roles, typed evidence, availability,
+host and pressured-cgroup `process_scopes` with all six bounded roles, typed evidence, availability,
 completeness, and explicit stale lifecycle retention. An empty supported
 ranking is therefore distinct from incomplete telemetry and a role not assessed
 without pressure.
