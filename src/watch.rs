@@ -948,6 +948,15 @@ fn watch_json(window: &WatchWindow) -> Result<String, serde_json::Error> {
     Ok(format!("{}\n", serde_json::to_string(&payload)?))
 }
 
+/// The schema_version-2 watch-window document as a JSON value, for
+/// presentation surfaces (the MCP server) that embed it rather than stream
+/// it. The CLI line output serializes the identical struct.
+pub(crate) fn watch_window_value(
+    window: &WatchWindow,
+) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::to_value(watch_window_document(window))
+}
+
 /// Builds the schema_version-2 watch-window document shared by the CLI's
 /// JSON stream and any other presentation surface, so both serialize the
 /// exact same struct.

@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use super::protocol::{
     self, INVALID_REQUEST, Incoming, METHOD_NOT_FOUND, PARSE_ERROR, parse_incoming,
 };
+use super::sampler::Sampler;
 use super::tools;
 use crate::cli::McpOptions;
 use crate::observe::HuntObservation;
@@ -23,14 +24,20 @@ pub(crate) struct ServerState {
     /// Injected observation source so unit tests can serve fixture data
     /// instead of blocking on live telemetry.
     observe: fn(Duration) -> HuntObservation,
+    sampler: Option<Sampler>,
     initialize_received: bool,
 }
 
 impl ServerState {
-    pub(crate) fn new(options: McpOptions, observe: fn(Duration) -> HuntObservation) -> Self {
+    pub(crate) fn new(
+        options: McpOptions,
+        observe: fn(Duration) -> HuntObservation,
+        sampler: Option<Sampler>,
+    ) -> Self {
         Self {
             options,
             observe,
+            sampler,
             initialize_received: false,
         }
     }
@@ -103,7 +110,7 @@ fn handle_request(
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
-            match tools::call(state.observe, name, &arguments) {
+            match tools::call(state.observe, state.sampler.as_ref(), name, &arguments) {
                 Some(result) => protocol::write_result(writer, id, result),
                 None => protocol::write_error(
                     writer,
@@ -162,7 +169,7 @@ mod tests {
     }
 
     fn serve_lines(lines: &str) -> Vec<Value> {
-        let mut state = ServerState::new(options(), fixture_observe);
+        let mut state = ServerState::new(options(), fixture_observe, None);
         let mut output = Vec::new();
         serve(Cursor::new(lines.to_string()), &mut output, &mut state).expect("serve");
         String::from_utf8(output)
@@ -263,7 +270,7 @@ mod tests {
 
     #[test]
     fn eof_ends_the_session_cleanly() {
-        let mut state = ServerState::new(options(), fixture_observe);
+        let mut state = ServerState::new(options(), fixture_observe, None);
         let mut output = Vec::new();
         serve(Cursor::new(String::new()), &mut output, &mut state).expect("serve");
         assert!(output.is_empty());
