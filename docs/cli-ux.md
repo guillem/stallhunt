@@ -416,7 +416,7 @@ Representative Milestone 1 finding shape (optional context fields are omitted he
 ```json
 {
   "schema_version": 2,
-  "tool_version": "0.4.1",
+  "tool_version": "0.5.0",
   "requested_observation": {
     "duration_ms": 10000
   },

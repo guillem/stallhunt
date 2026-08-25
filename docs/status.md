@@ -4,13 +4,13 @@ Last updated: 2026-08-25
 
 ## Current milestone
 
-**v0.4.1 published — scoped process attribution and widescreen TUI, plus a
-pre-release code-review bugfix pass**
+**v0.5.0 prepared — MCP server for coding agents**
 
-The owner authorized the release on 2026-08-25. PR #9 merged into `main`, the
-`v0.4.1` tag was pushed, and `release.yml` published the GitHub Release with
-the `x86_64-unknown-linux-gnu` tarball and checksum. `v0.4.1` is now the
-currently published release.
+PR #11 merged into `main` (ADR-0017, ADR-0018): `stallhunt mcp` serves
+Model Context Protocol tools over stdio, with a resident sampler for
+instant recent-pressure answers and a `detail` argument that keeps tool
+payloads small by default. This is not yet a published release; the
+currently published release remains `v0.4.1`.
 
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
