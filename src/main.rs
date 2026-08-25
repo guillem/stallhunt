@@ -4,6 +4,7 @@ mod cli;
 mod cpu;
 mod duration_us;
 mod io;
+mod mcp;
 mod memory;
 mod observe;
 mod psi;
@@ -136,6 +137,10 @@ fn execute(command: Command) -> Result<String, Box<dyn std::error::Error>> {
         }
         Command::Watch(options) => {
             watch::run(&options)?;
+            Ok(String::new())
+        }
+        Command::Mcp(options) => {
+            mcp::run(&options)?;
             Ok(String::new())
         }
         Command::Completions(shell) => {

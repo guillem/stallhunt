@@ -51,6 +51,7 @@ fn root_help_exposes_the_initial_command_set() {
     assert!(stdout.contains("record"));
     assert!(stdout.contains("replay"));
     assert!(stdout.contains("redact"));
+    assert!(stdout.contains("mcp"));
     assert!(stdout.contains("version"));
 }
 
