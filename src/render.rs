@@ -109,39 +109,57 @@ pub fn capabilities(
             cgroup.as_str(),
             cgroup_capability_explanation(cgroup),
         )),
-        OutputFormat::Json => to_json(&CapabilitiesJson {
-            schema_version: 2,
-            tool_version: env!("CARGO_PKG_VERSION"),
-            status: "observed",
-            capabilities: CapabilitiesJsonValue {
-                cpu_psi: CapabilityJson {
-                    state: cpu_psi.as_str(),
-                    message: cpu_psi.explanation(),
-                },
-                host_cpu: cpu.host_cpu.as_str(),
-                process_stat: cpu.process_stat.as_str(),
-                process_schedstat: CapabilityJson {
-                    state: cpu.process_schedstat.as_str(),
-                    message: cpu.process_schedstat.explanation(),
-                },
-                memory_psi: CapabilityJson {
-                    state: memory_psi.as_str(),
-                    message: memory_psi.explanation(),
-                },
-                meminfo: memory.meminfo.as_str(),
-                vmstat: memory.vmstat.as_str(),
-                io_psi: CapabilityJson {
-                    state: io_psi.as_str(),
-                    message: io_psi.explanation(),
-                },
-                diskstats: io.diskstats.as_str(),
-                process_io: io.process_io.as_str(),
-                cgroup_v2: CapabilityJson {
-                    state: cgroup.as_str(),
-                    message: cgroup_capability_explanation(cgroup),
-                },
+        OutputFormat::Json => to_json(&capabilities_json_document(
+            cpu_psi, cpu, memory_psi, memory, io_psi, io, cgroup,
+        )),
+    }
+}
+
+/// Builds the schema_version-2 capabilities document shared by the CLI's
+/// JSON output and any other presentation surface, so both serialize the
+/// exact same struct.
+#[allow(clippy::too_many_arguments)]
+fn capabilities_json_document(
+    cpu_psi: CpuPsiCapability,
+    cpu: CpuTelemetryCapabilities,
+    memory_psi: MemoryPsiCapability,
+    memory: MemoryContextCapabilities,
+    io_psi: IoPsiCapability,
+    io: IoCapabilities,
+    cgroup: CgroupCapability,
+) -> CapabilitiesJson<'static> {
+    CapabilitiesJson {
+        schema_version: 2,
+        tool_version: env!("CARGO_PKG_VERSION"),
+        status: "observed",
+        capabilities: CapabilitiesJsonValue {
+            cpu_psi: CapabilityJson {
+                state: cpu_psi.as_str(),
+                message: cpu_psi.explanation(),
             },
-        }),
+            host_cpu: cpu.host_cpu.as_str(),
+            process_stat: cpu.process_stat.as_str(),
+            process_schedstat: CapabilityJson {
+                state: cpu.process_schedstat.as_str(),
+                message: cpu.process_schedstat.explanation(),
+            },
+            memory_psi: CapabilityJson {
+                state: memory_psi.as_str(),
+                message: memory_psi.explanation(),
+            },
+            meminfo: memory.meminfo.as_str(),
+            vmstat: memory.vmstat.as_str(),
+            io_psi: CapabilityJson {
+                state: io_psi.as_str(),
+                message: io_psi.explanation(),
+            },
+            diskstats: io.diskstats.as_str(),
+            process_io: io.process_io.as_str(),
+            cgroup_v2: CapabilityJson {
+                state: cgroup.as_str(),
+                message: cgroup_capability_explanation(cgroup),
+            },
+        },
     }
 }
 
@@ -1190,6 +1208,13 @@ pub(crate) fn terminal_scope_identifier(value: &str, width: usize) -> String {
 }
 
 fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, serde_json::Error> {
+    to_json(&hunt_json_document(options, result))
+}
+
+/// Builds the schema_version-2 hunt document shared by the CLI's JSON output
+/// and any other presentation surface, so both serialize the exact same
+/// struct and never re-derive a diagnosis.
+fn hunt_json_document(options: &HuntOptions, result: HuntObservation) -> HuntJson<'static> {
     let cpu = cpu_json_parts(result.psi, result.cpu);
     let memory = memory_json_parts(result.memory.as_ref());
     let io = io_json_parts(result.io.as_ref());
@@ -1265,7 +1290,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
     } else {
         None
     };
-    to_json(&HuntJson {
+    HuntJson {
         schema_version: 2,
         tool_version: env!("CARGO_PKG_VERSION"),
         status,
@@ -1306,7 +1331,7 @@ fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, s
         cgroup_findings: cgroup.analysis.findings,
         process_scopes,
         qualifiers,
-    })
+    }
 }
 
 struct CgroupJsonParts {
@@ -3683,5 +3708,67 @@ pub(crate) mod tests {
             assert!(output.contains(capability.explanation()));
             assert!(output.contains("I/O PSI: available"));
         }
+    }
+
+    #[test]
+    fn hunt_json_document_matches_the_string_output() {
+        let options = HuntOptions {
+            duration_ms: 1_000,
+            output: OutputFormat::Json,
+            verbose: false,
+            no_color: false,
+        };
+        let string_output =
+            hunt_json(&options, hunt_legacy_full_fixture_observation()).expect("hunt json");
+        let from_string: serde_json::Value =
+            serde_json::from_str(&string_output).expect("parse hunt json");
+        let from_document = serde_json::to_value(hunt_json_document(
+            &options,
+            hunt_legacy_full_fixture_observation(),
+        ))
+        .expect("hunt document to value");
+        assert_eq!(from_string, from_document);
+    }
+
+    #[test]
+    fn capabilities_json_document_matches_the_string_output() {
+        let cpu = CpuTelemetryCapabilities {
+            host_cpu: crate::cpu::CollectorCapability::Available,
+            process_stat: crate::cpu::CollectorCapability::Available,
+            process_schedstat: crate::cpu::SchedstatCapability::Unsupported,
+        };
+        let memory = MemoryContextCapabilities {
+            meminfo: MemoryContextCapability::Available,
+            vmstat: MemoryContextCapability::Available,
+        };
+        let io = IoCapabilities {
+            diskstats: IoCapability::Available,
+            process_io: IoCapability::PermissionDenied,
+        };
+        let string_output = render_capabilities(
+            &CapabilitiesOptions {
+                output: OutputFormat::Json,
+            },
+            CpuPsiCapability::Available,
+            cpu,
+            MemoryPsiCapability::Available,
+            memory.clone(),
+            IoPsiCapability::Available,
+            io,
+            CgroupCapability::Available,
+        );
+        let from_string: serde_json::Value =
+            serde_json::from_str(&string_output).expect("parse capabilities json");
+        let from_document = serde_json::to_value(capabilities_json_document(
+            CpuPsiCapability::Available,
+            cpu,
+            MemoryPsiCapability::Available,
+            memory,
+            IoPsiCapability::Available,
+            io,
+            CgroupCapability::Available,
+        ))
+        .expect("capabilities document to value");
+        assert_eq!(from_string, from_document);
     }
 }

@@ -944,6 +944,14 @@ fn current_line(label: &str, signal: &ResourceSignal) -> String {
 }
 
 fn watch_json(window: &WatchWindow) -> Result<String, serde_json::Error> {
+    let payload = watch_window_document(window);
+    Ok(format!("{}\n", serde_json::to_string(&payload)?))
+}
+
+/// Builds the schema_version-2 watch-window document shared by the CLI's
+/// JSON stream and any other presentation surface, so both serialize the
+/// exact same struct.
+fn watch_window_document(window: &WatchWindow) -> WatchWindowJson<'_> {
     let current_cgroups: Vec<CgroupCurrentJson<'_>> = window
         .current
         .cgroups
@@ -951,7 +959,7 @@ fn watch_json(window: &WatchWindow) -> Result<String, serde_json::Error> {
         .filter(|(_, signal)| signal.status == ObservationStatus::Pressure)
         .map(|(id, signal)| CgroupCurrentJson { id, signal })
         .collect();
-    let payload = WatchWindowJson {
+    WatchWindowJson {
         kind: WATCH_WINDOW_KIND,
         schema_version: 2,
         tool_version: env!("CARGO_PKG_VERSION"),
@@ -968,8 +976,7 @@ fn watch_json(window: &WatchWindow) -> Result<String, serde_json::Error> {
         },
         history: &window.history,
         process_scopes: window.current.process_scopes.clone(),
-    };
-    Ok(format!("{}\n", serde_json::to_string(&payload)?))
+    }
 }
 
 #[derive(Serialize)]
@@ -2597,5 +2604,16 @@ mod tests {
                 .iter()
                 .all(|list| list.stale)
         );
+    }
+
+    #[test]
+    fn watch_window_document_matches_the_json_line_output() {
+        let window = sample_window();
+        let from_string: serde_json::Value =
+            serde_json::from_str(&watch_json(&window).expect("watch json"))
+                .expect("parse watch json");
+        let from_document =
+            serde_json::to_value(watch_window_document(&window)).expect("document to value");
+        assert_eq!(from_string, from_document);
     }
 }
