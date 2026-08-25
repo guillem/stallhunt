@@ -4,9 +4,10 @@
 
 The repository contains completed Milestone 1 CPU, M2 host-memory, M3
 block-I/O, M4 bounded cgroup/service, M5 recording/replay, M6 watch, the v0.4
-scoped-attribution/TUI implementation, and the first two Milestone 8
-evidence-chain slices. v0.4.1 was a pre-release code-review bugfix pass on top
-of the v0.4.0 slice (see `docs/status.md`) and is the currently published
+scoped-attribution/TUI implementation, the first two Milestone 8
+evidence-chain slices, and the v0.5 `stallhunt mcp` server (ADR-0017,
+ADR-0018). v0.4.1 was a pre-release code-review bugfix pass on top of the
+v0.4.0 slice (see `docs/status.md`); v0.5.0 is the currently published
 release. EXP-0010 records the passed taskstats, 512-TGID/member-ceiling,
 cleanup, and dependency-review gates.
 

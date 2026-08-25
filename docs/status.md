@@ -4,13 +4,14 @@ Last updated: 2026-08-25
 
 ## Current milestone
 
-**v0.5.0 prepared — MCP server for coding agents**
+**v0.5.0 published — MCP server for coding agents**
 
 PR #11 merged into `main` (ADR-0017, ADR-0018): `stallhunt mcp` serves
 Model Context Protocol tools over stdio, with a resident sampler for
 instant recent-pressure answers and a `detail` argument that keeps tool
-payloads small by default. This is not yet a published release; the
-currently published release remains `v0.4.1`.
+payloads small by default. The `v0.5.0` tag was pushed and `release.yml`
+published the GitHub Release with the `x86_64-unknown-linux-gnu` tarball
+and checksum. `v0.5.0` is now the currently published release.
 
 Milestones 1–6 remain functionally complete. Release v0.3.0 corrects bare
 invocation so root `--duration`, `--json`, `--verbose`, and `--no-color` have
@@ -639,6 +640,18 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-25, the owner authorized the v0.5.0 release. PR #11 (`stallhunt
+mcp`, ADR-0017/ADR-0018) passed CI (`msrv` and `stable` jobs) and was merged
+into `main`; a multi-agent code review found nine confirmed correctness/
+robustness findings, all fixed in the same PR with a regression test per
+finding (one, `run_hunt` blocking the single-threaded server for its full
+duration, was an accepted disclosed tradeoff, recorded under Known
+limitations rather than changed). The `v0.5.0` tag was pushed and
+`release.yml` built the release binary, packaged the
+`x86_64-unknown-linux-gnu` tarball and SHA-256 sidecar, and published the
+GitHub Release. See
+<https://github.com/guillem/stallhunt/releases/tag/v0.5.0>.
 
 On 2026-08-25, the owner authorized the v0.4.1 release. PR #9 (the code-review
 bugfix pass below) passed CI (`msrv` and `stable` jobs) and was merged into
