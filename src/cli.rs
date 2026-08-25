@@ -60,6 +60,12 @@ pub struct WatchOptions {
     pub no_color: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct McpOptions {
+    pub interval_ms: u64,
+    pub sampler: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Hunt(HuntOptions),
@@ -68,6 +74,7 @@ pub enum Command {
     Replay(ReplayOptions),
     Redact(RedactOptions),
     Watch(WatchOptions),
+    Mcp(McpOptions),
     Completions(Shell),
     Version,
 }
@@ -122,6 +129,8 @@ enum Commands {
     Replay(ReplayArgs),
     /// Replace identifiers in a recording for sharing
     Redact(RedactArgs),
+    /// Serve Model Context Protocol tools over stdio for coding agents
+    Mcp(McpArgs),
     /// Print shell completions to stdout
     Completions {
         /// Shell to generate completions for
@@ -235,6 +244,16 @@ struct WatchArgs {
     no_color: bool,
 }
 
+#[derive(clap::Args, Debug, Clone, PartialEq, Eq)]
+struct McpArgs {
+    /// Resident sampler window from 100ms to 5m
+    #[arg(long, value_name = "DURATION", default_value = "2s", value_parser = parse_duration_value)]
+    interval: u64,
+    /// Disable the resident sampler; only one-shot tools stay available
+    #[arg(long)]
+    no_sampler: bool,
+}
+
 impl From<HuntArgs> for HuntOptions {
     fn from(args: HuntArgs) -> Self {
         Self {
@@ -312,6 +331,15 @@ impl From<WatchArgs> for WatchOptions {
     }
 }
 
+impl From<McpArgs> for McpOptions {
+    fn from(args: McpArgs) -> Self {
+        Self {
+            interval_ms: args.interval,
+            sampler: !args.no_sampler,
+        }
+    }
+}
+
 impl Cli {
     pub fn into_command(self) -> Command {
         match self.command {
@@ -322,6 +350,7 @@ impl Cli {
             Some(Commands::Record(args)) => Command::Record(args.into()),
             Some(Commands::Replay(args)) => Command::Replay(args.into()),
             Some(Commands::Redact(args)) => Command::Redact(args.into()),
+            Some(Commands::Mcp(args)) => Command::Mcp(args.into()),
             Some(Commands::Completions { shell }) => Command::Completions(shell),
             Some(Commands::Version) => Command::Version,
         }
@@ -539,6 +568,7 @@ mod tests {
                 "out.json",
             ],
             vec!["stallhunt", "--verbose", "watch"],
+            vec!["stallhunt", "--json", "mcp"],
             vec!["stallhunt", "--no-color", "completions", "bash"],
             vec!["stallhunt", "--duration", "100ms", "version"],
         ];
@@ -781,7 +811,46 @@ mod tests {
         assert!(help.contains("record"));
         assert!(help.contains("replay"));
         assert!(help.contains("redact"));
+        assert!(help.contains("mcp"));
         assert!(help.contains("completions"));
         assert!(help.contains("version"));
+    }
+
+    #[test]
+    fn mcp_defaults_to_a_two_second_sampler_interval() {
+        assert_eq!(
+            expect_parse(["stallhunt", "mcp"]),
+            Command::Mcp(McpOptions {
+                interval_ms: 2_000,
+                sampler: true,
+            })
+        );
+    }
+
+    #[test]
+    fn mcp_accepts_interval_and_no_sampler() {
+        assert_eq!(
+            expect_parse(["stallhunt", "mcp", "--interval", "500ms", "--no-sampler"]),
+            Command::Mcp(McpOptions {
+                interval_ms: 500,
+                sampler: false,
+            })
+        );
+    }
+
+    #[test]
+    fn mcp_rejects_out_of_range_intervals() {
+        for value in ["50ms", "6m"] {
+            let error =
+                parse(["stallhunt", "mcp", "--interval", value]).expect_err("interval bounds");
+            assert_eq!(error.exit_code(), 2);
+        }
+    }
+
+    #[test]
+    fn mcp_rejects_repeated_flags() {
+        let error = parse(["stallhunt", "mcp", "--interval", "1s", "--interval", "2s"])
+            .expect_err("repeated flags");
+        assert_eq!(error.exit_code(), 2);
     }
 }

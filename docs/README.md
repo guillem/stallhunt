@@ -29,6 +29,7 @@ retains controlled validation, overhead evidence, and precise open gaps.
 | [`telemetry.md`](telemetry.md) | Linux data sources and collector design |
 | [`inference-engine.md`](inference-engine.md) | Rules, severity, confidence and causal reasoning |
 | [`cli-ux.md`](cli-ux.md) | CLI commands, output model and JSON expectations |
+| [`mcp-server.md`](mcp-server.md) | MCP server for coding agents: transport, tools, resident sampler |
 | [`security-privileges.md`](security-privileges.md) | Permission model, privilege minimization, data sensitivity |
 | [`testing.md`](testing.md) | Unit, fixture, integration, load and regression testing |
 | [`development.md`](development.md) | Local development and code-quality conventions |
@@ -59,6 +60,8 @@ Accepted initial decisions:
 - ADR-0014: implicit hunt options and additive watch process attribution
 - ADR-0015: bounded procfs/taskstats process evidence with no privilege elevation
 - ADR-0016: scoped six-role process attribution, schema-2 compatibility, and responsive TUI behavior
+- ADR-0017: MCP server over stdio with a hand-rolled synchronous JSON-RPC loop
+- ADR-0018: MCP tool payloads default to a deduplicated "lean" projection
 
 ## Documentation rules
 

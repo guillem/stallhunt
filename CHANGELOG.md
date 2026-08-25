@@ -6,6 +6,38 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- A `stallhunt mcp` subcommand that serves Model Context Protocol tools
+  over stdio for coding agents (ADR-0017). Four tools are exposed:
+  `get_current_pressure` and `get_recent_history` answer instantly from a
+  resident sampler that keeps a rolling finding-lifecycle view of the last
+  up-to-16 windows (`--interval`, default 2s; `--no-sampler` disables it;
+  a sampling-thread panic is caught and logged rather than freezing the
+  sampler); `run_hunt` runs a blocking one-shot diagnosis; `get_capabilities`
+  reports telemetry support. A malformed or non-UTF-8 line gets a JSON-RPC
+  parse error without ending the session; a disconnected client (broken
+  pipe) ends the session cleanly instead of crashing the process. Tool
+  results are projections of the existing schema-version-2 JSON documents,
+  serialized from the same structs as the CLI output.
+  `get_current_pressure` and `run_hunt` accept a `detail` argument
+  (`"lean"` default, `"full"`, ADR-0018) — lean mode removes process-
+  candidate fields genuinely restated in `process_scopes` this window
+  (a resolved/stale lifecycle entry keeps its candidates, since those are
+  its only copy) and, for `run_hunt`, raw per-process/per-cgroup telemetry
+  that findings already summarize, typically 60-80% smaller, while keeping
+  every completeness signal intact; `"full"` returns every field with the
+  same content as the CLI's JSON output. `get_recent_history` has no lean
+  mode — its lifecycle entries are the only place resolved/stale findings'
+  process evidence survives, so nothing there is safe to strip.
+
+### Changed
+
+- The hunt, watch-window, and capabilities JSON emitters now build their
+  documents through shared builder functions consumed by both the CLI and
+  the MCP server. No bytes of existing CLI output changed; equality tests
+  pin the parity.
+
 ## [0.4.1] - 2026-08-25
 
 ### Fixed

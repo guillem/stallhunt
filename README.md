@@ -58,6 +58,15 @@ six process-role lists beside the lifecycle panels; piped output or
 stallhunt watch --interval 2s --count 3
 ```
 
+Serve Model Context Protocol tools over stdio so coding agents can query
+diagnoses directly — a resident sampler keeps a rolling view of recent
+pressure for instant answers (for Claude Code: `claude mcp add stallhunt --
+stallhunt mcp`; see [`docs/mcp-server.md`](docs/mcp-server.md)):
+
+```bash
+stallhunt mcp [--interval 2s] [--no-sampler]
+```
+
 Generate shell completions:
 
 ```bash
@@ -163,6 +172,7 @@ Later releases may add:
 │   ├── duration_us.rs
 │   ├── io.rs
 │   ├── main.rs
+│   ├── mcp/
 │   ├── memory.rs
 │   ├── observe.rs
 │   ├── psi.rs
@@ -177,6 +187,7 @@ Later releases may add:
 │   ├── cli.rs
 │   ├── cpu_acceptance.rs
 │   ├── io_acceptance.rs
+│   ├── mcp.rs
 │   ├── memory_acceptance.rs
 │   └── fixtures/
 │       ├── cpu/

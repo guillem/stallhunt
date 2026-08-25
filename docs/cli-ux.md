@@ -114,6 +114,20 @@ stallhunt watch [--interval 2s] [--count N] [--json] [--no-color]
 
 This is a finding-lifecycle TUI on a terminal, not a generic resource monitor.
 
+### `mcp`
+
+Serve Model Context Protocol tools over stdio for coding agents.
+
+```bash
+stallhunt mcp [--interval 2s] [--no-sampler]
+```
+
+stdout carries protocol frames exclusively; stdin EOF ends the session. A
+resident sampler (interval bounds match `watch`) keeps a rolling
+finding-lifecycle view so agents get instant answers about the recent past;
+`--no-sampler` disables it. Tools and transport are documented in
+[`mcp-server.md`](mcp-server.md) and ADR-0017.
+
 ## Current CPU diagnosis behavior
 
 Milestone 1 implements:

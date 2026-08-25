@@ -35,6 +35,9 @@ stallhunt \- Linux performance triage that reports evidence-backed bottlenecks
 .I PATH
 [\fB\-\-force\fR]
 .PP
+.B stallhunt mcp
+[\fB\-\-interval\fR \fIDURATION\fR] [\fB\-\-no-sampler\fR]
+.PP
 .B stallhunt completions
 .I SHELL
 .PP
@@ -99,6 +102,17 @@ telemetry.
 .TP
 .B redact
 Replace identifiers in an existing recording and write a shareable copy.
+.TP
+.B mcp
+Serve Model Context Protocol tools over standard input and output for coding
+agents.
+Standard output carries protocol frames exclusively; end-of-file on standard
+input ends the session.
+A resident sampler keeps a rolling finding-lifecycle view (default interval 2
+seconds, same bounds as
+.BR watch );
+.B \-\-no-sampler
+disables it, leaving only the one-shot tools.
 .TP
 .B completions \fISHELL\fR
 Print shell completion scripts to standard output.
