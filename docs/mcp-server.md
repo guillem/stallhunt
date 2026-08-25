@@ -4,7 +4,8 @@
 Model Context Protocol. An MCP client (Claude Code, Claude Desktop, or any
 other) spawns the process and exchanges newline-delimited JSON-RPC 2.0
 messages over stdin/stdout. The design is recorded in
-[ADR-0017](decisions/0017-mcp-server.md).
+[ADR-0017](decisions/0017-mcp-server.md) and
+[ADR-0018](decisions/0018-mcp-tool-payload-detail-levels.md).
 
 ## Registration
 
@@ -49,31 +50,53 @@ results that point the agent at `run_hunt`, not errors.
 ## Tools
 
 Every tool result carries a human-readable summary in `content` and the
-corresponding schema_version-2 document (see
-[data-model.md](data-model.md)) in `structuredContent`. Both serialize the
-same structs as the CLI's JSON output; no surface re-derives a diagnosis.
+corresponding schema_version-2 document in `structuredContent`, built from
+the same structs as the CLI's JSON output — no surface re-derives a
+diagnosis (see [data-model.md](data-model.md)). `structuredContent` is a
+projection of that document, chosen by the `detail` argument every
+sampler-backed tool and `run_hunt` accept:
+
+- `"lean"` (default) — every field that would otherwise restate the same
+  process candidates a second or third time is removed;
+  `structuredContent.detail` is `"lean"` in the response so an agent can
+  tell which projection it got. `process_scopes` and `findings` remain the
+  canonical place to read suspects and victims. For `run_hunt` only, lean
+  mode additionally omits five `observation` keys that carry raw
+  per-process/per-cgroup telemetry (`cgroup`, `process_resource_evidence`,
+  `scheduler_delay_candidates`, `processes`, `process_io`) — listed back
+  under `observation.omitted_for_detail_lean` — while every completeness
+  signal (`taskstats_capability`, `delay_accounting`, the
+  `*_collection_issues` counters, PSI, `memory_context`, `diskstats`) stays
+  intact. Typically 60–80% smaller than `"full"`.
+- `"full"` — the complete schema_version-2 document, byte-identical to
+  what the CLI's `--json` output would produce from the same observation.
+
+See [ADR-0018](decisions/0018-mcp-tool-payload-detail-levels.md) for the
+measurements and reasoning behind the split.
 
 ### `get_current_pressure`
 
-No parameters. Instant. Returns the latest sampling window — the
-`stallhunt.watch_window` document with CPU, memory, I/O, and cgroup
-signals, lifecycle states, and scoped process roles — plus sampler
-coverage metadata (`interval_ms`, `windows_completed`,
+Optional `detail` (`"lean"` default, `"full"`). Instant. Returns the latest
+sampling window — the `stallhunt.watch_window` document with CPU, memory,
+I/O, and cgroup signals, lifecycle states, and scoped process roles — plus
+sampler coverage metadata (`interval_ms`, `windows_completed`,
 `latest_window_at_unix_ms`).
 
 ### `get_recent_history`
 
-No parameters. Instant. Returns the lifecycle entries and the retained
-history ring (up to 16 windows) with per-window completion timestamps:
-what appeared, persisted, and resolved recently.
+Optional `detail` (`"lean"` default, `"full"`). Instant. Returns the
+lifecycle entries and the retained history ring (up to 16 windows) with
+per-window completion timestamps: what appeared, persisted, and resolved
+recently.
 
 ### `run_hunt`
 
-One optional parameter, `duration` (string, `100ms`–`5m`, default `5s`).
-Blocks for the full duration — the tool description warns agents to keep
-their client timeout above the requested window. Returns the full
-schema_version-2 hunt document: findings, evidence chains, process scopes,
-qualifiers, and capabilities.
+Optional `duration` (string, `100ms`–`5m`, default `5s`) and `detail`
+(`"lean"` default, `"full"`). Blocks for the full duration — the tool
+description warns agents to keep their client timeout above the requested
+window. Returns the hunt document: findings, evidence chains, process
+scopes, qualifiers, capabilities, and (at `detail: "full"`, or trimmed at
+`"lean"`) the raw observation.
 
 ### `get_capabilities`
 

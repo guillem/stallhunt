@@ -59,3 +59,4 @@ What credible options were rejected and why?
 - [`0015-procfs-taskstats-process-evidence.md`](0015-procfs-taskstats-process-evidence.md)
 - [`0016-scoped-process-roles-schema-tui.md`](0016-scoped-process-roles-schema-tui.md)
 - [`0017-mcp-server.md`](0017-mcp-server.md)
+- [`0018-mcp-tool-payload-detail-levels.md`](0018-mcp-tool-payload-detail-levels.md)

@@ -100,9 +100,15 @@ the test process and does not mutate the hierarchy.
   observation seams and finding-lifecycle tracker so `get_current_pressure`
   and `get_recent_history` answer instantly about the last up-to-16 windows;
   `run_hunt` and `get_capabilities` mirror the one-shot commands. Tool
-  results embed the schema-version-2 documents serialized from the same
-  structs as the CLI JSON output, verified by string-vs-document equality
-  tests and an end-to-end pipe-driven session test (`tests/mcp.rs`).
+  results are projections of the schema-version-2 documents serialized from
+  the same structs as the CLI JSON output, verified by string-vs-document
+  equality tests and an end-to-end pipe-driven session test
+  (`tests/mcp.rs`). By default (`detail: "lean"`, ADR-0018) the projection
+  removes process-candidate fields that restate `process_scopes`, and for
+  `run_hunt` also the raw per-process/per-cgroup `observation` telemetry
+  that findings already summarize — measured 60-80% smaller against a real
+  `fake_workload.sh` reproduction, with every ADR-0015 completeness signal
+  kept intact; `detail: "full"` still returns the byte-identical document.
 - `hunt` accepts `--duration` values from 100 ms through 5 minutes, including
   exact-millisecond decimal values, and defaults to 10 seconds.
 - Bare `stallhunt` accepts the same `--duration`, `--json`, `--verbose`, and

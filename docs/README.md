@@ -61,6 +61,7 @@ Accepted initial decisions:
 - ADR-0015: bounded procfs/taskstats process evidence with no privilege elevation
 - ADR-0016: scoped six-role process attribution, schema-2 compatibility, and responsive TUI behavior
 - ADR-0017: MCP server over stdio with a hand-rolled synchronous JSON-RPC loop
+- ADR-0018: MCP tool payloads default to a deduplicated "lean" projection
 
 ## Documentation rules
 

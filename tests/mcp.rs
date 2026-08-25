@@ -159,9 +159,29 @@ fn a_full_session_serves_every_tool_family_and_exits_on_eof() {
         );
         thread::sleep(Duration::from_millis(50));
     };
+    assert_eq!(pressure["result"]["structuredContent"]["detail"], "lean");
     let window = &pressure["result"]["structuredContent"]["window"];
     assert_eq!(window["kind"], "stallhunt.watch_window");
     assert_eq!(window["schema_version"], 2);
+    assert!(
+        window["current"]["cpu"].get("process_role_lists").is_none(),
+        "default detail should omit the process_scopes restatement"
+    );
+
+    let full_pressure = session.request(
+        "tools/call",
+        json!({ "name": "get_current_pressure", "arguments": { "detail": "full" } }),
+    );
+    assert_eq!(
+        full_pressure["result"]["structuredContent"]["detail"],
+        "full"
+    );
+    assert!(
+        full_pressure["result"]["structuredContent"]["window"]["current"]["cpu"]
+            .get("process_role_lists")
+            .is_some(),
+        "full detail should still carry the byte-identical schema-2 document"
+    );
 
     let history = session.request(
         "tools/call",

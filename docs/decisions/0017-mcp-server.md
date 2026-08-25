@@ -2,6 +2,10 @@
 
 - Status: Accepted
 - Date: 2026-08-25
+- Amended by [ADR-0018](0018-mcp-tool-payload-detail-levels.md): the
+  "structured documents unchanged" claim below now describes `detail:
+  "full"`; the default tool response is deduplicated. The server, sampler,
+  and tool architecture decided here are unchanged.
 
 ## Context
 
