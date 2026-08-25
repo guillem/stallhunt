@@ -47,6 +47,7 @@ const PLACEHOLDER_ARGV: &[&[&str]] = &[
         "redacted.json",
         "--force",
     ],
+    &["mcp", "--interval", "100ms", "--no-sampler"],
 ];
 
 #[derive(Debug)]
@@ -119,7 +120,7 @@ fn concrete_documented_commands_parse() {
 
 #[test]
 fn placeholder_and_synopsis_argv_are_explicitly_inventoried() {
-    assert_eq!(PLACEHOLDER_ARGV.len(), 8);
+    assert_eq!(PLACEHOLDER_ARGV.len(), 9);
     for arguments in PLACEHOLDER_ARGV {
         let example = Example {
             path: PathBuf::from("PLACEHOLDER_ARGV"),
@@ -416,6 +417,7 @@ fn is_executable_command(
                                 | "record"
                                 | "replay"
                                 | "redact"
+                                | "mcp"
                                 | "completions"
                                 | "version"
                         )

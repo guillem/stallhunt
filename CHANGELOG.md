@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- A `stallhunt mcp` subcommand that serves Model Context Protocol tools
+  over stdio for coding agents (ADR-0017). Four tools are exposed:
+  `get_current_pressure` and `get_recent_history` answer instantly from a
+  resident sampler that keeps a rolling finding-lifecycle view of the last
+  up-to-16 windows (`--interval`, default 2s; `--no-sampler` disables it);
+  `run_hunt` runs a blocking one-shot diagnosis; `get_capabilities` reports
+  telemetry support. Tool results embed the existing schema-version-2 JSON
+  documents unchanged, serialized from the same structs as the CLI output.
+
+### Changed
+
+- The hunt, watch-window, and capabilities JSON emitters now build their
+  documents through shared builder functions consumed by both the CLI and
+  the MCP server. No bytes of existing CLI output changed; equality tests
+  pin the parity.
+
 ## [0.4.1] - 2026-08-25
 
 ### Fixed

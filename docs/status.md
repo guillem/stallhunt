@@ -91,8 +91,18 @@ the test process and does not mutate the hierarchy.
 
 - A single stable-Rust package builds the `stallhunt` binary (MSRV 1.85).
 - The package forbids unsafe Rust.
-- Real `hunt`, `watch`, `record`, `replay`, `redact`, `capabilities`, help, and
-  version command structure exists.
+- Real `hunt`, `watch`, `record`, `replay`, `redact`, `capabilities`, `mcp`,
+  help, and version command structure exists.
+- `mcp` serves Model Context Protocol tools over stdio for coding agents
+  (ADR-0017): a hand-rolled synchronous JSON-RPC loop pinned to protocol
+  revision 2025-06-18 with no new dependencies. A resident sampler thread
+  (default 2 s interval, `--no-sampler` to disable) reuses the watch
+  observation seams and finding-lifecycle tracker so `get_current_pressure`
+  and `get_recent_history` answer instantly about the last up-to-16 windows;
+  `run_hunt` and `get_capabilities` mirror the one-shot commands. Tool
+  results embed the schema-version-2 documents serialized from the same
+  structs as the CLI JSON output, verified by string-vs-document equality
+  tests and an end-to-end pipe-driven session test (`tests/mcp.rs`).
 - `hunt` accepts `--duration` values from 100 ms through 5 minutes, including
   exact-millisecond decimal values, and defaults to 10 seconds.
 - Bare `stallhunt` accepts the same `--duration`, `--json`, `--verbose`, and
@@ -468,6 +478,10 @@ taskstats evidence could read as a complete, confirmed clean negative. See
 validation" below for the full list and how each was verified.
 
 ## Current recommended next task
+Since v0.4.1, the owner-directed `stallhunt mcp` surface (ADR-0017) has landed
+on top of the released tree; it adds an agent-facing interface without
+touching the inference engine or output schemas.
+
 v0.4.1 is released; do not start Milestone 7 or add another M8 chain without a
 concrete diagnostic gap driving it, as coincident PSI still does not establish
 a causal path. The recommended next task is making TASKSTATS TGID selection

@@ -255,6 +255,14 @@ analyzer-owned roles for matching host and cgroup PSI scopes, schema-2
 recording/output compatibility, and widescreen/compact watch presentation. It
 does not add a new pressure finding, process-device mapping, or causal edge.
 
+## Post-v0.4.1 cross-cutting slice — MCP server for coding agents
+
+Status: implemented (ADR-0017). `stallhunt mcp` serves Model Context Protocol
+tools over stdio: instant sampler-backed answers about recent pressure plus
+one-shot hunt and capabilities tools, reusing the existing observation seams,
+finding-lifecycle tracker, and schema-version-2 documents without touching the
+inference engine. See [`mcp-server.md`](mcp-server.md).
+
 ## Milestone 7 — eBPF precision probes
 
 Status: not started. Do not start it merely because eBPF is interesting.
