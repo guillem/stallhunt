@@ -2,13 +2,16 @@
 //! over generic reader/writer pairs so unit tests can drive it in memory.
 
 use std::io::{self, BufRead, Write};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use super::protocol::{
     self, INVALID_REQUEST, Incoming, METHOD_NOT_FOUND, PARSE_ERROR, parse_incoming,
 };
+use super::tools;
 use crate::cli::McpOptions;
+use crate::observe::HuntObservation;
 
 /// The one protocol revision this server speaks. Offered back to clients
 /// that request a revision we do not recognize, per the MCP version
@@ -17,13 +20,17 @@ pub(crate) const PROTOCOL_VERSION: &str = "2025-06-18";
 
 pub(crate) struct ServerState {
     options: McpOptions,
+    /// Injected observation source so unit tests can serve fixture data
+    /// instead of blocking on live telemetry.
+    observe: fn(Duration) -> HuntObservation,
     initialize_received: bool,
 }
 
 impl ServerState {
-    pub(crate) fn new(options: McpOptions) -> Self {
+    pub(crate) fn new(options: McpOptions, observe: fn(Duration) -> HuntObservation) -> Self {
         Self {
             options,
+            observe,
             initialize_received: false,
         }
     }
@@ -90,8 +97,22 @@ fn handle_request(
             INVALID_REQUEST,
             "server not initialized: send initialize first",
         ),
-        "tools/list" => protocol::write_result(writer, id, json!({ "tools": [] })),
-        "tools/call" => protocol::write_error(writer, id, protocol::INVALID_PARAMS, "unknown tool"),
+        "tools/list" => {
+            protocol::write_result(writer, id, json!({ "tools": tools::descriptors() }))
+        }
+        "tools/call" => {
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+            let arguments = params.get("arguments").cloned().unwrap_or(Value::Null);
+            match tools::call(state.observe, name, &arguments) {
+                Some(result) => protocol::write_result(writer, id, result),
+                None => protocol::write_error(
+                    writer,
+                    id,
+                    protocol::INVALID_PARAMS,
+                    &format!("unknown tool: {name}"),
+                ),
+            }
+        }
         _ => protocol::write_error(writer, id, METHOD_NOT_FOUND, "method not found"),
     }
 }
@@ -136,8 +157,12 @@ mod tests {
         }
     }
 
+    fn fixture_observe(_: Duration) -> HuntObservation {
+        crate::render::tests::hunt_legacy_full_fixture_observation()
+    }
+
     fn serve_lines(lines: &str) -> Vec<Value> {
-        let mut state = ServerState::new(options());
+        let mut state = ServerState::new(options(), fixture_observe);
         let mut output = Vec::new();
         serve(Cursor::new(lines.to_string()), &mut output, &mut state).expect("serve");
         String::from_utf8(output)
@@ -238,9 +263,67 @@ mod tests {
 
     #[test]
     fn eof_ends_the_session_cleanly() {
-        let mut state = ServerState::new(options());
+        let mut state = ServerState::new(options(), fixture_observe);
         let mut output = Vec::new();
         serve(Cursor::new(String::new()), &mut output, &mut state).expect("serve");
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn tools_list_exposes_named_tools_with_schemas() {
+        let input = format!(
+            "{}\n{}\n",
+            initialize_line(),
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+        );
+        let responses = serve_lines(&input);
+        let tools = responses[1]["result"]["tools"]
+            .as_array()
+            .expect("tools array");
+        assert!(!tools.is_empty());
+        for tool in tools {
+            assert!(tool["name"].is_string());
+            assert!(tool["description"].is_string());
+            assert_eq!(tool["inputSchema"]["type"], "object");
+        }
+    }
+
+    #[test]
+    fn tools_call_dispatches_to_a_known_tool() {
+        let input = format!(
+            "{}\n{}\n",
+            initialize_line(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": { "name": "run_hunt", "arguments": { "duration": "1s" } },
+            }),
+        );
+        let responses = serve_lines(&input);
+        assert_eq!(responses[1]["result"]["isError"], false);
+        assert_eq!(
+            responses[1]["result"]["structuredContent"]["schema_version"],
+            2
+        );
+    }
+
+    #[test]
+    fn tools_call_with_an_unknown_tool_is_invalid_params() {
+        let input = format!(
+            "{}\n{}\n",
+            initialize_line(),
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": { "name": "nope" },
+            }),
+        );
+        let responses = serve_lines(&input);
+        assert_eq!(
+            responses[1]["error"]["code"],
+            super::protocol::INVALID_PARAMS
+        );
     }
 }

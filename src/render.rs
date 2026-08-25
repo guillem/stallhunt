@@ -115,6 +115,24 @@ pub fn capabilities(
     }
 }
 
+/// The schema_version-2 capabilities document as a JSON value, for
+/// presentation surfaces (the MCP server) that embed it rather than print
+/// it. The CLI string output serializes the identical struct.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn capabilities_json_value(
+    cpu_psi: CpuPsiCapability,
+    cpu: CpuTelemetryCapabilities,
+    memory_psi: MemoryPsiCapability,
+    memory: MemoryContextCapabilities,
+    io_psi: IoPsiCapability,
+    io: IoCapabilities,
+    cgroup: CgroupCapability,
+) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::to_value(capabilities_json_document(
+        cpu_psi, cpu, memory_psi, memory, io_psi, io, cgroup,
+    ))
+}
+
 /// Builds the schema_version-2 capabilities document shared by the CLI's
 /// JSON output and any other presentation surface, so both serialize the
 /// exact same struct.
@@ -1209,6 +1227,16 @@ pub(crate) fn terminal_scope_identifier(value: &str, width: usize) -> String {
 
 fn hunt_json(options: &HuntOptions, result: HuntObservation) -> Result<String, serde_json::Error> {
     to_json(&hunt_json_document(options, result))
+}
+
+/// The schema_version-2 hunt document as a JSON value, for presentation
+/// surfaces (the MCP server) that embed it rather than print it. The CLI
+/// string output serializes the identical struct.
+pub(crate) fn hunt_json_value(
+    options: &HuntOptions,
+    result: HuntObservation,
+) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::to_value(hunt_json_document(options, result))
 }
 
 /// Builds the schema_version-2 hunt document shared by the CLI's JSON output

@@ -7,6 +7,7 @@
 
 mod protocol;
 mod server;
+mod tools;
 
 use std::io;
 
@@ -15,6 +16,6 @@ use crate::cli::McpOptions;
 pub fn run(options: &McpOptions) -> io::Result<()> {
     let stdin = io::stdin();
     let stdout = io::stdout();
-    let mut state = server::ServerState::new(*options);
+    let mut state = server::ServerState::new(*options, crate::observe::observe_hunt);
     server::serve(stdin.lock(), &mut stdout.lock(), &mut state)
 }
