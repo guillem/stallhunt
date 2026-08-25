@@ -49,27 +49,38 @@ results that point the agent at `run_hunt`, not errors.
 
 ## Tools
 
-Every tool result carries a human-readable summary in `content` and the
-corresponding schema_version-2 document in `structuredContent`, built from
-the same structs as the CLI's JSON output — no surface re-derives a
-diagnosis (see [data-model.md](data-model.md)). `structuredContent` is a
-projection of that document, chosen by the `detail` argument every
-sampler-backed tool and `run_hunt` accept:
+Every tool result carries a human-readable summary in `content` and a
+schema_version-2 document in `structuredContent`, built from the same
+structs as the CLI's JSON output — no surface re-derives a diagnosis (see
+[data-model.md](data-model.md)). `get_current_pressure` and `run_hunt`
+accept a `detail` argument that chooses the projection; `get_recent_history`
+does not, and always returns full lifecycle detail (see below).
 
 - `"lean"` (default) — every field that would otherwise restate the same
   process candidates a second or third time is removed;
   `structuredContent.detail` is `"lean"` in the response so an agent can
-  tell which projection it got. `process_scopes` and `findings` remain the
-  canonical place to read suspects and victims. For `run_hunt` only, lean
-  mode additionally omits five `observation` keys that carry raw
-  per-process/per-cgroup telemetry (`cgroup`, `process_resource_evidence`,
-  `scheduler_delay_candidates`, `processes`, `process_io`) — listed back
-  under `observation.omitted_for_detail_lean` — while every completeness
-  signal (`taskstats_capability`, `delay_accounting`, the
-  `*_collection_issues` counters, PSI, `memory_context`, `diskstats`) stays
-  intact. Typically 60–80% smaller than `"full"`.
-- `"full"` — the complete schema_version-2 document, byte-identical to
-  what the CLI's `--json` output would produce from the same observation.
+  tell which projection it got. `process_scopes` remains the canonical
+  place to read suspects and victims for the current window; a lifecycle
+  entry that has resolved or gone unconfirmed *this* window keeps its
+  candidates, since those are its only surviving copy (not stale = current
+  and stripped; stale = kept). For `run_hunt` only, lean mode additionally
+  omits raw per-process telemetry from `observation` — the flat
+  `processes`, `scheduler_delay_candidates`, and `process_resource_evidence`
+  arrays entirely, and only the `groups`/`members`/`processes` children of
+  `cgroup`/`process_io` (their completeness fields — `cgroup.issues`,
+  `process_io.capability` — are kept) — listed back under
+  `observation.omitted_for_detail_lean`. Every completeness signal
+  (`taskstats_capability`, `delay_accounting`, the `*_collection_issues`
+  counters, PSI, `memory_context`, `diskstats`) stays intact, and a field
+  that was never collected is never listed as omitted. Typically 60–80%
+  smaller than `"full"`.
+- `"full"` — every field of the schema_version-2 document, with the same
+  content as the CLI's `--json` output. Key order is not guaranteed to
+  match: the MCP path serializes through a JSON value rather than printing
+  the typed struct directly.
+
+`run_hunt`'s `structuredContent` is `{"detail", "hunt": <document>}`;
+`get_current_pressure`'s is `{"detail", "sampler", "window": <document>}`.
 
 See [ADR-0018](decisions/0018-mcp-tool-payload-detail-levels.md) for the
 measurements and reasoning behind the split.
@@ -84,10 +95,11 @@ sampler coverage metadata (`interval_ms`, `windows_completed`,
 
 ### `get_recent_history`
 
-Optional `detail` (`"lean"` default, `"full"`). Instant. Returns the
-lifecycle entries and the retained history ring (up to 16 windows) with
-per-window completion timestamps: what appeared, persisted, and resolved
-recently.
+No parameters. Instant. Returns the lifecycle entries and the retained
+history ring (up to 16 windows) with per-window completion timestamps:
+what appeared, persisted, and resolved recently — always with full
+process-candidate detail, since this is the only place a resolved or
+stale finding's process evidence survives.
 
 ### `run_hunt`
 

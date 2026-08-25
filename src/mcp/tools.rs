@@ -21,15 +21,16 @@ use crate::{cgroup, cpu, io, memory, psi, render, watch};
 /// available by passing an explicit duration.
 pub(crate) const DEFAULT_HUNT_DURATION_MS: u64 = 5_000;
 
-/// Shared `detail` input-schema property: every tool that can return a wide
-/// process-scope cascade (many pressured cgroups) accepts this so an agent
-/// can opt into the full schema-version-2 document instead of the
-/// deduplicated default. See ADR-0018.
+/// Shared `detail` input-schema property for tools whose lean mode removes
+/// fields that are genuinely restated elsewhere in the *same* response. See
+/// ADR-0018. `get_recent_history` does not take this — its lifecycle
+/// entries have no restatement anywhere in that tool's output, so there is
+/// nothing safe to remove.
 fn detail_property() -> Value {
     json!({
         "type": "string",
         "enum": ["lean", "full"],
-        "description": "\"lean\" (default) removes process-candidate fields that duplicate process_scopes (zero information loss) and, for run_hunt, the raw per-process/per-cgroup telemetry arrays under observation that findings/process_scopes/cgroup_findings already summarize (completeness signals like taskstats_capability are kept). Typically 60-80% smaller. \"full\" returns the complete schema-version-2 document byte-identical to the CLI's JSON output — use it when you need the raw evidence, not just the verdict.",
+        "description": "\"lean\" (default) removes process-candidate fields that duplicate process_scopes for the current window (zero information loss; stale/resolved lifecycle entries are kept as-is, since they are not reflected in process_scopes) and, for run_hunt, five raw observation arrays (cgroup member/group detail, per-process CPU/IO/scheduling numbers) that findings/process_scopes/cgroup_findings already summarize — every completeness signal (taskstats_capability, delay_accounting, the *_collection_issues counters) is kept. \"full\" returns every field of the schema-version-2 document with the same content as the CLI's JSON output (key order is not guaranteed to match, since this server serializes through a JSON value) — use it when you need the raw evidence, not just the verdict.",
     })
 }
 
@@ -46,10 +47,10 @@ pub(crate) fn descriptors() -> Vec<Value> {
         }),
         json!({
             "name": "get_recent_history",
-            "description": "Lifecycle-tracked findings over the last up-to-16 sampling windows: what pressure appeared, persisted, and resolved recently, with per-window timestamps. Use it to answer \"what happened a moment ago?\" — including stalls that have already ended. Instant; does not block.",
+            "description": "Lifecycle-tracked findings over the last up-to-16 sampling windows: what pressure appeared, persisted, and resolved recently, with per-window timestamps and full process-candidate evidence (this is the only place resolved/stale findings' process evidence appears, so it is never trimmed). Use it to answer \"what happened a moment ago?\" — including stalls that have already ended. Instant; does not block.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "detail": detail_property() },
+                "properties": {},
                 "additionalProperties": false,
             },
         }),
@@ -120,12 +121,24 @@ fn strip_resource_signal_duplicates(signal: &mut Value) {
 }
 
 /// Removes the `TrackedFinding` fields that restate `process_scopes`:
-/// `process_candidates` and `process_role_lists`. `process_candidates_stale`
-/// is kept — it is a single bool, not a restatement.
-fn strip_lifecycle_duplicates(lifecycle: &mut Value) {
+/// `process_candidates` and `process_role_lists`. Only applied when
+/// `process_candidates_stale` is `false` — `true` means (per `watch.rs`'s
+/// doc comment) these candidates were retained from a prior confirmed
+/// window because the finding is unconfirmed or resolved *in this window*,
+/// so they are absent from this window's `process_scopes` and would be
+/// permanently lost if stripped. `process_candidates_stale` itself is kept
+/// either way — it is a single bool, not a restatement.
+fn strip_current_window_lifecycle_duplicates(lifecycle: &mut Value) {
     if let Some(entries) = lifecycle.as_array_mut() {
         for entry in entries {
-            if let Some(object) = entry.as_object_mut() {
+            let Some(object) = entry.as_object_mut() else {
+                continue;
+            };
+            let stale = object
+                .get("process_candidates_stale")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !stale {
                 object.remove("process_candidates");
                 object.remove("process_role_lists");
             }
@@ -135,9 +148,11 @@ fn strip_lifecycle_duplicates(lifecycle: &mut Value) {
 
 /// Applies lean-mode pruning to a `stallhunt.watch_window` document in
 /// place: every `current` resource signal (host cpu/memory/io and each
-/// pressured cgroup) and every `lifecycle` entry loses its restated
-/// candidate fields; `process_scopes` is untouched and remains the single
-/// place lean-mode readers find suspect/victim processes.
+/// pressured cgroup) loses its restated candidate fields — those always
+/// correspond to a `process_scopes` entry for the current window, so this
+/// is unconditional. `lifecycle` entries lose the same fields only when
+/// non-stale, for the same reason. `process_scopes` is untouched and
+/// remains the place lean-mode readers find suspect/victim processes.
 fn lean_watch_window(window: &mut Value) {
     if let Some(current) = window.get_mut("current") {
         for resource in ["cpu", "memory", "io"] {
@@ -152,23 +167,32 @@ fn lean_watch_window(window: &mut Value) {
         }
     }
     if let Some(lifecycle) = window.get_mut("lifecycle") {
-        strip_lifecycle_duplicates(lifecycle);
+        strip_current_window_lifecycle_duplicates(lifecycle);
     }
 }
 
-/// The `observation` keys that carry raw per-process/per-cgroup telemetry:
-/// every process's raw CPU/IO/scheduling numbers, restated in aggregate by
-/// `findings`, `process_scopes`, and `cgroup_findings`. Unlike the
-/// restatement fields above, dropping these is a real reduction in detail,
-/// not deduplication — the *inputs* the analyzer consumed are gone, only
-/// its *verdict* remains. `detail: "full"` (or `stallhunt record`, for
-/// durable capture) is the way to get them back. See ADR-0018.
-const LEAN_OBSERVATION_OMITTED_KEYS: &[&str] = &[
-    "cgroup",
-    "process_resource_evidence",
-    "scheduler_delay_candidates",
+/// Top-level `observation` keys dropped wholesale in lean mode: each is a
+/// flat array of raw per-process telemetry with no completeness data mixed
+/// in — every signal ADR-0015 needs (`process_collection_issues`,
+/// `schedstat_collection_issues`, `task_stat_collection_issues`,
+/// `taskstats_capability`, `delay_accounting`, ...) lives in a separate
+/// sibling field that is never touched.
+const LEAN_OBSERVATION_OMITTED_TOP_LEVEL_KEYS: &[&str] = &[
     "processes",
-    "process_io",
+    "scheduler_delay_candidates",
+    "process_resource_evidence",
+];
+
+/// `(parent, child)` pairs dropped from *inside* an `observation` object
+/// that mixes raw telemetry with completeness data at the same level —
+/// unlike the top-level keys above, removing the whole parent would also
+/// delete the completeness signal, so only the raw-data child is removed.
+/// `cgroup.issues` (used by `cgroup_membership_complete`) and
+/// `process_io.{capability,issues,regressed}` survive.
+const LEAN_OBSERVATION_OMITTED_NESTED_KEYS: &[(&str, &str)] = &[
+    ("cgroup", "groups"),
+    ("cgroup", "members"),
+    ("process_io", "processes"),
 ];
 
 /// Applies lean-mode pruning to a hunt document in place:
@@ -176,13 +200,15 @@ const LEAN_OBSERVATION_OMITTED_KEYS: &[&str] = &[
 /// - every finding loses the victim/suspect/process-suspect lists that
 ///   restate the same candidates `process_scopes` already carries for the
 ///   host scope (zero information loss);
-/// - `observation` loses its raw per-process/per-cgroup telemetry arrays
-///   (`LEAN_OBSERVATION_OMITTED_KEYS`), replaced by a same-named list under
-///   `omitted_for_detail_lean` so an agent can tell the difference between
-///   "trimmed for size" and "collection failed." Every completeness signal
-///   (`taskstats_capability`, `delay_accounting`, the `*_collection_issues`
-///   counters, PSI, capabilities) is left untouched — ADR-0015's
-///   completeness reasoning about a hunt still works on the lean document.
+/// - `observation` loses its raw per-process/per-cgroup telemetry (the
+///   top-level and nested keys above), replaced by a dotted-path list
+///   under `observation.omitted_for_detail_lean` — built from what was
+///   actually present and non-null *before* pruning, so a field that was
+///   never collected (a genuinely missing host capability) is never
+///   reported as "trimmed for size." Every completeness signal (see
+///   `LEAN_OBSERVATION_OMITTED_TOP_LEVEL_KEYS`'s doc comment) is left
+///   untouched — ADR-0015's completeness reasoning about a hunt still
+///   works on the lean document.
 fn lean_hunt_document(document: &mut Value) {
     if let Some(findings) = document.get_mut("findings").and_then(Value::as_array_mut) {
         for finding in findings {
@@ -197,13 +223,25 @@ fn lean_hunt_document(document: &mut Value) {
         .get_mut("observation")
         .and_then(Value::as_object_mut)
     {
-        let omitted: Vec<Value> = LEAN_OBSERVATION_OMITTED_KEYS
-            .iter()
-            .filter(|key| observation.contains_key(**key))
-            .map(|key| json!(key))
-            .collect();
-        for key in LEAN_OBSERVATION_OMITTED_KEYS {
+        let mut omitted = Vec::new();
+        for key in LEAN_OBSERVATION_OMITTED_TOP_LEVEL_KEYS {
+            if observation.get(*key).is_some_and(|value| !value.is_null()) {
+                omitted.push(json!(key));
+            }
             observation.remove(*key);
+        }
+        for (parent, child) in LEAN_OBSERVATION_OMITTED_NESTED_KEYS {
+            let Some(parent_object) = observation.get_mut(*parent).and_then(Value::as_object_mut)
+            else {
+                continue;
+            };
+            if parent_object
+                .get(*child)
+                .is_some_and(|value| !value.is_null())
+            {
+                omitted.push(json!(format!("{parent}.{child}")));
+            }
+            parent_object.remove(*child);
         }
         observation.insert("omitted_for_detail_lean".to_string(), Value::Array(omitted));
     }
@@ -219,7 +257,7 @@ pub(crate) fn call(
 ) -> Option<Value> {
     match name {
         "get_current_pressure" => Some(get_current_pressure(sampler, arguments)),
-        "get_recent_history" => Some(get_recent_history(sampler, arguments)),
+        "get_recent_history" => Some(get_recent_history(sampler)),
         "run_hunt" => Some(run_hunt(observe, arguments)),
         "get_capabilities" => Some(get_capabilities()),
         _ => None,
@@ -227,12 +265,12 @@ pub(crate) fn call(
 }
 
 fn get_current_pressure(sampler: Option<&Sampler>, arguments: &Value) -> Value {
-    let Some(sampler) = sampler else {
-        return sampler_disabled_result();
-    };
     let detail = match parse_detail(arguments) {
         Ok(detail) => detail,
         Err(error) => return error,
+    };
+    let Some(sampler) = sampler else {
+        return sampler_disabled_result();
     };
     sampler.with_snapshot(|snapshot| match snapshot {
         None => warming_up_result(sampler),
@@ -256,13 +294,13 @@ fn get_current_pressure(sampler: Option<&Sampler>, arguments: &Value) -> Value {
     })
 }
 
-fn get_recent_history(sampler: Option<&Sampler>, arguments: &Value) -> Value {
+/// No `detail` parameter: unlike `get_current_pressure`, this tool's
+/// response carries no `process_scopes`/`window` for a stripped lifecycle
+/// entry to restate, so there is nothing safe to remove — see ADR-0018 and
+/// `detail_property`'s doc comment.
+fn get_recent_history(sampler: Option<&Sampler>) -> Value {
     let Some(sampler) = sampler else {
         return sampler_disabled_result();
-    };
-    let detail = match parse_detail(arguments) {
-        Ok(detail) => detail,
-        Err(error) => return error,
     };
     sampler.with_snapshot(|snapshot| match snapshot {
         None => warming_up_result(sampler),
@@ -271,15 +309,11 @@ fn get_recent_history(sampler: Option<&Sampler>, arguments: &Value) -> Value {
             let serialized = serde_json::to_value(&window.lifecycle)
                 .and_then(|lifecycle| Ok((lifecycle, serde_json::to_value(&window.history)?)));
             match serialized {
-                Ok((mut lifecycle, history)) => {
+                Ok((lifecycle, history)) => {
                     let text = history_summary(snapshot);
-                    if detail == Detail::Lean {
-                        strip_lifecycle_duplicates(&mut lifecycle);
-                    }
                     tool_result(
                         text,
                         json!({
-                            "detail": detail_label(detail),
                             "sampler": sampler_info(sampler, Some(snapshot)),
                             "lifecycle": lifecycle,
                             "history": history,
@@ -435,10 +469,10 @@ fn run_hunt(observe: fn(Duration) -> HuntObservation, arguments: &Value) -> Valu
             if detail == Detail::Lean {
                 lean_hunt_document(&mut document);
             }
-            if let Some(object) = document.as_object_mut() {
-                object.insert("detail".to_string(), json!(detail_label(detail)));
-            }
-            tool_result(text, document)
+            tool_result(
+                text,
+                json!({ "detail": detail_label(detail), "hunt": document }),
+            )
         }
         Err(error) => error_result(&format!("failed to serialize hunt result: {error}")),
     }
@@ -532,9 +566,10 @@ mod tests {
         )
         .expect("known tool");
         assert_eq!(result["isError"], false);
-        assert_eq!(result["structuredContent"]["schema_version"], 2);
+        assert_eq!(result["structuredContent"]["detail"], "lean");
+        assert_eq!(result["structuredContent"]["hunt"]["schema_version"], 2);
         assert_eq!(
-            result["structuredContent"]["requested_observation"]["duration_ms"],
+            result["structuredContent"]["hunt"]["requested_observation"]["duration_ms"],
             1_000
         );
         let text = result["content"][0]["text"].as_str().expect("text");
@@ -545,7 +580,7 @@ mod tests {
     fn run_hunt_defaults_to_five_seconds() {
         let result = call(fixture_observe, None, "run_hunt", &Value::Null).expect("known tool");
         assert_eq!(
-            result["structuredContent"]["requested_observation"]["duration_ms"],
+            result["structuredContent"]["hunt"]["requested_observation"]["duration_ms"],
             DEFAULT_HUNT_DURATION_MS
         );
     }
@@ -631,6 +666,27 @@ mod tests {
             let text = result["content"][0]["text"].as_str().expect("text");
             assert!(text.contains("run_hunt"));
         }
+    }
+
+    #[test]
+    fn get_current_pressure_validates_detail_even_when_the_sampler_is_disabled() {
+        // Regression test for review finding #10: an invalid `detail` must
+        // surface as a tool error in every server state, not be silently
+        // swallowed by the disabled-sampler short-circuit.
+        let result = call(
+            fixture_observe,
+            None,
+            "get_current_pressure",
+            &json!({ "detail": "verbose" }),
+        )
+        .expect("known tool");
+        assert_eq!(result["isError"], true);
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .starts_with("invalid detail:")
+        );
     }
 
     #[test]
@@ -726,10 +782,10 @@ mod tests {
         assert_eq!(lean["structuredContent"]["detail"], "lean");
         // process_scopes is the canonical view and must be untouched.
         assert_eq!(
-            full["structuredContent"]["process_scopes"],
-            lean["structuredContent"]["process_scopes"]
+            full["structuredContent"]["hunt"]["process_scopes"],
+            lean["structuredContent"]["hunt"]["process_scopes"]
         );
-        for finding in lean["structuredContent"]["findings"]
+        for finding in lean["structuredContent"]["hunt"]["findings"]
             .as_array()
             .expect("findings")
         {
@@ -765,11 +821,13 @@ mod tests {
             &json!({ "duration": "1s" }),
         )
         .expect("known tool");
-        let full_observation = &full["structuredContent"]["observation"];
-        let lean_observation = &lean["structuredContent"]["observation"];
-        for key in LEAN_OBSERVATION_OMITTED_KEYS {
+        let full_observation = &full["structuredContent"]["hunt"]["observation"];
+        let lean_observation = &lean["structuredContent"]["hunt"]["observation"];
+        for key in LEAN_OBSERVATION_OMITTED_TOP_LEVEL_KEYS {
             assert!(
-                full_observation.get(key).is_some(),
+                full_observation
+                    .get(key)
+                    .is_some_and(|value| !value.is_null()),
                 "fixture should exercise {key} so the omission is meaningful"
             );
             assert!(
@@ -777,11 +835,44 @@ mod tests {
                 "{key} should be omitted"
             );
         }
+        // Nested keys: the raw child is gone, but the parent object survives
+        // with its completeness sibling intact (#3 in the review — dropping
+        // the whole `cgroup`/`process_io` object would also delete the only
+        // place their completeness data lives).
+        for (parent, child) in LEAN_OBSERVATION_OMITTED_NESTED_KEYS {
+            assert!(
+                full_observation[parent]
+                    .get(child)
+                    .is_some_and(|value| !value.is_null()),
+                "fixture should exercise {parent}.{child} so the omission is meaningful"
+            );
+            assert!(
+                lean_observation[parent].get(child).is_none(),
+                "{parent}.{child} should be omitted"
+            );
+        }
+        assert_eq!(
+            full_observation["cgroup"]["issues"], lean_observation["cgroup"]["issues"],
+            "cgroup.issues (cgroup_membership_complete's input) must survive lean mode"
+        );
+        for key in ["capability", "issues", "regressed"] {
+            assert_eq!(
+                full_observation["process_io"][key], lean_observation["process_io"][key],
+                "process_io.{key} must survive lean mode"
+            );
+        }
         let omitted = lean_observation["omitted_for_detail_lean"]
             .as_array()
             .expect("omitted list");
-        for key in LEAN_OBSERVATION_OMITTED_KEYS {
+        for key in LEAN_OBSERVATION_OMITTED_TOP_LEVEL_KEYS {
             assert!(omitted.iter().any(|value| value == key));
+        }
+        for (parent, child) in LEAN_OBSERVATION_OMITTED_NESTED_KEYS {
+            assert!(
+                omitted
+                    .iter()
+                    .any(|value| value == &format!("{parent}.{child}"))
+            );
         }
         // ADR-0015's completeness signal must survive lean mode: an agent
         // reading a lean document can still tell degraded from complete
@@ -802,6 +893,56 @@ mod tests {
                 "{key} must be preserved unchanged"
             );
         }
+    }
+
+    #[test]
+    fn run_hunt_lean_mode_never_reports_an_already_absent_field_as_omitted() {
+        // A fixture observation with no memory/io/cgroup telemetry at all
+        // (e.g. injected without those collectors) must not claim
+        // "cgroup"/"process_io" fields were trimmed for size — they were
+        // never collected in the first place. Regression test for #8.
+        fn bare_observe(_: Duration) -> HuntObservation {
+            use crate::psi::{CpuPsiInterval, CpuPsiObservation, CpuPsiRaw};
+
+            HuntObservation {
+                psi: Ok(CpuPsiObservation {
+                    requested: Duration::from_secs(1),
+                    interval: CpuPsiInterval {
+                        elapsed: Duration::from_secs(1),
+                        total_delta_us: 0,
+                        some_fraction: 0.0,
+                    },
+                    start: CpuPsiRaw {
+                        avg10_percent: 0.0,
+                        avg60_percent: 0.0,
+                        avg300_percent: 0.0,
+                        total_us: 1,
+                    },
+                    end: CpuPsiRaw {
+                        avg10_percent: 0.0,
+                        avg60_percent: 0.0,
+                        avg300_percent: 0.0,
+                        total_us: 1,
+                    },
+                }),
+                cpu: Err(crate::cpu::CpuError::Unreadable),
+                memory: None,
+                io: None,
+                cgroup: None,
+            }
+        }
+        let result =
+            call(bare_observe, None, "run_hunt", &json!({ "duration": "1s" })).expect("known tool");
+        let observation = &result["structuredContent"]["hunt"]["observation"];
+        let omitted = observation["omitted_for_detail_lean"]
+            .as_array()
+            .expect("omitted list");
+        assert!(
+            omitted.is_empty(),
+            "nothing was collected, so nothing should be reported as trimmed: {omitted:?}"
+        );
+        assert!(observation.get("cgroup").is_none_or(Value::is_null));
+        assert!(observation.get("process_io").is_none_or(Value::is_null));
     }
 
     /// A synthetic `ResourceSignal` carrying real candidate/role-list data,
@@ -974,32 +1115,72 @@ mod tests {
     }
 
     #[test]
-    fn get_recent_history_lean_drops_duplicates_full_keeps_them() {
-        let sampler = ready_sampler();
-        let full = call(
-            fixture_observe,
-            Some(&sampler),
-            "get_recent_history",
-            &json!({ "detail": "full" }),
-        )
-        .expect("known tool");
-        let lean = call(
-            fixture_observe,
-            Some(&sampler),
-            "get_recent_history",
-            &Value::Null,
-        )
-        .expect("known tool");
-        let full_entry = &full["structuredContent"]["lifecycle"][0];
-        let lean_entry = &lean["structuredContent"]["lifecycle"][0];
-        assert!(full_entry.get("process_role_lists").is_some());
-        assert!(lean_entry.get("process_role_lists").is_none());
-        assert!(lean_entry.get("process_candidates").is_none());
-        // process_candidates_stale is a single bool, not a restatement, and
-        // stays in both modes.
-        assert_eq!(
-            full_entry["process_candidates_stale"],
-            lean_entry["process_candidates_stale"]
+    fn get_current_pressure_lean_mode_keeps_stale_lifecycle_candidates() {
+        // Regression test for review finding #6: a resource that resolves
+        // this window carries its last confirmed candidates forward with
+        // process_candidates_stale=true (watch.rs:171-173) precisely
+        // because it is no longer reflected in this window's
+        // process_scopes. Lean mode must not strip those — there is
+        // nowhere else in the document they survive.
+        use crate::watch::test_support;
+
+        let mut tracker = crate::watch::WatchTracker::new();
+        tracker.ingest_signals(test_support::host_signals(
+            wide_pressure_signal("host_cpu"),
+            test_support::healthy("memory_no_harmful_pressure"),
+            test_support::healthy("io_no_harmful_pressure"),
+        ));
+        let resolved_window = tracker.ingest_signals(test_support::host_signals(
+            test_support::healthy("cpu_no_harmful_pressure"),
+            test_support::healthy("memory_no_harmful_pressure"),
+            test_support::healthy("io_no_harmful_pressure"),
+        ));
+        let full = crate::watch::watch_window_value(&resolved_window).expect("watch json");
+        let mut lean = full.clone();
+        lean_watch_window(&mut lean);
+
+        let full_entry = &full["lifecycle"][0];
+        let lean_entry = &lean["lifecycle"][0];
+        assert_eq!(full_entry["process_candidates_stale"], true);
+        assert_eq!(lean_entry["process_candidates_stale"], true);
+        assert!(
+            !full_entry["process_candidates"]
+                .as_array()
+                .expect("candidates")
+                .is_empty()
         );
+        assert_eq!(
+            full_entry["process_candidates"], lean_entry["process_candidates"],
+            "stale candidates must survive lean mode: they are not in process_scopes this window"
+        );
+        assert_eq!(
+            full_entry["process_role_lists"],
+            lean_entry["process_role_lists"]
+        );
+    }
+
+    #[test]
+    fn get_recent_history_never_strips_process_candidates() {
+        // Regression test for review finding #7: get_recent_history's
+        // response has no process_scopes/window anywhere to restate a
+        // stripped lifecycle entry, so unlike get_current_pressure it never
+        // removes process_candidates/process_role_lists — there is no
+        // `detail` argument to even ask for that. A bogus `detail` argument
+        // is silently ignored (the tool doesn't declare the parameter), not
+        // an error, matching MCP's "unknown arguments are ignored" norm for
+        // undeclared properties.
+        let sampler = ready_sampler();
+        let result = call(
+            fixture_observe,
+            Some(&sampler),
+            "get_recent_history",
+            &json!({ "detail": "lean" }),
+        )
+        .expect("known tool");
+        assert_eq!(result["isError"], false);
+        assert!(result["structuredContent"].get("detail").is_none());
+        let entry = &result["structuredContent"]["lifecycle"][0];
+        assert!(entry.get("process_role_lists").is_some());
+        assert!(entry.get("process_candidates").is_some());
     }
 }

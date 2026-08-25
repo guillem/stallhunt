@@ -12,16 +12,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
   over stdio for coding agents (ADR-0017). Four tools are exposed:
   `get_current_pressure` and `get_recent_history` answer instantly from a
   resident sampler that keeps a rolling finding-lifecycle view of the last
-  up-to-16 windows (`--interval`, default 2s; `--no-sampler` disables it);
-  `run_hunt` runs a blocking one-shot diagnosis; `get_capabilities` reports
-  telemetry support. Tool results are projections of the existing
-  schema-version-2 JSON documents, serialized from the same structs as the
-  CLI output; a `detail` argument (`"lean"` default, `"full"`) controls how
-  much of the document comes through (ADR-0018) — lean mode removes
-  restated process-candidate fields and, for `run_hunt`, raw per-process
-  telemetry that findings already summarize, typically 60-80% smaller,
-  while keeping every completeness signal intact; `"full"` returns the
-  document byte-identical to the CLI's JSON output.
+  up-to-16 windows (`--interval`, default 2s; `--no-sampler` disables it;
+  a sampling-thread panic is caught and logged rather than freezing the
+  sampler); `run_hunt` runs a blocking one-shot diagnosis; `get_capabilities`
+  reports telemetry support. A malformed or non-UTF-8 line gets a JSON-RPC
+  parse error without ending the session; a disconnected client (broken
+  pipe) ends the session cleanly instead of crashing the process. Tool
+  results are projections of the existing schema-version-2 JSON documents,
+  serialized from the same structs as the CLI output.
+  `get_current_pressure` and `run_hunt` accept a `detail` argument
+  (`"lean"` default, `"full"`, ADR-0018) — lean mode removes process-
+  candidate fields genuinely restated in `process_scopes` this window
+  (a resolved/stale lifecycle entry keeps its candidates, since those are
+  its only copy) and, for `run_hunt`, raw per-process/per-cgroup telemetry
+  that findings already summarize, typically 60-80% smaller, while keeping
+  every completeness signal intact; `"full"` returns every field with the
+  same content as the CLI's JSON output. `get_recent_history` has no lean
+  mode — its lifecycle entries are the only place resolved/stale findings'
+  process evidence survives, so nothing there is safe to strip.
 
 ### Changed
 

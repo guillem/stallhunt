@@ -136,9 +136,13 @@ fn a_full_session_serves_every_tool_family_and_exits_on_eof() {
         json!({ "name": "run_hunt", "arguments": { "duration": "100ms" } }),
     );
     assert_eq!(hunt["result"]["isError"], false);
-    assert_eq!(hunt["result"]["structuredContent"]["schema_version"], 2);
+    assert_eq!(hunt["result"]["structuredContent"]["detail"], "lean");
     assert_eq!(
-        hunt["result"]["structuredContent"]["requested_observation"]["duration_ms"],
+        hunt["result"]["structuredContent"]["hunt"]["schema_version"],
+        2
+    );
+    assert_eq!(
+        hunt["result"]["structuredContent"]["hunt"]["requested_observation"]["duration_ms"],
         100
     );
 

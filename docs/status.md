@@ -96,19 +96,30 @@ the test process and does not mutate the hierarchy.
 - `mcp` serves Model Context Protocol tools over stdio for coding agents
   (ADR-0017): a hand-rolled synchronous JSON-RPC loop pinned to protocol
   revision 2025-06-18 with no new dependencies. A resident sampler thread
-  (default 2 s interval, `--no-sampler` to disable) reuses the watch
-  observation seams and finding-lifecycle tracker so `get_current_pressure`
-  and `get_recent_history` answer instantly about the last up-to-16 windows;
-  `run_hunt` and `get_capabilities` mirror the one-shot commands. Tool
-  results are projections of the schema-version-2 documents serialized from
-  the same structs as the CLI JSON output, verified by string-vs-document
-  equality tests and an end-to-end pipe-driven session test
-  (`tests/mcp.rs`). By default (`detail: "lean"`, ADR-0018) the projection
-  removes process-candidate fields that restate `process_scopes`, and for
-  `run_hunt` also the raw per-process/per-cgroup `observation` telemetry
-  that findings already summarize — measured 60-80% smaller against a real
-  `fake_workload.sh` reproduction, with every ADR-0015 completeness signal
-  kept intact; `detail: "full"` still returns the byte-identical document.
+  (default 2 s interval, `--no-sampler` to disable, self-healing via
+  `catch_unwind` around each tick) reuses the watch observation seams and
+  finding-lifecycle tracker so `get_current_pressure` and
+  `get_recent_history` answer instantly about the last up-to-16 windows;
+  `run_hunt` and `get_capabilities` mirror the one-shot commands. A
+  malformed or non-UTF-8 line gets a JSON-RPC parse error and the session
+  continues; a broken output pipe (client gone) ends the session cleanly
+  rather than crashing the process. Tool results are projections of the
+  schema-version-2 documents serialized from the same structs as the CLI
+  JSON output, verified by string-vs-document equality tests and an
+  end-to-end pipe-driven session test (`tests/mcp.rs`). By default
+  (`detail: "lean"`, ADR-0018) `get_current_pressure` and `run_hunt` remove
+  process-candidate fields that are genuinely restated in `process_scopes`
+  this window (a stale/resolved lifecycle entry keeps its candidates,
+  since those are its only copy), and `run_hunt` also omits raw
+  per-process/per-cgroup `observation` telemetry that findings already
+  summarize while keeping every ADR-0015 completeness signal, including
+  `cgroup.issues` and `process_io`'s completeness fields — measured 70.6%
+  and 79.9% smaller respectively against a real `fake_workload.sh`
+  reproduction. `get_recent_history` has no lean mode: its response has no
+  `process_scopes` for a stripped entry to restate, so it always returns
+  full detail. `detail: "full"` returns every field with the same content
+  as the CLI's JSON output (key order may differ, since the MCP path
+  serializes through a JSON value).
 - `hunt` accepts `--duration` values from 100 ms through 5 minutes, including
   exact-millisecond decimal values, and defaults to 10 seconds.
 - Bare `stallhunt` accepts the same `--duration`, `--json`, `--verbose`, and
@@ -318,6 +329,15 @@ the test process and does not mutate the hierarchy.
 
 ## Known limitations
 
+- `stallhunt mcp` serves one client on a single thread: `run_hunt` blocks
+  that thread for its full requested duration (up to 5 minutes), so a
+  concurrent `ping` or sampler-backed request sent while a long hunt is in
+  flight gets no response until the hunt finishes. This is disclosed in
+  `run_hunt`'s tool description (keep your client timeout above the
+  requested duration) rather than fixed, per ADR-0017's decision to
+  hand-roll a synchronous single-threaded server; a worker-thread or
+  request-multiplexing design would need its own ADR if this becomes a
+  real constraint in practice.
 - CPU PSI is host-wide evidence. M1.5 provides provisional severity and
   qualified attribution, but process consumers remain same-window correlation,
   not proven causes.

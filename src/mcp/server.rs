@@ -44,23 +44,43 @@ impl ServerState {
 }
 
 /// Serves one MCP session until the reader reaches EOF, which is the
-/// shutdown signal for a stdio transport: the client closing our stdin.
+/// shutdown signal for a stdio transport: the client closing our stdin —
+/// or until the writer reports a broken pipe, which means the client is
+/// already gone.
+///
+/// Reads raw lines via `read_until` and decodes them lossily
+/// (`String::from_utf8_lossy`) rather than `BufRead::lines`, which returns
+/// an `Err` — and would end the whole session — on a single invalid UTF-8
+/// byte. A malformed line, UTF-8 or not, gets one `PARSE_ERROR` response
+/// and the session continues; only EOF and a broken output pipe end it.
 pub(crate) fn serve(
-    reader: impl BufRead,
+    mut reader: impl BufRead,
     writer: &mut impl Write,
     state: &mut ServerState,
 ) -> io::Result<()> {
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim().is_empty() {
+    let mut buffer = Vec::new();
+    loop {
+        buffer.clear();
+        if reader.read_until(b'\n', &mut buffer)? == 0 {
+            return Ok(());
+        }
+        let line = String::from_utf8_lossy(&buffer);
+        let line = line.trim();
+        if line.is_empty() {
             continue;
         }
-        match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle_message(writer, state, &message)?,
-            Err(_) => protocol::write_error(writer, &Value::Null, PARSE_ERROR, "parse error")?,
+        let result = match serde_json::from_str::<Value>(line) {
+            Ok(message) => handle_message(writer, state, &message),
+            Err(_) => protocol::write_error(writer, &Value::Null, PARSE_ERROR, "parse error"),
+        };
+        if let Err(error) = result {
+            return if error.kind() == io::ErrorKind::BrokenPipe {
+                Ok(())
+            } else {
+                Err(error)
+            };
         }
     }
-    Ok(())
 }
 
 fn handle_message(
@@ -277,6 +297,54 @@ mod tests {
     }
 
     #[test]
+    fn a_non_utf8_byte_gets_a_parse_error_and_does_not_kill_the_session() {
+        // Regression test for review finding #4: BufRead::lines() would
+        // return an Err on the first invalid byte, and that Err propagates
+        // straight out of serve(), ending the whole session on one bad
+        // byte. serve() must instead answer this line with PARSE_ERROR and
+        // keep serving the next one.
+        let mut input = vec![0xff, 0xfe, b'\n'];
+        input.extend(initialize_line().into_bytes());
+        input.push(b'\n');
+        let mut state = ServerState::new(options(), fixture_observe, None);
+        let mut output = Vec::new();
+        serve(Cursor::new(input), &mut output, &mut state).expect("serve");
+        let responses: Vec<Value> = String::from_utf8(output)
+            .expect("utf8 output")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("each stdout line parses as JSON"))
+            .collect();
+        assert_eq!(responses[0]["error"]["code"], PARSE_ERROR);
+        assert!(responses[1]["result"].is_object());
+    }
+
+    /// A writer that fails every write with `ErrorKind::BrokenPipe`, as a
+    /// disconnected client's stdout would.
+    struct BrokenPipeWriter;
+
+    impl Write for BrokenPipeWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            let _ = buffer;
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_broken_output_pipe_ends_the_session_cleanly_instead_of_erroring() {
+        // Regression test for review finding #5: mirrors watch.rs's
+        // BrokenPipe -> Ok(()) handling instead of letting main() print an
+        // error and exit nonzero on a disconnected client.
+        let input = format!("{}\n", initialize_line());
+        let mut state = ServerState::new(options(), fixture_observe, None);
+        let result = serve(Cursor::new(input), &mut BrokenPipeWriter, &mut state);
+        assert!(result.is_ok(), "broken pipe should end serve() cleanly");
+    }
+
+    #[test]
     fn tools_list_exposes_named_tools_with_schemas() {
         let input = format!(
             "{}\n{}\n",
@@ -310,7 +378,7 @@ mod tests {
         let responses = serve_lines(&input);
         assert_eq!(responses[1]["result"]["isError"], false);
         assert_eq!(
-            responses[1]["result"]["structuredContent"]["schema_version"],
+            responses[1]["result"]["structuredContent"]["hunt"]["schema_version"],
             2
         );
     }

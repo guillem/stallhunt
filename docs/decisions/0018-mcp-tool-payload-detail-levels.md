@@ -47,46 +47,73 @@ causes, not one:
 
 ## Decision
 
-Every MCP tool that can return this cascade (`get_current_pressure`,
-`get_recent_history`, `run_hunt`) accepts a `detail` argument, `"lean"`
-(default) or `"full"`. `"full"` returns the exact schema-version-2 document
-ADR-0017 described — byte-identical to what the CLI's `--json` output would
-produce from the same observation. `"lean"` applies two independent
-projections, implemented in `src/mcp/tools.rs` only (never `render.rs` or
-`watch.rs`, which stay the single source of truth both modes serialize
-from):
+`get_current_pressure` and `run_hunt` accept a `detail` argument, `"lean"`
+(default) or `"full"`. `get_recent_history` does not — see below.
+`"full"` returns every field of the schema-version-2 document ADR-0017
+described, with the same content as the CLI's `--json` output; key order
+is not guaranteed to match, since the MCP path serializes through
+`serde_json::Value` (a `BTreeMap`-backed map, alphabetically ordered)
+rather than printing the typed struct directly — this crate does not take
+on the `preserve_order` feature (see Alternatives). `"lean"` applies two
+independent projections, implemented in `src/mcp/tools.rs` only (never
+`render.rs` or `watch.rs`, which stay the single source of truth both
+modes serialize from):
 
-1. **Strip restatements.** Remove `process_candidates`,
-   `process_candidate_availability`, and `process_role_lists` from every
-   `ResourceSignal` in `current`; remove `process_candidates` and
-   `process_role_lists` from every `TrackedFinding` in `lifecycle`; remove
-   `victims`, `suspects`, and `process_suspects` from every hunt finding.
-   `process_scopes` (and `findings`' remaining fields) are untouched and
-   remain the canonical place to find suspect/victim processes. Every
-   field this drops is a byte-for-byte restatement already present
-   elsewhere in the same document, so this loses no information.
-2. **Omit raw observation telemetry.** For a hunt document only, remove
-   five `observation` keys — `cgroup`, `process_resource_evidence`,
-   `scheduler_delay_candidates`, `processes`, `process_io` — that carry
-   per-process/per-cgroup raw numbers, and record which keys were removed
-   under a new `observation.omitted_for_detail_lean` array. Every
-   completeness signal ADR-0015 depends on — `taskstats_capability`,
-   `delay_accounting`, the `*_collection_issues` counters,
-   `process_resource_capability`, `task_stat_capability`, the PSI blocks,
-   `memory_context`, `diskstats`, and the `*_duration_us` scalars — is kept
-   unchanged, so a lean document still supports ADR-0015's degraded-vs-
-   complete reasoning. This *is* a real reduction in detail: the raw
-   per-process numbers behind the verdict are gone until re-requested at
+1. **Strip restatements, gated on whether they are actually restated.**
+   Remove `process_candidates`, `process_candidate_availability`, and
+   `process_role_lists` from every `ResourceSignal` in `current`
+   (unconditional — a `current` entry always corresponds to a
+   `process_scopes` entry for that window); remove the same two fields
+   from a `TrackedFinding` in `lifecycle` only when
+   `process_candidates_stale` is `false` — `true` means the finding
+   resolved or went unconfirmed *this* window and is carrying its last
+   confirmed candidates forward, which are therefore *not* in this
+   window's `process_scopes` and would be lost outright if stripped;
+   remove `victims`, `suspects`, and `process_suspects` from every hunt
+   finding. `process_scopes` (and `findings`' remaining fields) are
+   untouched and remain the canonical place to find suspect/victim
+   processes. `get_recent_history`'s response carries lifecycle entries
+   but no `process_scopes`/`window` anywhere for a stripped entry to
+   point back to, so it takes no `detail` argument and never strips
+   anything — there is nothing safe to remove in that tool's output.
+2. **Omit raw observation telemetry, without deleting completeness data
+   that lives at the same level.** For a hunt document only: drop three
+   flat `observation` arrays wholesale (`processes`,
+   `scheduler_delay_candidates`, `process_resource_evidence` — each has no
+   completeness data mixed in; that lives in separate sibling fields).
+   `cgroup` and `process_io` are different — each mixes raw per-member/
+   per-process data with completeness data (`cgroup.issues`,
+   `process_io.{capability,issues,regressed}`) *inside the same object*,
+   so only the raw child (`cgroup.groups`, `cgroup.members`,
+   `process_io.processes`) is removed, not the parent. What was actually
+   present and non-null before pruning — never a field that was already
+   absent because collection never ran — is recorded as a dotted-path
+   list under `observation.omitted_for_detail_lean`. Every completeness
+   signal ADR-0015 depends on (`taskstats_capability`, `delay_accounting`,
+   the `*_collection_issues` counters, `process_resource_capability`,
+   `task_stat_capability`, the PSI blocks, `memory_context`, `diskstats`,
+   the `*_duration_us` scalars, and now `cgroup.issues` /
+   `process_io.{capability,issues,regressed}`) is kept unchanged, so a
+   lean document still supports ADR-0015's degraded-vs-complete
+   reasoning. This *is* a real reduction in detail: the raw per-process
+   numbers behind the verdict are gone until re-requested at
    `detail: "full"`, or durably captured via `stallhunt record` /
    `replay`.
 
+`run_hunt`'s `structuredContent` is `{"detail": "lean"|"full", "hunt":
+<document>}` rather than splicing `detail` into the document itself —
+consistent with `get_current_pressure`'s `{"detail", "sampler", "window"}`
+shape, and it keeps `"full"` from carrying a field the CLI's own JSON
+output never has.
+
 Measured effect on the reproduction: `get_current_pressure` 187,674 →
 55,229 bytes (70.6% smaller, restatement-only). `run_hunt` 429,542 →
-85,707 bytes (80.0% smaller, both projections; process_scopes 41,091 +
-cgroup_findings 34,228 + findings 6,036 + a ~5,200-byte trimmed
-`observation` account for nearly all of what remains — the residual
-cost of 12 individually-evidenced pressured cgroups, which this ADR does
-not attempt to cap).
+86,499 bytes (79.9% smaller, both projections; process_scopes 41,091 +
+cgroup_findings 34,228 + findings 6,036 + a ~6,000-byte trimmed
+`observation` — now keeping `cgroup.issues` and `process_io`'s
+completeness fields — account for nearly all of what remains: the
+residual cost of 12 individually-evidenced pressured cgroups, which this
+ADR does not attempt to cap).
 
 ## Consequences
 
@@ -94,15 +121,20 @@ not attempt to cap).
   over, with no loss of the verdict — findings, process scopes, cgroup
   findings, capabilities, and completeness signals are all present in lean
   mode.
-- `detail: "full"` keeps ADR-0017's byte-identical promise available as an
-  explicit opt-in for an agent that needs the raw evidence (e.g. cross-
-  checking a specific process's numbers), so nothing is permanently lost —
-  only deferred behind a parameter.
-- `get_recent_history` and `get_current_pressure`'s lean mode is pure
-  deduplication (case 1 only); a hunt's lean mode combines both cases, so
-  its size reduction is larger but represents a real trade-off an agent
-  should understand from the tool description, not just a compression
-  trick.
+- `detail: "full"` keeps every field of ADR-0017's document available as
+  an explicit opt-in for an agent that needs the raw evidence (e.g.
+  cross-checking a specific process's numbers), so nothing is permanently
+  lost — only deferred behind a parameter. The "byte-identical" wording in
+  ADR-0017 is superseded: the MCP path always serializes through
+  `serde_json::Value`, so key order can differ from the CLI's typed-struct
+  output even at `detail: "full"` — the *content* is what matches.
+- `get_current_pressure`'s lean mode is pure deduplication (case 1,
+  stale-gated); a hunt's lean mode combines both cases, so its size
+  reduction is larger but represents a real trade-off an agent should
+  understand from the tool description, not just a compression trick.
+  `get_recent_history` has no lean mode at all — its lifecycle entries are
+  the one place stale/resolved findings' process evidence survives, so
+  nothing there is safe to strip.
 - The remaining lean-mode cost for a hunt under wide cgroup pressure is
   still driven by `process_scopes` and `cgroup_findings` growing linearly
   with the number of pressured cgroup levels; this ADR intentionally does
@@ -117,19 +149,25 @@ not attempt to cap).
   retract ADR-0017's "unchanged" promise outright rather than keep it
   available as `detail: "full"`, and an agent has no way to ask for more
   evidence when the lean summary is not enough.
-- **Route documents through `serde_json::Value` and reorder/rebuild them
-  wholesale.** Rejected: risks silently reordering the stable
-  schema-version-2 key order (`serde_json::Value`'s map is unordered
-  without the `preserve_order` feature, which this crate does not take on)
-  and would blur the line between "presentation" (allowed in
-  `src/mcp/tools.rs`) and "re-deriving a diagnosis" (not allowed anywhere
-  outside `render.rs`/`watch.rs`, per `docs/architecture.md`'s
-  presentation-purity rule). Targeted key removal on the already-built
-  document value avoids both risks.
-- **Drop `observation` wholesale in lean mode.** Rejected: it is the only
-  place an MCP client can see `taskstats_capability` and the
-  `*_collection_issues` counters — deleting it would silently remove the
-  completeness signal ADR-0015 was built to make visible, letting a hunt
-  with zero taskstats evidence read as a confident clean verdict again.
-  Keying the omission to five specific arrays keeps every completeness
-  field intact.
+- **Hand-build a separate lean struct/document instead of pruning the
+  already-serialized `Value`.** Rejected: embedding into MCP's
+  `structuredContent` requires a `serde_json::Value` regardless (that is
+  the wire format), so a second parallel struct would either duplicate
+  `render.rs`'s document-building logic in `src/mcp/tools.rs` — risking
+  drift between what the CLI's document contains and what the lean
+  projection thinks it contains — or re-derive fields from the raw
+  observation, crossing the "presentation never re-derives a diagnosis"
+  line `docs/architecture.md` draws. Targeted key removal on the value
+  `render.rs`/`watch.rs` already built keeps a single source of truth for
+  content; the key-order side effect of going through `Value` is
+  unavoidable either way and is documented above rather than hidden.
+- **Drop `observation` wholesale in lean mode.** Rejected: `cgroup` and
+  `process_io` are not raw-data-only — `cgroup.issues` and
+  `process_io.{capability,issues,regressed}` are completeness data nested
+  *inside* them, with no field anywhere else in the document to fall back
+  on. Deleting the whole object would silently remove that completeness
+  signal, letting a hunt with failed cgroup/process-IO collection read as
+  a confident clean verdict again — the exact bug class ADR-0015 exists to
+  prevent. Removing only the raw child key from each (`cgroup.groups`,
+  `cgroup.members`, `process_io.processes`) keeps every completeness field
+  intact while still cutting the bulk of the size.

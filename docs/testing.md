@@ -289,7 +289,7 @@ maintained in a separate explicit inventory. Historical schema prose such as
 `bottleneck.recording` is not executable syntax, but a concrete `bottleneck
 ...` command is rejected.
 
-The current normal deterministic gate contains 304 unit tests, 15 CLI tests,
+The current normal deterministic gate contains 310 unit tests, 15 CLI tests,
 three documentation-command tests, three replay-fixture tests, and two MCP
 end-to-end session tests (`tests/mcp.rs`, which drive a real `stallhunt mcp`
 process over pipes through the handshake, every tool family, and EOF
