@@ -10,6 +10,10 @@ Keep **collection**, **normalization**, **analysis**, and **presentation** separ
 - future eBPF telemetry can coexist with simple Linux interfaces,
 - evidence remains inspectable.
 
+Distribution wrappers remain outside this pipeline. The OpenAI plugin and
+MCPB package only launch the stdio MCP presentation surface; they do not add a
+collector, inference path, daemon, or network transport (ADR-0019).
+
 ## High-level pipeline
 
 ```mermaid

@@ -23,6 +23,11 @@ Any other MCP client is configured with `stallhunt` as the command and
 - `--no-sampler` — disable the resident sampler; only the one-shot tools
   return live data.
 
+Installable directory packaging is documented in
+[`directory-distribution.md`](directory-distribution.md). The OpenAI plugin
+and Linux MCPB both launch this same stdio command; they do not introduce a
+remote Stallhunt service.
+
 ## Transport and protocol
 
 - Protocol revision `2025-06-18`; declared capabilities are `tools` only.
@@ -32,6 +37,10 @@ Any other MCP client is configured with `stallhunt` as the command and
   the client owns the process lifetime.
 - Handled methods: `initialize`, `notifications/initialized`, `ping`,
   `tools/list`, `tools/call`. Anything else receives a JSON-RPC error.
+- Every tool has a human-readable title and advertises `readOnlyHint: true`,
+  `destructiveHint: false`, `idempotentHint: true`, and
+  `openWorldHint: false`. The tools observe local kernel interfaces but do not
+  modify the machine or contact external services.
 
 ## The resident sampler
 

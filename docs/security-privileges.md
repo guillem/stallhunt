@@ -195,3 +195,9 @@ The core tool should not require network access.
 No telemetry should leave the machine unless a future explicit feature says so.
 
 This keeps the diagnostic trust model simple.
+
+`stallhunt mcp` does not change that boundary. It exchanges results only over
+stdio with the local MCP client that launched it. That client may send tool
+results to its configured model provider, so directory listings and packages
+link to [`../PRIVACY.md`](../PRIVACY.md), which distinguishes Stallhunt's local
+behavior from client-controlled processing.

@@ -1,0 +1,54 @@
+{
+  "manifest_version": "0.3",
+  "name": "stallhunt",
+  "display_name": "Stallhunt",
+  "version": "0.5.1",
+  "description": "Evidence-backed Linux performance triage",
+  "long_description": "Diagnose CPU, memory, and I/O contention on the local Linux machine, identify likely victims and suspects, and inspect the evidence and confidence behind each finding.",
+  "author": {
+    "name": "Guillem",
+    "url": "https://github.com/guillem"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/guillem/stallhunt"
+  },
+  "homepage": "https://github.com/guillem/stallhunt",
+  "documentation": "https://github.com/guillem/stallhunt/blob/main/docs/mcp-server.md",
+  "support": "https://github.com/guillem/stallhunt/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/stallhunt",
+    "mcp_config": {
+      "command": "${__dirname}/server/stallhunt",
+      "args": ["mcp"]
+    }
+  },
+  "tools": [
+    {
+      "name": "get_current_pressure",
+      "description": "Inspect the latest local CPU, memory, I/O, and cgroup pressure window."
+    },
+    {
+      "name": "get_recent_history",
+      "description": "Inspect recent local pressure finding lifecycle and history."
+    },
+    {
+      "name": "run_hunt",
+      "description": "Run a bounded local performance diagnosis."
+    },
+    {
+      "name": "get_capabilities",
+      "description": "Inspect which local Linux telemetry sources are available."
+    }
+  ],
+  "keywords": ["linux", "performance", "diagnostics", "psi", "mcp"],
+  "license": "MIT OR Apache-2.0",
+  "privacy_policies": [
+    "https://github.com/guillem/stallhunt/blob/main/PRIVACY.md"
+  ],
+  "compatibility": {
+    "platforms": ["linux"]
+  }
+}

@@ -257,11 +257,21 @@ does not add a new pressure finding, process-device mapping, or causal edge.
 
 ## Post-v0.4.1 cross-cutting slice — MCP server for coding agents
 
-Status: implemented (ADR-0017). `stallhunt mcp` serves Model Context Protocol
+Status: implemented and published in v0.5.0 (ADR-0017). `stallhunt mcp` serves Model Context Protocol
 tools over stdio: instant sampler-backed answers about recent pressure plus
 one-shot hunt and capabilities tools, reusing the existing observation seams,
 finding-lifecycle tracker, and schema-version-2 documents without touching the
 inference engine. See [`mcp-server.md`](mcp-server.md).
+
+## Post-v0.5.0 delivery slice — MCP directory packaging
+
+Status: implemented for the next patch release; external listings are not yet
+published (ADR-0019). The same local stdio server now has OpenAI repository
+plugin metadata, an x86-64 Linux MCPB build, generated official MCP Registry
+metadata, public privacy/terms material, directory artwork, review annotations,
+and deterministic metadata tests. The release workflow will attach the MCPB,
+checksum, and checksum-bound `server.json`. Vendor submission and Registry
+publication remain owner-authorized external actions.
 
 ## Milestone 7 — eBPF precision probes
 

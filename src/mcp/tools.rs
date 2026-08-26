@@ -38,7 +38,9 @@ pub(crate) fn descriptors() -> Vec<Value> {
     vec![
         json!({
             "name": "get_current_pressure",
+            "title": "Inspect Current Pressure",
             "description": "Instant answer: what is constraining useful work on this Linux host right now, from a resident sampler that has been watching continuously. Returns the latest sampling window — CPU, memory, I/O, and cgroup pressure signals with lifecycle states (new, persistent, resolved) and suspect/victim processes. Prefer this over run_hunt for \"why is it slow?\" questions; it does not block.",
+            "annotations": read_only_annotations("Inspect Current Pressure"),
             "inputSchema": {
                 "type": "object",
                 "properties": { "detail": detail_property() },
@@ -47,7 +49,9 @@ pub(crate) fn descriptors() -> Vec<Value> {
         }),
         json!({
             "name": "get_recent_history",
+            "title": "Inspect Recent Pressure History",
             "description": "Lifecycle-tracked findings over the last up-to-16 sampling windows: what pressure appeared, persisted, and resolved recently, with per-window timestamps and full process-candidate evidence (this is the only place resolved/stale findings' process evidence appears, so it is never trimmed). Use it to answer \"what happened a moment ago?\" — including stalls that have already ended. Instant; does not block.",
+            "annotations": read_only_annotations("Inspect Recent Pressure History"),
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -56,7 +60,9 @@ pub(crate) fn descriptors() -> Vec<Value> {
         }),
         json!({
             "name": "run_hunt",
+            "title": "Run Performance Hunt",
             "description": "One-shot deep diagnosis of what is constraining useful work on this Linux host: observes CPU, memory, I/O, and cgroup pressure for the requested duration, then reports evidence-backed findings with suspect and victim processes. BLOCKS for the full duration (default 5s, range 100ms to 5m); make sure your tool-call timeout exceeds the requested duration.",
+            "annotations": read_only_annotations("Run Performance Hunt"),
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -71,7 +77,9 @@ pub(crate) fn descriptors() -> Vec<Value> {
         }),
         json!({
             "name": "get_capabilities",
+            "title": "Inspect Telemetry Capabilities",
             "description": "Report which telemetry sources this host supports (PSI for CPU/memory/I/O, procfs collectors, cgroup v2) and why any are unavailable. Instant; run it once to learn how trustworthy the other tools' verdicts can be.",
+            "annotations": read_only_annotations("Inspect Telemetry Capabilities"),
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -79,6 +87,20 @@ pub(crate) fn descriptors() -> Vec<Value> {
             },
         }),
     ]
+}
+
+/// Directory reviewers and MCP hosts use these hints to distinguish local,
+/// observational diagnostics from tools that mutate the machine or reach an
+/// external service. They remain hints, per the MCP specification; the
+/// implementation and privilege model are the source of truth.
+fn read_only_annotations(title: &str) -> Value {
+    json!({
+        "title": title,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+    })
 }
 
 /// Whether a tool result carries the deduplicated payload or the complete
@@ -554,6 +576,25 @@ mod tests {
 
     fn fixture_observe(_: Duration) -> HuntObservation {
         hunt_legacy_full_fixture_observation()
+    }
+
+    #[test]
+    fn every_tool_has_directory_review_metadata() {
+        for descriptor in descriptors() {
+            let name = descriptor["name"].as_str().expect("tool name");
+            assert!(
+                descriptor["title"]
+                    .as_str()
+                    .is_some_and(|title| !title.is_empty()),
+                "{name} needs a display title"
+            );
+            let annotations = &descriptor["annotations"];
+            assert_eq!(annotations["readOnlyHint"], true, "{name}");
+            assert_eq!(annotations["destructiveHint"], false, "{name}");
+            assert_eq!(annotations["idempotentHint"], true, "{name}");
+            assert_eq!(annotations["openWorldHint"], false, "{name}");
+            assert_eq!(annotations["title"], descriptor["title"], "{name}");
+        }
     }
 
     #[test]

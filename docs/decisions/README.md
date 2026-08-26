@@ -60,3 +60,4 @@ What credible options were rejected and why?
 - [`0016-scoped-process-roles-schema-tui.md`](0016-scoped-process-roles-schema-tui.md)
 - [`0017-mcp-server.md`](0017-mcp-server.md)
 - [`0018-mcp-tool-payload-detail-levels.md`](0018-mcp-tool-payload-detail-levels.md)
+- [`0019-local-mcp-directory-distribution.md`](0019-local-mcp-directory-distribution.md)

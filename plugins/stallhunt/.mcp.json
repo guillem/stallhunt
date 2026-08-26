@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "stallhunt": {
+      "command": "stallhunt",
+      "args": ["mcp"]
+    }
+  }
+}
