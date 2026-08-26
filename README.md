@@ -221,6 +221,13 @@ Later releases may add:
 
 Start with [`AGENTS.md`](AGENTS.md), then [`docs/README.md`](docs/README.md).
 
+## Privacy Policy
+
+Stallhunt reads bounded local Linux telemetry and does not independently send
+it over the network. MCP clients may transmit tool results according to their
+own data policies. See the full [Stallhunt privacy policy](PRIVACY.md) for the
+data, storage, sharing, retention, and contact disclosures.
+
 ## License
 
 Dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.

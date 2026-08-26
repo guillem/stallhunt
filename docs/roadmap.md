@@ -265,13 +265,18 @@ inference engine. See [`mcp-server.md`](mcp-server.md).
 
 ## Post-v0.5.0 delivery slice — MCP directory packaging
 
-Status: implemented for the next patch release; external listings are not yet
-published (ADR-0019). The same local stdio server now has OpenAI repository
-plugin metadata, an x86-64 Linux MCPB build, generated official MCP Registry
-metadata, public privacy/terms material, directory artwork, review annotations,
-and deterministic metadata tests. The release workflow will attach the MCPB,
-checksum, and checksum-bound `server.json`. Vendor submission and Registry
-publication remain owner-authorized external actions.
+Status: implemented and published in v0.5.1; external listings are not yet
+published (ADR-0019). The same local stdio server has OpenAI repository plugin
+metadata, an x86-64 Linux MCPB, official MCP Registry metadata, public
+privacy/terms material, directory artwork, review annotations, and
+deterministic metadata tests. The release includes the MCPB, checksum, and
+checksum-bound `server.json`. Registry publication remains an owner login
+action. Anthropic's current local-connector rules also require a `Privacy
+Policy` section in the bundled README; main now has it, so the Anthropic
+submission must use the next immutable patch-release MCPB rather than v0.5.1.
+No current official OpenAI documentation establishes a public submission path
+for bundled local stdio plugins, so that surface remains repository/workspace
+distribution.
 
 ## Milestone 7 — eBPF precision probes
 

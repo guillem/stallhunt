@@ -250,6 +250,7 @@ fn validate_cargo_arguments(arguments: &[String]) -> Result<(), String> {
             arguments.as_slice(),
             ["--workspace", "--all-features"]
                 | ["--locked", "--offline", "--workspace", "--all-features"]
+                | ["--test", "distribution"]
                 | ["--test", "cpu_acceptance", "--", "--ignored"]
                 | ["--test", "io_acceptance", "--", "--ignored"]
                 | [
