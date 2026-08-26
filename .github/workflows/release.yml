@@ -14,6 +14,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
       - name: Build release binary
         run: cargo build --release --locked
       - name: Package Linux tarball
@@ -28,15 +31,31 @@ jobs:
             cd dist
             sha256sum "${PACKAGE}.tar.gz" > "${PACKAGE}.tar.gz.sha256"
           )
+      - name: Package MCP desktop extension and registry metadata
+        run: |
+          tools/package-mcpb.sh --binary target/release/stallhunt --output-dir dist
+          VERSION="${GITHUB_REF_NAME#v}"
+          MCPB="dist/stallhunt-${VERSION}-x86_64-unknown-linux-gnu.mcpb"
+          mkdir -p dist/mcpb-validation
+          unzip -q "${MCPB}" -d dist/mcpb-validation
+          npx --yes @anthropic-ai/mcpb@2.1.2 validate \
+            dist/mcpb-validation/manifest.json
+          tools/render-mcp-registry-metadata.sh \
+            --artifact "${MCPB}" \
+            --output dist/server.json
       - uses: actions/upload-artifact@v7
         with:
           name: stallhunt-linux
           path: |
             dist/*.tar.gz
             dist/*.sha256
+            dist/*.mcpb
+            dist/server.json
       - uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/*.tar.gz
             dist/*.sha256
+            dist/*.mcpb
+            dist/server.json
           generate_release_notes: true

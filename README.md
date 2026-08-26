@@ -67,6 +67,12 @@ stallhunt mcp`; see [`docs/mcp-server.md`](docs/mcp-server.md)):
 stallhunt mcp [--interval 2s] [--no-sampler]
 ```
 
+Source packaging for an OpenAI local plugin, an Anthropic-compatible Linux
+MCPB desktop extension, and official MCP Registry metadata lives in the
+repository. These packages deliberately keep diagnosis local instead of
+hosting Stallhunt on a machine other than the one being investigated. See
+[`docs/directory-distribution.md`](docs/directory-distribution.md).
+
 Generate shell completions:
 
 ```bash

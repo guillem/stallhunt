@@ -4,7 +4,23 @@ All notable user-facing changes to Stallhunt are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once public releases begin.
 
-## [Unreleased]
+## [0.5.1] - 2026-08-26
+
+### Added
+
+- Directory-ready local MCP distribution: an OpenAI repository plugin, a
+  Linux x86-64 MCPB desktop extension, checksum-bound official MCP Registry
+  metadata generation, shared directory artwork, and public privacy and terms
+  documents (ADR-0019).
+- Deterministic tests for plugin, MCPB, Registry, and release-script metadata.
+
+### Changed
+
+- All MCP tools now advertise human-readable titles plus accurate read-only,
+  non-destructive, idempotent, closed-world annotations for client approval and
+  directory review.
+- Release automation now publishes the MCPB, its SHA-256 sidecar, and a
+  rendered `server.json` alongside the existing Linux tarball.
 
 ## [0.5.0] - 2026-08-25
 

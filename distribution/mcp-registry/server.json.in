@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.guillem/stallhunt",
+  "title": "Stallhunt",
+  "description": "Evidence-backed Linux performance triage over MCP",
+  "repository": {
+    "url": "https://github.com/guillem/stallhunt",
+    "source": "github"
+  },
+  "version": "@VERSION@",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/guillem/stallhunt/releases/download/v@VERSION@/stallhunt-@VERSION@-x86_64-unknown-linux-gnu.mcpb",
+      "fileSha256": "@SHA256@",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "stallhunt",
+  "version": "0.5.1",
+  "description": "Evidence-backed Linux performance triage for ChatGPT and Codex",
+  "author": {
+    "name": "Guillem",
+    "url": "https://github.com/guillem"
+  },
+  "homepage": "https://github.com/guillem/stallhunt",
+  "repository": "https://github.com/guillem/stallhunt",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["linux", "performance", "diagnostics", "mcp"],
+  "interface": {
+    "displayName": "Stallhunt",
+    "shortDescription": "Find what is stalling this Linux host.",
+    "longDescription": "Diagnose CPU, memory, and I/O contention on the local Linux machine, identify likely victims and suspects, and inspect the evidence and confidence behind each finding.",
+    "developerName": "Guillem",
+    "category": "Developer Tools",
+    "capabilities": ["Read"],
+    "websiteURL": "https://github.com/guillem/stallhunt",
+    "privacyPolicyURL": "https://github.com/guillem/stallhunt/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/guillem/stallhunt/blob/main/TERMS.md",
+    "defaultPrompt": [
+      "What is constraining useful work on this Linux host?",
+      "What performance pressure occurred recently?",
+      "Run a five-second hunt and explain the evidence."
+    ],
+    "brandColor": "#F59E0B",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png"
+  },
+  "mcpServers": "./.mcp.json"
+}

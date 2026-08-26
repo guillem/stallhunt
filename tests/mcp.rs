@@ -120,6 +120,12 @@ fn a_full_session_serves_every_tool_family_and_exits_on_eof() {
             "get_capabilities",
         ]
     );
+    for tool in tools["result"]["tools"].as_array().expect("tools array") {
+        assert!(tool["title"].is_string());
+        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+        assert_eq!(tool["annotations"]["destructiveHint"], false);
+        assert_eq!(tool["annotations"]["openWorldHint"], false);
+    }
 
     let capabilities = session.request(
         "tools/call",

@@ -1,10 +1,21 @@
 # Project status
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
 
 ## Current milestone
 
-**v0.5.0 published — MCP server for coding agents**
+**v0.5.1 directory-distribution preparation implemented; not published**
+
+The next patch release prepares the existing local stdio MCP server for
+discovery and installation without adding a remote transport (ADR-0019): an
+OpenAI repository plugin, an x86-64 Linux MCPB, checksum-bound official MCP
+Registry metadata, public privacy/terms documents, directory artwork, and tool
+review annotations are implemented. Release automation will attach the MCPB,
+checksum, and rendered `server.json`. No vendor listing, Registry version,
+tag, or v0.5.1 GitHub Release has been published; those remain explicit owner
+actions after review.
+
+**Currently published release: v0.5.0 — MCP server for coding agents.**
 
 PR #11 merged into `main` (ADR-0017, ADR-0018): `stallhunt mcp` serves
 Model Context Protocol tools over stdio, with a resident sampler for
@@ -121,6 +132,11 @@ the test process and does not mutate the hierarchy.
   full detail. `detail: "full"` returns every field with the same content
   as the CLI's JSON output (key order may differ, since the MCP path
   serializes through a JSON value).
+- Every MCP tool has a human-readable title and accurate read-only,
+  non-destructive, idempotent, closed-world annotations. Repository plugin and
+  MCPB manifests, public privacy/terms material, shared directory artwork,
+  checksum-bound Registry metadata generation, packaging scripts, and release
+  workflow assets implement ADR-0019 without changing collection or inference.
 - `hunt` accepts `--duration` values from 100 ms through 5 minutes, including
   exact-millisecond decimal values, and defaults to 10 seconds.
 - Bare `stallhunt` accepts the same `--duration`, `--json`, `--verbose`, and
@@ -483,9 +499,14 @@ Operational and delivery gaps:
 - recordings are single-window, pre-1.0, and have no compatibility promise;
 - the five Linux acceptance scenarios remain intentionally opt-in rather than
   automated CI jobs;
-- release automation publishes only one dynamically linked x86_64 GNU/Linux
-  artifact with a checksum; additional targets, an explicit glibc baseline,
-  signatures, and provenance remain open.
+- release automation still targets one dynamically linked x86_64 GNU/Linux
+  binary, now in both tarball and MCPB containers with checksums; additional
+  targets, an explicit glibc baseline, signatures, and provenance remain open;
+- OpenAI's universal public MCP submission currently requires a public server
+  URL, which is intentionally incompatible with local-host diagnosis. The
+  repository/workspace plugin is prepared instead. Anthropic and Registry
+  submissions have not been made and still require owner identity/account
+  verification plus review of the generated release artifacts.
 
 ## Known bugs
 
@@ -505,17 +526,20 @@ taskstats evidence could read as a complete, confirmed clean negative. See
 validation" below for the full list and how each was verified.
 
 ## Current recommended next task
-Since v0.4.1, the owner-directed `stallhunt mcp` surface (ADR-0017) has landed
-on top of the released tree; it adds an agent-facing interface without
-touching the inference engine or output schemas.
 
-v0.4.1 is released; do not start Milestone 7 or add another M8 chain without a
-concrete diagnostic gap driving it, as coincident PSI still does not establish
-a causal path. The recommended next task is making TASKSTATS TGID selection
-cgroup-aware (read cgroup membership before the bounded procfs walk and
-prioritize scope members within the 512-TGID cap) so a scoped hunt on a busy,
-high-PID host does not lose taskstats coverage for exactly the scope being
-investigated; see the bullet under "Known limitations".
+Review the v0.5.1 directory packages, verify the generated MCPB in a compatible
+Linux client, then use the normal owner-authorized merge/tag/release workflow.
+After the immutable GitHub artifact and checksum-bound `server.json` exist,
+publish the Registry metadata and submit the Anthropic listing. OpenAI should
+use the local repository/workspace plugin path unless its universal directory
+accepts bundled local servers.
+
+After that delivery work, do not start Milestone 7 or add another M8 chain
+without a concrete diagnostic gap. The next diagnostic task remains making
+TASKSTATS TGID selection cgroup-aware (read cgroup membership before the
+bounded procfs walk and prioritize scope members within the 512-TGID cap) so a
+scoped hunt on a busy, high-PID host does not lose taskstats coverage for
+exactly the scope being investigated; see the bullet under "Known limitations".
 
 ## Current design risks
 
@@ -640,6 +664,24 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-26, the unpublished v0.5.1 directory-distribution preparation
+passed `cargo fmt --all -- --check`, Clippy for the workspace/all targets/all
+features with warnings denied, and the full all-features test suite: 311 of
+312 unit tests passed with the fixture writer ignored; 15 CLI, three
+directory-distribution, three documentation-command, three replay-fixture,
+and two real-process MCP session tests passed. The five bounded Linux load or
+delegated-cgroup acceptance tests remained intentionally ignored. The OpenAI
+plugin passed the plugin-creator validator; both packaging scripts passed
+shell syntax checks. A locked release build was packaged into the Linux
+x86-64 MCPB, its portable SHA-256 sidecar verified, the official Anthropic
+MCPB 2.1.2 validator accepted the extracted manifest, and the extracted
+binary reported 0.5.1 and completed a real initialize handshake. Registry
+metadata rendered with the artifact's actual checksum, all JSON inputs
+parsed, `cargo package --locked --allow-dirty` built and verified the 147-file
+source package, and `git diff --check` passed. No tag, GitHub Release,
+Registry version, or vendor directory listing was created during this
+validation.
 
 On 2026-08-25, the owner authorized the v0.5.0 release. PR #11 (`stallhunt
 mcp`, ADR-0017/ADR-0018) passed CI (`msrv` and `stable` jobs) and was merged
