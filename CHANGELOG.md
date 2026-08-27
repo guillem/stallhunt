@@ -6,11 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-27
+
 ### Documentation
 
 - Add the `Privacy Policy` README section required by Anthropic for local MCPB
-  directory submissions. This was added after the immutable v0.5.1 artifact;
-  Anthropic submission must use the next release artifact.
+  directory submissions. The v0.5.2 MCPB is the first immutable release
+  artifact that bundles this section together with the existing manifest
+  `privacy_policies` declaration.
 
 ## [0.5.1] - 2026-08-26
 

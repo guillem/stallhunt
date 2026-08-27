@@ -1,6 +1,6 @@
 {
   "name": "stallhunt",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Evidence-backed Linux performance triage for ChatGPT and Codex",
   "author": {
     "name": "Guillem",
