@@ -4,7 +4,7 @@ Last updated: 2026-08-27
 
 ## Current milestone
 
-**v0.5.2 Anthropic-ready MCPB release preparation**
+**v0.5.2 published; Anthropic desktop installation and submission pending**
 
 The published patch release prepares the existing local stdio MCP server for
 discovery and installation without adding a remote transport (ADR-0019): an
@@ -17,9 +17,10 @@ rendered `server.json`. On 2026-08-27, the owner published
 API reports it active and latest with the same MCPB SHA-256 digest as the
 GitHub release. Anthropic directory submission remains pending and must use
 v0.5.2 or later because v0.5.1 predates the required bundled README privacy
-section.
+section. PR #13 merged the patch release; tag v0.5.2 and its successful release
+workflow publish and validate the corrected bundle.
 
-**Currently published release: v0.5.1 — local MCP directory packages.**
+**Currently published release: v0.5.2 — Anthropic-ready local MCPB.**
 
 PR #11 merged into `main` (ADR-0017, ADR-0018): `stallhunt mcp` serves
 Model Context Protocol tools over stdio, with a resident sampler for
@@ -535,18 +536,14 @@ validation" below for the full list and how each was verified.
 
 ## Current recommended next task
 
-Complete v0.5.2 and the remaining Anthropic directory work recorded in
+Complete the remaining Anthropic directory work recorded in
 [`directory-distribution.md`](directory-distribution.md):
 
-1. run the full release gate and confirm the generated MCPB contains the README
-   `Privacy Policy` section, the public policy files, and the matching v0.5.2
-   binary and manifest;
-2. publish v0.5.2, verify the immutable release assets and checksum-bound
-   `server.json`, then install and exercise that exact bundle in a compatible
-   Linux Claude Desktop environment;
-3. submit the exact released MCPB through Anthropic's desktop-extension form
+1. install and exercise the exact released v0.5.2 MCPB in a compatible Claude
+   Desktop environment;
+2. submit the exact released MCPB through Anthropic's desktop-extension form
    and retain the reviewer correspondence in this status document;
-4. keep the OpenAI plugin on the repository/workspace path. Do not add a remote
+3. keep the OpenAI plugin on the repository/workspace path. Do not add a remote
    server that would diagnose the wrong host solely for directory eligibility.
 
 After that delivery work, do not start Milestone 7 or add another M8 chain
@@ -679,6 +676,30 @@ These remaining items should be decided when implementation makes the tradeoff
 concrete, not all at once.
 
 ## Last meaningful validation
+
+On 2026-08-27, PR #13 passed duplicate push/PR CI runs (Rust 1.85 MSRV and
+stable formatting/Clippy/tests) and merged as commit `550ccfd`; tag v0.5.2
+points to that exact merge. Release workflow run 33069976034 passed in 1m7s:
+it rebuilt the release binary, packaged the tarball and MCPB, passed Anthropic
+MCPB validator 2.1.2, rendered Registry metadata, uploaded all five assets, and
+published <https://github.com/guillem/stallhunt/releases/tag/v0.5.2>. The exact
+public MCPB was downloaded afresh; its sidecar verified SHA-256
+`f157469d399261d8373b43753e2b6c71284ce2637c0027814c7dd2e28407871f`,
+the released `server.json` carried that digest, and the extracted README
+contained the required `Privacy Policy` section. The extracted release binary
+reported 0.5.2; the pinned validator passed again; and a real protocol session
+initialized, listed four tools, and called all four successfully, including a
+bounded 100ms lean `run_hunt`. Claude Desktop installation and in-client tool
+exercise remain separate pending validation.
+
+The first v0.5.2 desktop-install attempt used Bazzite Linux with KDE. Generic
+`xdg-open` dispatched the `.mcpb` to Ark because the desktop classifies MCPB as
+a ZIP archive; no file association was changed. Launching the installed Claude
+Desktop AppImage directly with the released MCPB path did reach Claude's bundle
+handler: `main.log` recorded `Handling DXT/MCPB file` for the exact artifact.
+At the last check Claude still reported zero installed local extensions and no
+stdio servers, so this is not yet an installation pass; it remains pending the
+interactive install confirmation and subsequent in-client tool exercise.
 
 On 2026-08-27, the v0.5.2 release candidate passed
 `cargo fmt --all -- --check`, locked/offline warning-denied Clippy for the

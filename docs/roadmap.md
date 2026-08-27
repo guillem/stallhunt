@@ -265,14 +265,15 @@ inference engine. See [`mcp-server.md`](mcp-server.md).
 
 ## Post-v0.5.0 delivery slice — MCP directory packaging
 
-Status: implemented and published in v0.5.1; the official MCP Registry entry
-for `io.github.guillem/stallhunt` is active (ADR-0019). The same local stdio
+Status: implemented in v0.5.1, with the Anthropic privacy-packaging correction
+published in v0.5.2; the official MCP Registry entry for
+`io.github.guillem/stallhunt` v0.5.1 is active (ADR-0019). The same local stdio
 server has OpenAI repository plugin metadata, an x86-64 Linux MCPB, official
 MCP Registry metadata, public privacy/terms material, directory artwork, review
 annotations, and deterministic metadata tests. The release includes the MCPB,
 checksum, and checksum-bound `server.json`. Anthropic's local-connector rules
 also require a `Privacy Policy` section in the bundled README; main has it and
-v0.5.2 is the release candidate that first bundles it for directory review.
+v0.5.2 is the first published release that bundles it for directory review.
 OpenAI now documents public MCP-backed plugin submission, but requires a public
 hosted domain rather than a local stdio endpoint; Stallhunt therefore remains a
 repository/workspace plugin on that surface.

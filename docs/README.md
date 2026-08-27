@@ -2,10 +2,10 @@
 
 This directory is the durable design and project-memory layer.
 
-Milestones 1–6 are functionally complete. Release v0.5.1 publishes the local
-stdio MCP server and directory packages; its official MCP Registry entry is
-active. The source tree is preparing v0.5.2 so the immutable MCPB also contains
-the README privacy section required for Anthropic directory review. EXP-0010
+Milestones 1–6 are functionally complete. Release v0.5.2 publishes the local
+stdio MCP server and an immutable MCPB containing the README privacy section
+required for Anthropic directory review; the official MCP Registry currently
+lists v0.5.1 as active. EXP-0010
 records the passed taskstats/512-TGID/member-ceiling validation, cleanup, and
 reviewed dependency-warning disposition. Milestone 8's first two conservative
 evidence-chain slices relate memory mechanism pressure to I/O pressure, first

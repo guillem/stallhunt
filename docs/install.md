@@ -60,7 +60,7 @@ sha256sum -c stallhunt-0.5.2-x86_64-unknown-linux-gnu.tar.gz.sha256
 
 Download release tarballs from the
 [GitHub Releases](https://github.com/guillem/stallhunt/releases) page; the
-release prepared by this tree is `v0.5.2`. EXP-0010 records the passed
+currently published release is `v0.5.2`. EXP-0010 records the passed
 controlled-host, cleanup, and reviewed dependency-warning gates.
 
 ## Shell completions

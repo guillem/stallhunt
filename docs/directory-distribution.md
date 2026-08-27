@@ -90,6 +90,13 @@ Release v0.5.1 is published at
 MCPB checksum sidecars verify, and its released `server.json` contains the
 published MCPB digest.
 
+Release v0.5.2 is published at
+<https://github.com/guillem/stallhunt/releases/tag/v0.5.2>. It is the first
+immutable MCPB that bundles both Anthropic-required privacy surfaces. Its
+public MCPB checksum and checksum-bound `server.json` verify, the pinned MCPB
+validator accepts it, and all four tools pass a real protocol session from the
+downloaded bundle.
+
 ### 1. Official MCP Registry — published
 
 On 2026-08-27, the owner published `io.github.guillem/stallhunt` v0.5.1 using
@@ -121,12 +128,14 @@ requires both the manifest `privacy_policies` array and a `Privacy Policy`
 section in the bundled README. The array is present in v0.5.1, but the README
 section was added to main only after the immutable release was built.
 
-Release v0.5.2 is the first candidate that bundles both required privacy
-surfaces. For that release:
+Release v0.5.2 is the first artifact that bundles both required privacy
+surfaces. Before submission:
 
-1. confirm the MCPB contains the updated README and unchanged public policy;
-2. run the pinned MCPB validator and verify its SHA-256 sidecar;
-3. install the exact released MCPB on compatible Linux Claude Desktop and run
+1. confirm the MCPB contains the updated README and unchanged public policy
+   (complete for v0.5.2);
+2. run the pinned MCPB validator and verify its SHA-256 sidecar (complete for
+   v0.5.2);
+3. install the exact released MCPB on compatible Claude Desktop and run
    all four tools, including a bounded `run_hunt`;
 4. prepare the listing name, tagline, description, categories, documentation,
    privacy/support URLs, icon, company/contact details, and setup/test steps;
@@ -135,6 +144,13 @@ surfaces. For that release:
 
 Official reference:
 <https://claude.com/docs/connectors/building/submission>.
+
+On Bazzite/KDE, do not use generic `xdg-open` for this check unless the user has
+explicitly associated `.mcpb` with Claude: the default ZIP association opens
+Ark. Invoke Claude Desktop with the MCPB path directly. The Linux AppImage used
+for the initial v0.5.2 check recognized the path in its DXT/MCPB handler, but
+installation still requires the user-facing confirmation dialog and must not be
+reported complete until Claude lists and runs the extension.
 
 ### 3. OpenAI distribution
 
