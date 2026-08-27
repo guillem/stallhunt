@@ -271,9 +271,12 @@ published in v0.5.2; the official MCP Registry entry for
 server has OpenAI repository plugin metadata, an x86-64 Linux MCPB, official
 MCP Registry metadata, public privacy/terms material, directory artwork, review
 annotations, and deterministic metadata tests. The release includes the MCPB,
-checksum, and checksum-bound `server.json`. Anthropic's local-connector rules
-also require a `Privacy Policy` section in the bundled README; main has it and
-v0.5.2 is the first published release that bundles it for directory review.
+checksum, and checksum-bound `server.json`. The v0.5.2 bundle includes the
+required privacy surfaces and passes local installation and tool exercise on a
+Bazzite Claude Desktop AppImage. Anthropic's official desktop-extension flow,
+however, supports macOS and Windows and requires testing on both; the Linux-only
+artifact is therefore not eligible for that vendor directory. The official MCP
+Registry remains its public discovery surface.
 OpenAI now documents public MCP-backed plugin submission, but requires a public
 hosted domain rather than a local stdio endpoint; Stallhunt therefore remains a
 repository/workspace plugin on that surface.

@@ -4,7 +4,7 @@ Last updated: 2026-08-27
 
 ## Current milestone
 
-**v0.5.2 published and desktop-validated; Anthropic submission pending**
+**v0.5.2 published and Linux desktop-validated; Anthropic listing ineligible**
 
 The published patch release prepares the existing local stdio MCP server for
 discovery and installation without adding a remote transport (ADR-0019): an
@@ -15,12 +15,14 @@ and its GitHub Release publish the tarball, MCPB, both SHA-256 sidecars, and
 rendered `server.json`. On 2026-08-27, the owner published
 `io.github.guillem/stallhunt` v0.5.1 to the official MCP Registry; the Registry
 API reports it active and latest with the same MCPB SHA-256 digest as the
-GitHub release. Anthropic directory submission remains pending and must use
-v0.5.2 or later because v0.5.1 predates the required bundled README privacy
-section. PR #13 merged the patch release; tag v0.5.2 and its successful release
-workflow publish and validate the corrected bundle.
+GitHub release. PR #13 merged the patch release; tag v0.5.2 and its successful
+release workflow publish and validate the corrected bundle. Anthropic's
+official MCPB builder guide limits Claude Desktop extensions to macOS and
+Windows and requires testing on both platforms. The released MCPB contains a
+Linux-only executable, so it must not be submitted to Anthropic's desktop-
+extension directory under the current rules.
 
-**Currently published release: v0.5.2 — Anthropic-ready local MCPB.**
+**Currently published release: v0.5.2 — local Linux MCPB and Registry package.**
 
 PR #11 merged into `main` (ADR-0017, ADR-0018): `stallhunt mcp` serves
 Model Context Protocol tools over stdio, with a resident sampler for
@@ -512,10 +514,11 @@ Operational and delivery gaps:
   development tunnels do not satisfy submission. The repository/workspace
   plugin remains Stallhunt's prepared OpenAI path because a hosted server would
   diagnose the wrong Linux machine.
-- The official MCP Registry entry for v0.5.1 is active. Anthropic submission
-  has not been made and must use v0.5.2 or later because its current policy
-  requires the newly added README `Privacy Policy` section inside the immutable
-  bundle.
+- The official MCP Registry entry for v0.5.1 is active. The v0.5.2 Linux MCPB
+  installs and runs in the tested Bazzite Claude Desktop AppImage, but
+  Anthropic's official directory flow supports macOS and Windows desktop
+  extensions and requires testing on both. That Linux result is useful
+  compatibility evidence, not directory eligibility.
 
 ## Known bugs
 
@@ -536,17 +539,13 @@ validation" below for the full list and how each was verified.
 
 ## Current recommended next task
 
-Complete the remaining Anthropic directory work recorded in
-[`directory-distribution.md`](directory-distribution.md):
+Treat the official MCP Registry as Stallhunt's public MCP discovery surface and
+document local Linux installation for compatible clients. Do not submit the
+current Linux-only MCPB through Anthropic's macOS/Windows desktop-extension
+form, and do not add a remote server that would diagnose the wrong host solely
+for vendor-directory eligibility.
 
-1. submit the exact released v0.5.2 MCPB through Anthropic's desktop-extension
-   form using the prepared packet, supply the owner's identity/contact/category
-   choices, personally accept the required attestations,
-   and retain the reviewer correspondence in this status document;
-2. keep the OpenAI plugin on the repository/workspace path. Do not add a remote
-   server that would diagnose the wrong host solely for directory eligibility.
-
-After that delivery work, do not start Milestone 7 or add another M8 chain
+Do not start Milestone 7 or add another M8 chain
 without a concrete diagnostic gap. The next diagnostic task remains making
 TASKSTATS TGID selection cgroup-aware (read cgroup membership before the
 bounded procfs walk and prioritize scope members within the 512-TGID cap) so a
@@ -690,7 +689,8 @@ contained the required `Privacy Policy` section. The extracted release binary
 reported 0.5.2; the pinned validator passed again; and a real protocol session
 initialized, listed four tools, and called all four successfully, including a
 bounded 100ms lean `run_hunt`. Claude Desktop installation subsequently passed;
-the stricter four-call in-client exercise remains separate pending validation.
+the stricter four-call in-client exercise subsequently passed as recorded
+below.
 
 The first v0.5.2 desktop-install attempt used Bazzite Linux with KDE. Generic
 `xdg-open` dispatched the `.mcpb` to Ark because the desktop classifies MCPB as

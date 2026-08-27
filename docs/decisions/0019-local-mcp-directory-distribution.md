@@ -49,6 +49,16 @@ owner actions because they create externally reviewed, persistent listings.
 - Public privacy, terms, support, artwork, and tool metadata become release
   inputs and must remain accurate.
 
+## Implementation outcome (2026-08-27)
+
+The Linux MCPB remains useful for compatible clients and the vendor-neutral MCP
+Registry, but the assumption that it could also be listed in Anthropic's
+Connectors Directory was disproved during submission. Anthropic's official MCPB
+builder guide limits Claude Desktop extensions to macOS and Windows and
+requires testing on both platforms. Stallhunt must not submit its Linux-only
+artifact through that form. This does not change the local-stdio decision: a
+macOS/Windows or hosted substitute would not diagnose the target Linux host.
+
 ## Alternatives considered
 
 - **Add Streamable HTTP for public-directory eligibility.** Rejected: a remote

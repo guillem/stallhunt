@@ -121,31 +121,25 @@ Official references:
 - <https://modelcontextprotocol.io/registry/quickstart>
 - <https://modelcontextprotocol.io/registry/package-types#mcpb-packages>
 
-### 2. Prepare and submit the Anthropic desktop extension
+### 2. Anthropic desktop-extension directory — not eligible
 
-Do not submit the v0.5.1 MCPB. Anthropic's current local-connector checklist
-requires both the manifest `privacy_policies` array and a `Privacy Policy`
-section in the bundled README. The array is present in v0.5.1, but the README
-section was added to main only after the immutable release was built.
+Do not submit the current Stallhunt MCPB through Anthropic's desktop-extension
+form. Anthropic's official MCPB builder guide states that Claude Desktop runs
+on macOS and Windows, asks manifests to declare those platforms, and requires
+testing on both. Stallhunt's released extension embeds an
+`x86_64-unknown-linux-gnu` executable because its purpose is to diagnose the
+local Linux kernel. A macOS or Windows wrapper would observe the wrong host and
+would not make this Linux diagnostic eligible.
 
-Release v0.5.2 is the first artifact that bundles both required privacy
-surfaces. Before submission:
+Official references:
 
-1. confirm the MCPB contains the updated README and unchanged public policy
-   (complete for v0.5.2);
-2. run the pinned MCPB validator and verify its SHA-256 sidecar (complete for
-   v0.5.2);
-3. install the exact released MCPB on compatible Claude Desktop and run
-   all four tools, including a bounded `run_hunt` (complete for v0.5.2 on
-   Bazzite Claude Desktop);
-4. prepare the listing name, tagline, description, categories, documentation,
-   privacy/support URLs, icon, company/contact details, and setup/test steps
-   (the non-personal packet below is complete);
-5. submit through the desktop-extension form linked by Anthropic's current
-   submission guide and retain the reviewer correspondence in project status.
+- <https://claude.com/docs/connectors/building/mcpb>
+- <https://claude.com/docs/connectors/building/submission>
+- <https://github.com/modelcontextprotocol/mcpb>
 
-Official reference:
-<https://claude.com/docs/connectors/building/submission>.
+The MCPB format itself permits `linux` in a manifest. That format capability
+does not override the platforms accepted by Anthropic's Claude Desktop
+directory flow.
 
 On Bazzite/KDE, do not use generic `xdg-open` for this check unless the user has
 explicitly associated `.mcpb` with Claude: the default ZIP association opens
@@ -154,10 +148,10 @@ for the initial v0.5.2 check recognized the path in its DXT/MCPB handler, but
 installation still requires the user-facing confirmation dialog and must not be
 reported complete until Claude lists and runs the extension.
 
-#### Anthropic submission packet
+#### Retained package and compatibility evidence
 
-Use the exact immutable artifact and metadata below. Do not substitute a local
-candidate build.
+The following identifies the validated local Linux package. It is not an
+Anthropic submission packet.
 
 - **Connector type:** Desktop extension (MCPB)
 - **Artifact:**
@@ -201,13 +195,6 @@ The v0.5.2 Bazzite/Claude Desktop run completed all four prompts successfully.
 Claude's MCP log recorded four new `tools/call` requests and four results with
 no errors; the final call took about 1.17 seconds, consistent with the requested
 one-second hunt.
-
-Select the closest one to five developer/system-administration categories
-offered by the live form. The owner must supply and verify the publisher/company
-name, website association, primary contact name/email, and any requested support
-email. The owner must personally review and accept the directory terms, policy,
-and compliance attestations; repository metadata cannot answer those on the
-owner's behalf.
 
 ### 3. OpenAI distribution
 
