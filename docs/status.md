@@ -4,7 +4,7 @@ Last updated: 2026-08-27
 
 ## Current milestone
 
-**v0.5.2 published and installed; Anthropic submission pending**
+**v0.5.2 published and desktop-validated; Anthropic submission pending**
 
 The published patch release prepares the existing local stdio MCP server for
 discovery and installation without adding a remote transport (ADR-0019): an
@@ -539,14 +539,11 @@ validation" below for the full list and how each was verified.
 Complete the remaining Anthropic directory work recorded in
 [`directory-distribution.md`](directory-distribution.md):
 
-1. complete the four explicit in-client prompts in
-   [`directory-distribution.md`](directory-distribution.md), including a
-   bounded `run_hunt`;
-2. submit the exact released v0.5.2 MCPB through Anthropic's desktop-extension
+1. submit the exact released v0.5.2 MCPB through Anthropic's desktop-extension
    form using the prepared packet, supply the owner's identity/contact/category
    choices, personally accept the required attestations,
    and retain the reviewer correspondence in this status document;
-3. keep the OpenAI plugin on the repository/workspace path. Do not add a remote
+2. keep the OpenAI plugin on the repository/workspace path. Do not add a remote
    server that would diagnose the wrong host solely for directory eligibility.
 
 After that delivery work, do not start Milestone 7 or add another M8 chain
@@ -705,9 +702,12 @@ installation and enablement of `local.mcpb.guillem.stallhunt` v0.5.2, launched
 the binary from its managed extension directory, negotiated protocol revision
 2025-06-18, and connected and announced four tools. The installed manifest
 retains the expected privacy-policy URL and the extension setting is enabled.
-Claude completed one successful tool call; the direct downloaded-artifact
-session already exercised all four, but the stricter four-call in-client
-checklist remains pending before directory submission.
+Claude first completed one successful smoke call, then completed the four
+explicit submission-checklist prompts. Its MCP log recorded four new
+`tools/call` requests and four successful results with no errors; the final
+request returned in about 1.17 seconds, consistent with the requested
+one-second `run_hunt`. The exact released MCPB therefore passes installation,
+connection, discovery, and all-tool in-client exercise on this Bazzite system.
 
 On 2026-08-27, the v0.5.2 release candidate passed
 `cargo fmt --all -- --check`, locked/offline warning-denied Clippy for the

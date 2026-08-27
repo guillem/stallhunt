@@ -136,8 +136,8 @@ surfaces. Before submission:
 2. run the pinned MCPB validator and verify its SHA-256 sidecar (complete for
    v0.5.2);
 3. install the exact released MCPB on compatible Claude Desktop and run
-   all four tools, including a bounded `run_hunt` (installation and connection
-   complete on Bazzite; the four-call in-client checklist remains pending);
+   all four tools, including a bounded `run_hunt` (complete for v0.5.2 on
+   Bazzite Claude Desktop);
 4. prepare the listing name, tagline, description, categories, documentation,
    privacy/support URLs, icon, company/contact details, and setup/test steps
    (the non-personal packet below is complete);
@@ -196,6 +196,11 @@ Suggested test prompts, one per tool:
 2. `Use Stallhunt get_current_pressure and summarize current contention.`
 3. `Use Stallhunt get_recent_history and describe any recent or resolved pressure.`
 4. `Use Stallhunt run_hunt for one second with lean detail and explain the evidence.`
+
+The v0.5.2 Bazzite/Claude Desktop run completed all four prompts successfully.
+Claude's MCP log recorded four new `tools/call` requests and four results with
+no errors; the final call took about 1.17 seconds, consistent with the requested
+one-second hunt.
 
 Select the closest one to five developer/system-administration categories
 offered by the live form. The owner must supply and verify the publisher/company
