@@ -136,9 +136,11 @@ surfaces. Before submission:
 2. run the pinned MCPB validator and verify its SHA-256 sidecar (complete for
    v0.5.2);
 3. install the exact released MCPB on compatible Claude Desktop and run
-   all four tools, including a bounded `run_hunt`;
+   all four tools, including a bounded `run_hunt` (installation and connection
+   complete on Bazzite; the four-call in-client checklist remains pending);
 4. prepare the listing name, tagline, description, categories, documentation,
-   privacy/support URLs, icon, company/contact details, and setup/test steps;
+   privacy/support URLs, icon, company/contact details, and setup/test steps
+   (the non-personal packet below is complete);
 5. submit through the desktop-extension form linked by Anthropic's current
    submission guide and retain the reviewer correspondence in project status.
 
@@ -151,6 +153,56 @@ Ark. Invoke Claude Desktop with the MCPB path directly. The Linux AppImage used
 for the initial v0.5.2 check recognized the path in its DXT/MCPB handler, but
 installation still requires the user-facing confirmation dialog and must not be
 reported complete until Claude lists and runs the extension.
+
+#### Anthropic submission packet
+
+Use the exact immutable artifact and metadata below. Do not substitute a local
+candidate build.
+
+- **Connector type:** Desktop extension (MCPB)
+- **Artifact:**
+  `https://github.com/guillem/stallhunt/releases/download/v0.5.2/stallhunt-0.5.2-x86_64-unknown-linux-gnu.mcpb`
+- **SHA-256:**
+  `f157469d399261d8373b43753e2b6c71284ce2637c0027814c7dd2e28407871f`
+- **Name:** Stallhunt
+- **Tagline:** Find what is stalling this Linux host.
+- **Description:** Stallhunt diagnoses CPU scheduling, memory, block-I/O, and
+  cgroup contention on the local Linux machine. It reports whether meaningful
+  pressure exists, which workloads are likely suffering or contributing, how
+  much progress is being lost, the evidence supporting each finding, and the
+  confidence and limitations of every attribution. It is read-only, runs
+  locally without elevated privileges or authentication, and does not transmit
+  telemetry independently.
+- **Documentation:**
+  `https://github.com/guillem/stallhunt/blob/main/docs/mcp-server.md`
+- **Privacy policy:**
+  `https://github.com/guillem/stallhunt/blob/main/PRIVACY.md`
+- **Terms:** `https://github.com/guillem/stallhunt/blob/main/TERMS.md`
+- **Support:** `https://github.com/guillem/stallhunt/issues`
+- **Website/source:** `https://github.com/guillem/stallhunt`
+- **Icon:** `assets/stallhunt-icon-512.png` (512x512 transparent PNG)
+- **Access:** Read-only; no write actions, external links, authentication, test
+  account, health data, sponsored content, or third-party API proxying.
+- **Compatibility disclosure:** Linux x86-64 GNU; Linux 4.20 or newer with
+  readable procfs/PSI. Older-glibc compatibility is not defined.
+- **Setup:** Download the MCPB, open it directly with Claude Desktop, review the
+  unsigned local-extension warning and declared read-only tools, then allow and
+  enable Stallhunt. On Bazzite/KDE invoke the Claude AppImage with the MCPB path
+  directly if the desktop ZIP association sends generic open actions to Ark.
+
+Suggested test prompts, one per tool:
+
+1. `Use Stallhunt get_capabilities and explain which Linux telemetry is available.`
+2. `Use Stallhunt get_current_pressure and summarize current contention.`
+3. `Use Stallhunt get_recent_history and describe any recent or resolved pressure.`
+4. `Use Stallhunt run_hunt for one second with lean detail and explain the evidence.`
+
+Select the closest one to five developer/system-administration categories
+offered by the live form. The owner must supply and verify the publisher/company
+name, website association, primary contact name/email, and any requested support
+email. The owner must personally review and accept the directory terms, policy,
+and compliance attestations; repository metadata cannot answer those on the
+owner's behalf.
 
 ### 3. OpenAI distribution
 

@@ -4,7 +4,7 @@ Last updated: 2026-08-27
 
 ## Current milestone
 
-**v0.5.2 published; Anthropic desktop installation and submission pending**
+**v0.5.2 published and installed; Anthropic submission pending**
 
 The published patch release prepares the existing local stdio MCP server for
 discovery and installation without adding a remote transport (ADR-0019): an
@@ -539,9 +539,12 @@ validation" below for the full list and how each was verified.
 Complete the remaining Anthropic directory work recorded in
 [`directory-distribution.md`](directory-distribution.md):
 
-1. install and exercise the exact released v0.5.2 MCPB in a compatible Claude
-   Desktop environment;
-2. submit the exact released MCPB through Anthropic's desktop-extension form
+1. complete the four explicit in-client prompts in
+   [`directory-distribution.md`](directory-distribution.md), including a
+   bounded `run_hunt`;
+2. submit the exact released v0.5.2 MCPB through Anthropic's desktop-extension
+   form using the prepared packet, supply the owner's identity/contact/category
+   choices, personally accept the required attestations,
    and retain the reviewer correspondence in this status document;
 3. keep the OpenAI plugin on the repository/workspace path. Do not add a remote
    server that would diagnose the wrong host solely for directory eligibility.
@@ -689,17 +692,22 @@ the released `server.json` carried that digest, and the extracted README
 contained the required `Privacy Policy` section. The extracted release binary
 reported 0.5.2; the pinned validator passed again; and a real protocol session
 initialized, listed four tools, and called all four successfully, including a
-bounded 100ms lean `run_hunt`. Claude Desktop installation and in-client tool
-exercise remain separate pending validation.
+bounded 100ms lean `run_hunt`. Claude Desktop installation subsequently passed;
+the stricter four-call in-client exercise remains separate pending validation.
 
 The first v0.5.2 desktop-install attempt used Bazzite Linux with KDE. Generic
 `xdg-open` dispatched the `.mcpb` to Ark because the desktop classifies MCPB as
 a ZIP archive; no file association was changed. Launching the installed Claude
 Desktop AppImage directly with the released MCPB path did reach Claude's bundle
 handler: `main.log` recorded `Handling DXT/MCPB file` for the exact artifact.
-At the last check Claude still reported zero installed local extensions and no
-stdio servers, so this is not yet an installation pass; it remains pending the
-interactive install confirmation and subsequent in-client tool exercise.
+The user accepted the interactive confirmation. Claude then recorded successful
+installation and enablement of `local.mcpb.guillem.stallhunt` v0.5.2, launched
+the binary from its managed extension directory, negotiated protocol revision
+2025-06-18, and connected and announced four tools. The installed manifest
+retains the expected privacy-policy URL and the extension setting is enabled.
+Claude completed one successful tool call; the direct downloaded-artifact
+session already exercised all four, but the stricter four-call in-client
+checklist remains pending before directory submission.
 
 On 2026-08-27, the v0.5.2 release candidate passed
 `cargo fmt --all -- --check`, locked/offline warning-denied Clippy for the
@@ -719,8 +727,8 @@ README and public privacy policy files, a 512x512 icon, manifest version 0.5.2,
 and a binary reporting 0.5.2. A real newline-delimited MCP session against that
 extracted binary initialized protocol revision 2025-06-18, listed four tools,
 and successfully called all four, including a bounded 100ms lean `run_hunt`.
-This candidate validation is not a substitute for installing the exact
-released MCPB in Claude Desktop after publication.
+The exact released MCPB was subsequently installed and connected in Claude
+Desktop as recorded above.
 
 On 2026-08-27, the official MCP Registry API returned one active, latest entry
 for `io.github.guillem/stallhunt` v0.5.1. Its published package URL points to
