@@ -1,10 +1,10 @@
 # Project status
 
-Last updated: 2026-08-26
+Last updated: 2026-08-27
 
 ## Current milestone
 
-**v0.5.1 directory distribution published; external listings pending**
+**v0.5.2 Anthropic-ready MCPB release preparation**
 
 The published patch release prepares the existing local stdio MCP server for
 discovery and installation without adding a remote transport (ADR-0019): an
@@ -12,8 +12,12 @@ OpenAI repository plugin, an x86-64 Linux MCPB, checksum-bound official MCP
 Registry metadata, public privacy/terms documents, directory artwork, and tool
 review annotations are implemented. PR #12 merged into `main`; tag `v0.5.1`
 and its GitHub Release publish the tarball, MCPB, both SHA-256 sidecars, and
-rendered `server.json`. No vendor listing or Registry version has been
-published; those remain explicit owner actions.
+rendered `server.json`. On 2026-08-27, the owner published
+`io.github.guillem/stallhunt` v0.5.1 to the official MCP Registry; the Registry
+API reports it active and latest with the same MCPB SHA-256 digest as the
+GitHub release. Anthropic directory submission remains pending and must use
+v0.5.2 or later because v0.5.1 predates the required bundled README privacy
+section.
 
 **Currently published release: v0.5.1 — local MCP directory packages.**
 
@@ -502,12 +506,15 @@ Operational and delivery gaps:
 - release automation still targets one dynamically linked x86_64 GNU/Linux
   binary, now in both tarball and MCPB containers with checksums; additional
   targets, an explicit glibc baseline, signatures, and provenance remain open;
-- Current official OpenAI documentation does not establish a public submission
-  path for bundled local stdio servers; the repository/workspace plugin is the
-  prepared path. Registry publication remains an owner-authenticated action.
-  Anthropic submission has not been made and must use the next patch-release
-  MCPB because its current policy requires the newly added README `Privacy
-  Policy` section inside the immutable bundle.
+- OpenAI documents public MCP-backed plugin submission, but the review endpoint
+  must be hosted on a publicly accessible domain; local/testing endpoints and
+  development tunnels do not satisfy submission. The repository/workspace
+  plugin remains Stallhunt's prepared OpenAI path because a hosted server would
+  diagnose the wrong Linux machine.
+- The official MCP Registry entry for v0.5.1 is active. Anthropic submission
+  has not been made and must use v0.5.2 or later because its current policy
+  requires the newly added README `Privacy Policy` section inside the immutable
+  bundle.
 
 ## Known bugs
 
@@ -528,19 +535,19 @@ validation" below for the full list and how each was verified.
 
 ## Current recommended next task
 
-Complete the owner-authenticated directory work in the order recorded in
+Complete v0.5.2 and the remaining Anthropic directory work recorded in
 [`directory-distribution.md`](directory-distribution.md):
 
-1. publish the released v0.5.1 `server.json` to the official MCP Registry with
-   GitHub authentication, then verify the Registry API result;
-2. make the next patch release so its MCPB includes main's new `Privacy
-   Policy` README section, install and exercise that exact bundle in a
-   compatible Linux Claude Desktop environment, and submit it through
-   Anthropic's desktop-extension form;
-3. keep the OpenAI plugin on the repository/workspace path and recheck official
-   OpenAI documentation periodically for a public bundled-local-server
-   submission path. Do not add a remote server that would diagnose the wrong
-   host solely for directory eligibility.
+1. run the full release gate and confirm the generated MCPB contains the README
+   `Privacy Policy` section, the public policy files, and the matching v0.5.2
+   binary and manifest;
+2. publish v0.5.2, verify the immutable release assets and checksum-bound
+   `server.json`, then install and exercise that exact bundle in a compatible
+   Linux Claude Desktop environment;
+3. submit the exact released MCPB through Anthropic's desktop-extension form
+   and retain the reviewer correspondence in this status document;
+4. keep the OpenAI plugin on the repository/workspace path. Do not add a remote
+   server that would diagnose the wrong host solely for directory eligibility.
 
 After that delivery work, do not start Milestone 7 or add another M8 chain
 without a concrete diagnostic gap. The next diagnostic task remains making
@@ -673,6 +680,34 @@ concrete, not all at once.
 
 ## Last meaningful validation
 
+On 2026-08-27, the v0.5.2 release candidate passed
+`cargo fmt --all -- --check`, locked/offline warning-denied Clippy for the
+workspace/all targets/all features, and the full locked/offline all-features
+test suite: 311 of 312 unit tests passed with the fixture writer ignored; 15
+CLI, three directory-distribution, three documentation-command, three
+replay-fixture, and two real-process MCP session tests passed. The five bounded
+Linux load or delegated-cgroup acceptance tests remained intentionally ignored.
+A locked/offline release build reported 0.5.2; `cargo package --locked
+--offline --allow-dirty` packaged and verified 146 tracked files; the man page
+rendered; both packaging scripts passed shell syntax checks; and the OpenAI
+plugin passed the installed plugin-creator validator. The generated x86-64
+Linux MCPB checksum verified, its rendered `server.json` carried the same
+SHA-256 digest, and Anthropic MCPB validator 2.1.2 accepted its manifest. The
+extracted bundle contained the README `Privacy Policy` section plus byte-equal
+README and public privacy policy files, a 512x512 icon, manifest version 0.5.2,
+and a binary reporting 0.5.2. A real newline-delimited MCP session against that
+extracted binary initialized protocol revision 2025-06-18, listed four tools,
+and successfully called all four, including a bounded 100ms lean `run_hunt`.
+This candidate validation is not a substitute for installing the exact
+released MCPB in Claude Desktop after publication.
+
+On 2026-08-27, the official MCP Registry API returned one active, latest entry
+for `io.github.guillem/stallhunt` v0.5.1. Its published package URL points to
+the v0.5.1 GitHub Release MCPB and its `fileSha256` value,
+`e843121e5c64f0fc19476bb073b764cd7280ce14ff786ba0ba5fb3c82c52872b`,
+matches the public release asset digest. This verifies the first directory
+publication action; it does not verify Anthropic installation or review.
+
 On 2026-08-26, PR #12 merged the directory-distribution implementation as
 commit `6d6e67a`; tag `v0.5.1` points to that exact merge. The PR push did not
 schedule the repository CI workflow before merge, so the merge relied on the
@@ -685,8 +720,9 @@ downloaded public tarball and MCPB sidecars both verified, and the released
 `server.json` digest exactly matched the public MCPB. A current-directory-rule
 review then found that Anthropic additionally requires a `Privacy Policy`
 heading in a local connector's bundled README. Main now includes it; v0.5.1
-remains immutable and must not be submitted to Anthropic. No Registry version
-or vendor listing was published.
+remains immutable and must not be submitted to Anthropic. The Registry entry
+was subsequently published and verified on 2026-08-27; no vendor listing has
+been published.
 
 On 2026-08-26, the unpublished v0.5.1 directory-distribution preparation
 passed `cargo fmt --all -- --check`, Clippy for the workspace/all targets/all

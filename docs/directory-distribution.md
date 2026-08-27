@@ -83,27 +83,27 @@ Before submission, the owner must verify the publisher identity and public
 URLs in each portal, prepare portal-specific screenshots if requested, and run
 the documented test prompts on the packaged artifact.
 
-## Post-v0.5.1 next steps
+## Directory publication state
 
 Release v0.5.1 is published at
 <https://github.com/guillem/stallhunt/releases/tag/v0.5.1>. Its tarball and
 MCPB checksum sidecars verify, and its released `server.json` contains the
 published MCPB digest.
 
-### 1. Publish the official MCP Registry entry
+### 1. Official MCP Registry — published
 
-Download `server.json` from the v0.5.1 release into an otherwise empty working
-directory. Install the current official `mcp-publisher` binary using the MCP
-Registry quickstart, inspect the JSON one final time, then run:
+On 2026-08-27, the owner published `io.github.guillem/stallhunt` v0.5.1 using
+the released `server.json` and GitHub authentication. The Registry API reports
+the version active and latest, and its package digest matches the released
+MCPB. The publication commands were:
 
 ```bash
 mcp-publisher login github
 mcp-publisher publish
 ```
 
-The GitHub-authenticated namespace must remain
-`io.github.guillem/stallhunt`. Publication is immutable for that version. After
-publishing, verify discovery:
+The GitHub-authenticated namespace remains `io.github.guillem/stallhunt`.
+Verify discovery with:
 
 ```bash
 curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.guillem/stallhunt"
@@ -121,7 +121,8 @@ requires both the manifest `privacy_policies` array and a `Privacy Policy`
 section in the bundled README. The array is present in v0.5.1, but the README
 section was added to main only after the immutable release was built.
 
-For the next patch release:
+Release v0.5.2 is the first candidate that bundles both required privacy
+surfaces. For that release:
 
 1. confirm the MCPB contains the updated README and unchanged public policy;
 2. run the pinned MCPB validator and verify its SHA-256 sidecar;
@@ -137,8 +138,9 @@ Official reference:
 
 ### 3. OpenAI distribution
 
-The repository/workspace plugin remains the supported OpenAI path. Current
-official OpenAI documentation does not establish a public directory submission
-flow for a bundled local stdio server. Recheck official OpenAI documentation
-before each release; do not substitute a hosted server, because it would
+The repository/workspace plugin remains the supported OpenAI path. OpenAI now
+documents public submission for MCP-backed plugins, but requires a publicly
+hosted domain and explicitly excludes local/testing endpoints from review;
+development tunnels are for testing only. Recheck official OpenAI documentation
+before each release, but do not substitute a hosted server, because it would
 measure the hosted machine rather than the user's Linux host.
